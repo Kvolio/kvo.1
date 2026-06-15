@@ -90,6 +90,12 @@ input[type=range]{width:140px;accent-color:var(--accent)}
 #xpRow .bar{flex:1;height:6px;margin-top:0}
 #lvl{font-size:11px;color:#bfe6a0;text-shadow:1px 1px 0 #000;min-width:38px;text-align:right}
 
+/* ender dragon boss bar */
+#bossBar{position:absolute;left:50%;top:42px;transform:translateX(-50%);width:min(520px,80vw);display:none}
+#bossLbl{font-size:12px;letter-spacing:3px;color:#d9b8ff;text-shadow:1px 1px 0 #000;text-align:center;margin-bottom:3px}
+#bossTrack{height:10px;background:rgba(5,7,12,.8);border:2px solid #2a123f}
+#bossFill{display:block;height:100%;width:100%;background:linear-gradient(180deg,#c77af0,#6a1fb0);transition:width .2s}
+
 /* hotbar */
 #hotbar{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);display:flex;gap:4px;
   background:rgba(8,10,16,.6);padding:5px;border:2px solid #05070c}
@@ -309,6 +315,7 @@ input[type=range]{width:140px;accent-color:var(--accent)}
   <div id="crosshair"></div>
   <div id="debug"></div>
   <div id="toast"></div>
+  <div id="bossBar"><div id="bossLbl">ENDER DRAGON</div><div id="bossTrack"><i id="bossFill"></i></div></div>
   <div id="hint">Click to capture the mouse</div>
   <div id="bars">
     <div id="xpRow"><div class="bar"><i id="xpFill"></i></div><span id="lvl">Lv 1</span></div>
@@ -346,7 +353,13 @@ const WORLD_H = 128;           // vertical world size. Raise to 256 for taller
 const SEA     = 44;            // sea level
 const DAY_LEN = 480;           // seconds per full day/night cycle
 const REACH   = 6;             // block interaction distance
-const GRAVITY = 28;
+const GRAVITY = 28;            // m/s^2 downward acceleration
+const MAX_FALL = 56;           // terminal velocity (m/s); also bounds the collision sub-step size
+const JUMP_V  = 8.6;           // jump take-off speed → ~1.32-block apex (matches the classic 1.25 hop)
+
+/* dimensions */
+const DIM_OVERWORLD = 0, DIM_NETHER = 1, DIM_END = 2;
+const DIM_NAME = ["Overworld","The Nether","The End"];
 
 /* biome ids */
 const BIOME = {OCEAN:0, PLAINS:1, FOREST:2, DESERT:3, MOUNTAINS:4, SNOW:5, SWAMP:6, JUNGLE:7};
@@ -367,7 +380,10 @@ const A_GRASS_T=0,A_GRASS_S=1,A_DIRT=2,A_STONE=3,A_COBBLE=4,A_PLANKS=5,A_SAND=6,
       A_SNOW_S=8,A_SNOW_T=9,A_ICE=10,A_LOG_S=11,A_LOG_T=12,A_LEAF=13,A_CAC_S=14,A_CAC_T=15,
       A_GLASS=16,A_BRICK=17,A_WATER=18,A_LAVA=19,A_COAL=20,A_IRON=21,A_GOLD=22,A_DIAM=23,
       A_BED=24,A_APPLE=25,A_TORCH=26,A_MEAT=27,A_FLESH=28,
-      A_CRAFT_T=29,A_CRAFT_S=30,A_FURN=31,A_CHEST=32,A_DOOR=33,A_FURN_T=34,A_BEDTOP=35;
+      A_CRAFT_T=29,A_CRAFT_S=30,A_FURN=31,A_CHEST=32,A_DOOR=33,A_FURN_T=34,A_BEDTOP=35,
+      /* dimension tiles */
+      A_OBSID=36,A_NETHERRACK=37,A_SOULSAND=38,A_GLOWSTONE=39,
+      A_NPORTAL=40,A_ENDSTONE=41,A_EPORTAL=42,A_MAGMA=43;
 
 /* Block table. t:[top,side,bottom] atlas tiles. o=opaque (occludes faces),
    s=solid (collides), l=liquid, g=glow (unlit bucket), tint=use biome tint. */
@@ -375,7 +391,10 @@ const AIR=0, GRASS=1, DIRT=2, STONE=3, COBBLE=4, PLANKS=5, SAND=6, GRAVEL=7,
       SNOWGRASS=8, ICE=9, LOG=10, LEAVES=11, CACTUS=12, GLASS=13, BRICK=14,
       WATER=15, LAVA=16, COAL_ORE=17, IRON_ORE=18, GOLD_ORE=19, DIAMOND_ORE=20,
       BEDROCK=21, TORCH=22, CRAFT_TABLE=23, FURNACE=24, CHEST=25,
-      DOOR=26, DOOR_O=27, DOOR_Z=28, DOOR_ZO=29, BED_B=30;
+      DOOR=26, DOOR_O=27, DOOR_Z=28, DOOR_ZO=29, BED_B=30,
+      /* dimension blocks */
+      OBSIDIAN=31, NETHERRACK=32, SOUL_SAND=33, GLOWSTONE=34,
+      NETHER_PORTAL=35, END_STONE=36, END_PORTAL=37, MAGMA=38;
 const ITEM_APPLE = 100, ITEM_MEAT = 101, ITEM_FLESH = 102;   // satchel-only food
 const ITEM_STICK=110, ITEM_COAL=111, ITEM_IRON=112, ITEM_GOLD=113, ITEM_DIAMOND=114,
       ITEM_WOOL=115;
@@ -480,6 +499,8 @@ RECIPES_3X3.push(
   {name:"Furnace", grid:[[COBBLE,COBBLE,COBBLE],[COBBLE,_,COBBLE],[COBBLE,COBBLE,COBBLE]], out:{id:FURNACE,n:1}},
   {name:"Chest",   grid:[[PLANKS,PLANKS,PLANKS],[PLANKS,_,PLANKS],[PLANKS,PLANKS,PLANKS]], out:{id:CHEST,n:1}},
   {name:"Doors x3",grid:[[PLANKS,PLANKS,_],[PLANKS,PLANKS,_],[PLANKS,PLANKS,_]], out:{id:DOOR,n:3}},
+  /* an obsidian eye around a diamond — a stable doorway to The End */
+  {name:"End Portal", grid:[[OBSIDIAN,OBSIDIAN,OBSIDIAN],[OBSIDIAN,ITEM_DIAMOND,OBSIDIAN],[OBSIDIAN,OBSIDIAN,OBSIDIAN]], out:{id:END_PORTAL,n:1}},
 );
 FURNACE_RECIPES.push(
   {in:IRON_ORE, out:{id:ITEM_IRON,n:1}, time:4},
@@ -523,11 +544,22 @@ B[IRON_ORE]   = {n:"Iron ore",   t:[A_IRON,A_IRON,A_IRON],          o:1,s:1,l:0,
 B[GOLD_ORE]   = {n:"Gold ore",   t:[A_GOLD,A_GOLD,A_GOLD],          o:1,s:1,l:0,g:0};
 B[DIAMOND_ORE]= {n:"Diamond ore",t:[A_DIAM,A_DIAM,A_DIAM],          o:1,s:1,l:0,g:0};
 B[BEDROCK]    = {n:"Bedrock",    t:[A_BED,A_BED,A_BED],             o:1,s:1,l:0,g:0};
+/* ---- dimension blocks ---- */
+B[OBSIDIAN]   = {n:"Obsidian",   t:[A_OBSID,A_OBSID,A_OBSID],       o:1,s:1,l:0,g:0};
+B[NETHERRACK] = {n:"Netherrack", t:[A_NETHERRACK,A_NETHERRACK,A_NETHERRACK], o:1,s:1,l:0,g:0};
+B[SOUL_SAND]  = {n:"Soul sand",  t:[A_SOULSAND,A_SOULSAND,A_SOULSAND], o:1,s:1,l:0,g:0,slow:1};
+B[GLOWSTONE]  = {n:"Glowstone",  t:[A_GLOWSTONE,A_GLOWSTONE,A_GLOWSTONE], o:1,s:1,l:0,g:1,lum:15};
+B[MAGMA]      = {n:"Magma block", t:[A_MAGMA,A_MAGMA,A_MAGMA],      o:1,s:1,l:0,g:1,lum:7,hot:1};
+B[END_STONE]  = {n:"End stone",  t:[A_ENDSTONE,A_ENDSTONE,A_ENDSTONE], o:1,s:1,l:0,g:0};
+B[NETHER_PORTAL]={n:"Nether portal",t:[A_NPORTAL,A_NPORTAL,A_NPORTAL], o:0,s:0,l:0,g:1,lum:11,portal:DIM_NETHER};
+B[END_PORTAL] = {n:"End portal", t:[A_EPORTAL,A_EPORTAL,A_EPORTAL], o:0,s:0,l:0,g:1,lum:9,portal:DIM_END};
 
 /* placeable palette shown in the inventory screen */
 const PALETTE = [GRASS,DIRT,STONE,COBBLE,PLANKS,SAND,GRAVEL,SNOWGRASS,ICE,LOG,LEAVES,
                  CACTUS,GLASS,BRICK,WATER,LAVA,COAL_ORE,IRON_ORE,GOLD_ORE,DIAMOND_ORE,
-                 BEDROCK,TORCH,CRAFT_TABLE,FURNACE,CHEST,DOOR,BED_B,ITEM_APPLE];
+                 BEDROCK,TORCH,CRAFT_TABLE,FURNACE,CHEST,DOOR,BED_B,
+                 OBSIDIAN,NETHERRACK,SOUL_SAND,GLOWSTONE,MAGMA,END_STONE,
+                 NETHER_PORTAL,END_PORTAL,ITEM_APPLE];
 
 /* chunk-local block index: x,z in 0..15, y in 0..WORLD_H-1 */
 const bIdx = (x,y,z) => ((x<<4)|z)*WORLD_H + y;
@@ -626,6 +658,7 @@ function createGen(seed){
     if (r < 0.016 && y < 48)  return IRON_ORE;
     if (r < 0.019 && y < 26)  return GOLD_ORE;
     if (r < 0.021 && y < 14)  return DIAMOND_ORE;
+    if (r < 0.023 && y < 12)  return OBSIDIAN;   // rare deep seams: a diamond pick frees them
     return STONE;
   }
 
@@ -1004,10 +1037,116 @@ function createGen(seed){
 
   return {columnInfo, genChunk, planFor, noise:N};
 }
+
+/* ---- THE NETHER: a roofed wasteland of netherrack, lava seas and glowstone.
+   A bedrock floor and ceiling cap it; 3D noise hollows out caverns between. */
+const NETHER_FLOOR=4, NETHER_CEIL=WORLD_H-6, NETHER_LAVA=31;
+function createNetherGen(seed){
+  const N=makeNoise((seed^0x4e455448)|0);   // 'NETH'
+  const {h3,n3,fbm2}=N;
+  function columnInfo(wx,wz){
+    const base = 66 + (fbm2(wx*0.018+11, wz*0.018+11, 4)-0.5)*46;
+    const h=Math.max(NETHER_FLOOR+3, Math.min(NETHER_CEIL-3, Math.floor(base)));
+    return {h, biome:BIOME.PLAINS, temp:1, moist:0};
+  }
+  function genChunk(cx,cz){
+    const blocks=new Uint8Array(CHUNK*CHUNK*WORLD_H);
+    const biomes=new Uint8Array(CHUNK*CHUNK);
+    const heights=new Uint8Array(CHUNK*CHUNK);
+    for(let x=0;x<CHUNK;x++)for(let z=0;z<CHUNK;z++){
+      const wx=cx*CHUNK+x, wz=cz*CHUNK+z;
+      const {h}=columnInfo(wx,wz);
+      heights[(x<<4)|z]=h;
+      for(let y=0;y<WORLD_H;y++){
+        let id=AIR;
+        if (y===0 || y>=WORLD_H-1) id=BEDROCK;
+        else if (y<=NETHER_FLOOR && h3(wx,y*7+1,wz)<0.62) id=BEDROCK;
+        else if (y>=NETHER_CEIL  && h3(wx,y*7+9,wz)<0.62) id=BEDROCK;
+        else if (y<h){
+          const c=n3(wx*0.045, y*0.05, wz*0.045);
+          if (c>0.63 && y>NETHER_FLOOR+2 && y<NETHER_CEIL-2) id=AIR;   // cavern
+          else {
+            id=NETHERRACK;
+            if (Math.abs(y-NETHER_LAVA)<3 && h3(wx,y+3,wz)<0.14) id=SOUL_SAND;
+            else if (h3(wx,y*3+5,wz)<0.012) id=MAGMA;
+          }
+        }
+        blocks[bIdx(x,y,z)]=id;
+      }
+      for(let y=NETHER_FLOOR+1;y<=NETHER_LAVA;y++){          // lava sea
+        const i=bIdx(x,y,z); if (blocks[i]===AIR) blocks[i]=LAVA;
+      }
+    }
+    /* glowstone clusters clinging to the ceiling */
+    for(let x=1;x<CHUNK-1;x++)for(let z=1;z<CHUNK-1;z++){
+      const wx=cx*CHUNK+x, wz=cz*CHUNK+z;
+      if (h3(wx,7777,wz)>=0.022) continue;
+      let yy=WORLD_H-2; while(yy>NETHER_LAVA && blocks[bIdx(x,yy,z)]===BEDROCK) yy--;
+      if (yy<=NETHER_LAVA || blocks[bIdx(x,yy,z)]!==AIR) continue;
+      for(let dx=-1;dx<=1;dx++)for(let dz=-1;dz<=1;dz++)for(let dy=0;dy<=2;dy++){
+        if (Math.abs(dx)+Math.abs(dz)+dy>2) continue;
+        const gx=x+dx, gz=z+dz, gy=yy-dy;
+        if (gx<0||gx>15||gz<0||gz>15||gy<1) continue;
+        if (blocks[bIdx(gx,gy,gz)]===AIR) blocks[bIdx(gx,gy,gz)]=GLOWSTONE;
+      }
+    }
+    return {blocks,biomes,heights,chestSpots:[]};
+  }
+  return {columnInfo, genChunk, planFor:()=>null, noise:N};
+}
+
+/* ---- THE END: pale end-stone islands adrift in the void. A central island
+   ringed by obsidian pillars (the dragon's perch), outer islands past the gap. */
+const END_BASE=56;
+const END_PILLARS=(()=>{ const a=[]; for(let i=0;i<8;i++){ const t=i/8*Math.PI*2;
+  a.push([Math.round(Math.cos(t)*28), Math.round(Math.sin(t)*28), 9+(i%4)*3]); } return a; })();
+function createEndGen(seed){
+  const N=makeNoise((seed^0x454e4421)|0);   // 'END!'
+  const {h3,fbm2}=N;
+  function islandTop(wx,wz){
+    const d=Math.hypot(wx,wz);
+    if (d<46) return END_BASE + Math.floor((fbm2(wx*0.05,wz*0.05,3)-0.5)*6) + Math.floor((1-d/46)*6);
+    if (d<92) return -1;                              // the void moat
+    const v=fbm2(wx*0.011+50, wz*0.011+50, 3);
+    return v>0.60 ? END_BASE-8 + Math.floor((v-0.60)*70) : -1;
+  }
+  function columnInfo(wx,wz){ const t=islandTop(wx,wz); return {h:t<0?2:t, biome:BIOME.PLAINS, temp:0.5, moist:0.2}; }
+  function genChunk(cx,cz){
+    const blocks=new Uint8Array(CHUNK*CHUNK*WORLD_H);
+    const biomes=new Uint8Array(CHUNK*CHUNK);
+    const heights=new Uint8Array(CHUNK*CHUNK);
+    for(let x=0;x<CHUNK;x++)for(let z=0;z<CHUNK;z++){
+      const wx=cx*CHUNK+x, wz=cz*CHUNK+z;
+      const top=islandTop(wx,wz);
+      heights[(x<<4)|z]= top<0?0:Math.min(WORLD_H-1,top);
+      if (top<0) continue;
+      const d=Math.hypot(wx,wz);
+      const th = d<46 ? 8+Math.floor((1-d/46)*18) : 4+Math.floor(fbm2(wx*0.04,wz*0.04,2)*7);
+      const bot=Math.max(1, top-th);
+      for(let y=bot;y<=top && y<WORLD_H;y++) blocks[bIdx(x,y,z)]=END_STONE;
+    }
+    /* obsidian pillars on the central island */
+    const bx0=cx*CHUNK, bz0=cz*CHUNK;
+    for(const [px,pz,ph] of END_PILLARS){
+      if (px<bx0-2||px>=bx0+CHUNK+2||pz<bz0-2||pz>=bz0+CHUNK+2) continue;
+      const baseTop=islandTop(px,pz); if (baseTop<0) continue;
+      for(let dx=-2;dx<=2;dx++)for(let dz=-2;dz<=2;dz++){
+        if (dx*dx+dz*dz>6) continue;
+        const x=px+dx-bx0, z=pz+dz-bz0;
+        if (x<0||x>15||z<0||z>15) continue;
+        for(let y=baseTop+1;y<=baseTop+ph;y++) blocks[bIdx(x,y,z)]=OBSIDIAN;
+      }
+      const tx=px-bx0, tz=pz-bz0;            // a glowstone beacon on the cap
+      if (tx>=0&&tx<16&&tz>=0&&tz<16) blocks[bIdx(tx,Math.min(WORLD_H-1,baseTop+ph+1),tz)]=GLOWSTONE;
+    }
+    return {blocks,biomes,heights,chestSpots:[]};
+  }
+  return {columnInfo, genChunk, planFor:()=>null, noise:N};
+}
 /*GEN-END*/
 
 /* --------------------------------------------- [5] renderer & texture atlas */
-let renderer, scene, camera, atlasTex, matOpaque, matTrans, matGlow;
+let renderer, scene, camera, atlasTex, matOpaque, matTrans, matGlow, matWater;
 let hemiLight, sunLight, skyColor, starPts, sunSpr, moonSpr, outlineBox, cloudMesh, cloudTex;
 const atlasCanvas = document.createElement("canvas");
 const COLS=8, ROWS=6, TILE=16;
@@ -1133,10 +1272,37 @@ function buildAtlas(){
     t.rect(4,5,8,8,"#c22f24"); t.rect(3,6,10,6,"#c22f24"); t.rect(5,4,6,1,"#c22f24");
     t.rect(5,6,2,2,"#ee6a5c"); t.rect(7,2,1,3,"#5d4427"); t.rect(8,2,3,2,"#4f7a2e"); });
 
+  /* ---- dimension tiles ---- */
+  tile(A_OBSID,   t=>{ speckle(t,"#120a22",["#1c1230","#0c0618","#241640"],60);
+    for(let i=0;i<5;i++){const x=t.r()*14|0,y=t.r()*14|0; t.px(x,y,"#5a3aa0"); t.px(x+1,y,"#3a246a");} });
+  tile(A_NETHERRACK, t=>{ speckle(t,"#6b1f1f",["#7c2626","#561818","#451212","#822e2e"],75);
+    for(let i=0;i<6;i++){const x=t.r()*13|0,y=t.r()*13|0,s=2+(t.r()*2|0); t.rect(x,y,s,1,"#3c1010");} });
+  tile(A_SOULSAND, t=>{ speckle(t,"#4a3a2e",["#564636","#3d2f24","#5e4c3a"],70);
+    for(const [sx,sy] of [[3,4],[9,8]]){ t.rect(sx,sy,4,4,"#2a2018");
+      t.px(sx+1,sy+1,"#15100b"); t.px(sx+3,sy+1,"#15100b"); t.rect(sx+1,sy+3,2,1,"#15100b"); } });
+  tile(A_GLOWSTONE, t=>{ speckle(t,"#9a7321",["#b8902f","#7c5c19"],40);
+    for(let i=0;i<10;i++){const x=t.r()*13|0,y=t.r()*13|0,s=2+(t.r()*3|0);
+      t.rect(x,y,s,s,"#f6d24b"); t.px(x,y,"#fff0a8"); } });
+  tile(A_MAGMA,   t=>{ speckle(t,"#2a1308",["#371a0c","#1f0e05"],55);
+    for(let i=0;i<5;i++){let x=t.r()*13|0,y=t.r()*13|0,len=3+(t.r()*4|0);
+      for(let k=0;k<len;k++){ t.px(x,y,"#e0560c"); if(t.r()<0.5)t.px(x,y+1,"#ffb13b"); x++; if(t.r()<0.4)y+=t.r()<0.5?1:-1; } } });
+  tile(A_ENDSTONE, t=>{ speckle(t,"#dcd7a6",["#cfc996","#e8e3b6","#c2bc86"],65);
+    for(let i=0;i<6;i++){const x=t.r()*14|0,y=t.r()*14|0; t.px(x,y,"#b0a86e"); t.px(x,y+1,"#f2eec2");} });
+  tile(A_NPORTAL, t=>{ t.rect(0,0,16,16,"#3a127a");
+    for(let y=0;y<16;y++)for(let x=0;x<16;x++){
+      const v=Math.sin(x*0.9+y*0.5)+Math.cos(y*0.8-x*0.4);
+      if (v>0.8) t.px(x,y,"#7a3ad0"); else if(v<-0.9) t.px(x,y,"#26084f");
+      else if (t.r()<0.05) t.px(x,y,"#b07af0"); } });
+  tile(A_EPORTAL, t=>{ t.rect(0,0,16,16,"#05060f");
+    for(let i=0;i<26;i++){const x=t.r()*16|0,y=t.r()*16|0,c=t.r();
+      t.px(x,y, c<0.5?"#1b2a6a":(c<0.85?"#3a5ad0":"#c8e0ff")); }
+    for(let i=0;i<3;i++){const x=t.r()*14|0,y=t.r()*14|0; t.px(x,y,"#ffffff"); t.px(x+1,y,"#9ab8ff");} });
+
   atlasTex = new THREE.CanvasTexture(atlasCanvas);
   atlasTex.magFilter = THREE.NearestFilter;
   atlasTex.minFilter = THREE.NearestFilter;
   atlasTex.generateMipmaps = false;
+  atlasTex.encoding = THREE.sRGBEncoding;   // decode the canvas art into linear light for correct shading
 
   matOpaque = new THREE.MeshLambertMaterial({map:atlasTex, vertexColors:true, alphaTest:0.35});
   matTrans  = new THREE.MeshLambertMaterial({map:atlasTex, vertexColors:true,
@@ -1162,6 +1328,65 @@ function buildAtlas(){
     };
   };
   injectTorch(matOpaque); injectTorch(matTrans);
+
+  /* ---- realistic water: a custom shader with Gerstner-ish ripples, a fresnel
+     sky reflection, a moving sun glint and scene-matched fog. The surface
+     verts (normal up) bob; side verts stay put so blocks never tear apart. */
+  matWater = new THREE.ShaderMaterial({
+    transparent:true, depthWrite:false, side:THREE.DoubleSide, fog:true,
+    uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
+      time:{value:0}, sunDir:{value:new THREE.Vector3(0.4,0.8,0.2)},
+      skyCol:{value:new THREE.Color(0x8fc7ff)}, sunCol:{value:new THREE.Color(0xfff2d8)},
+      daylight:{value:1.0}
+    }]),
+    vertexShader:`
+      #include <common>
+      #include <fog_pars_vertex>
+      attribute vec3 color; attribute vec3 torch;
+      varying vec3 vCol; varying vec3 vTorch; varying vec3 vWPos; varying vec3 vNW;
+      uniform float time;
+      void main(){
+        vCol = color; vTorch = torch;
+        vec4 wp = modelMatrix * vec4(position,1.0);
+        if (normal.y > 0.5){
+          wp.y += sin(wp.x*0.7 + time*1.7)*0.05 + sin(wp.z*0.9 + time*1.3)*0.045
+                + sin((wp.x+wp.z)*1.3 - time*2.1)*0.025;
+        }
+        vWPos = wp.xyz;
+        vNW = normalize(mat3(modelMatrix)*normal);
+        vec4 mvPosition = viewMatrix * wp;
+        gl_Position = projectionMatrix * mvPosition;
+        #include <fog_vertex>
+      }`,
+    fragmentShader:`
+      #include <common>
+      #include <fog_pars_fragment>
+      uniform vec3 sunDir; uniform vec3 skyCol; uniform vec3 sunCol;
+      uniform float time; uniform float daylight;
+      varying vec3 vCol; varying vec3 vTorch; varying vec3 vWPos; varying vec3 vNW;
+      void main(){
+        vec3 viewDir = normalize(cameraPosition - vWPos);
+        vec3 n = normalize(vNW);
+        if (n.y > 0.5){     // ripple normal only on the open surface
+          n.x += sin(vWPos.x*2.1 + time*2.0)*0.10 + sin(vWPos.z*1.3 - time*1.4)*0.06;
+          n.z += cos(vWPos.z*2.3 + time*1.7)*0.10 + cos(vWPos.x*1.1 + time*1.1)*0.06;
+          n = normalize(n);
+        }
+        float shade = clamp(0.55 + 0.45*vCol.r, 0.0, 1.0);      // face shade + AO baked in vertex colour
+        vec3 deep    = vec3(0.015,0.05,0.12);
+        vec3 shallow = vec3(0.05,0.22,0.34);
+        vec3 base = mix(deep, shallow, shade) * (0.35 + 0.65*daylight);
+        float fres = pow(1.0 - max(dot(viewDir, n), 0.0), 4.0);
+        vec3 col = mix(base, skyCol, clamp(fres*0.9, 0.0, 0.85));
+        vec3 h = normalize(viewDir + sunDir);
+        float spec = pow(max(dot(n,h),0.0), 90.0) * daylight;
+        col += sunCol * spec * 1.4;
+        col += vTorch;                                          // warm bleed from nearby torches
+        float alpha = mix(0.70, 0.94, fres);
+        gl_FragColor = vec4(col, alpha);
+        #include <fog_fragment>
+      }`
+  });
 }
 
 /* uv rect of an atlas tile, inset slightly to stop bleeding */
@@ -1185,13 +1410,38 @@ const AO_F=[0.46, 0.66, 0.84, 1.0];   // corner-pinch brightness, darkest first
 /* ------------------------------------------- [6] chunks & mesh building */
 const world = {
   seed: 0, gen: null,
-  chunks: new Map(),          // "cx,cz" -> chunk record
+  dim: DIM_OVERWORLD,         // which dimension is live
+  dimData: {},                // dim -> {edits,chests,furnaces,gen,savedPos}
+  chunks: new Map(),          // "cx,cz" -> chunk record (live dimension only)
   edits:  new Map(),          // "cx,cz" -> Map(blockIdx -> id)  (for saving)
   chests: new Map(),          // "x,y,z" -> [27 x ({id,n}|0)]
   furnaces: new Map(),        // "x,y,z" -> {inS,fuelS,outS,prog,burn}
   genQueue: [], meshQueue: [],
 };
 const cKey = (cx,cz)=>cx+","+cz;
+
+/* Build the right generator for a dimension. */
+function makeDimGen(dim, seed){
+  if (dim===DIM_NETHER) return createNetherGen(seed);
+  if (dim===DIM_END)    return createEndGen(seed);
+  return createGen(seed);
+}
+/* Lazily create a dimension's persistent stores (edits/chests/furnaces + gen). */
+function getDimData(dim){
+  if (!world.dimData[dim])
+    world.dimData[dim]={ edits:new Map(), chests:new Map(), furnaces:new Map(),
+                         gen:makeDimGen(dim, world.seed), savedPos:null };
+  return world.dimData[dim];
+}
+/* Point the live `world` accessors at a dimension's stores (chunks are transient
+   and regenerated; edits/chests/furnaces persist per dimension). */
+function activateDim(dim){
+  const d=getDimData(dim);
+  world.dim=dim;
+  world.chunks=new Map();
+  world.edits=d.edits; world.chests=d.chests; world.furnaces=d.furnaces; world.gen=d.gen;
+  world.genQueue.length=0; world.meshQueue.length=0;
+}
 
 function getChunk(cx,cz){ return world.chunks.get(cKey(cx,cz)); }
 
@@ -1247,6 +1497,8 @@ function createChunk(cx,cz){
   for(let y=1;y<WORLD_H;y++)for(let lz=0;lz<CHUNK;lz++)for(let lx=0;lx<CHUNK;lx++){
     const i=bIdx(lx,y,lz), id=bl[i];
     if (!B[id].lum) continue;
+    /* the Nether's lava sea is everywhere — let ambient light it, not the BFS */
+    if (id===LAVA && world.dim===DIM_NETHER) continue;
     /* a lava lake only glows from its surface, or the BFS would drown */
     if (id===LAVA && y+1<WORLD_H && bl[bIdx(lx,y+1,lz)]!==AIR) continue;
     ch.torches.add(i);
@@ -1314,7 +1566,7 @@ function buildChunkMesh(ch){
   for(const m of ch.meshes){ scene.remove(m); m.geometry.dispose(); }
   ch.meshes.length=0; ch.dirty=false;
 
-  const buckets={ op:{p:[],n:[],u:[],c:[],t:[]}, tr:{p:[],n:[],u:[],c:[],t:[]}, gl:{p:[],n:[],u:[],c:[],t:[]} };
+  const buckets={ op:{p:[],n:[],u:[],c:[],t:[]}, tr:{p:[],n:[],u:[],c:[],t:[]}, gl:{p:[],n:[],u:[],c:[],t:[]}, wt:{p:[],n:[],u:[],c:[],t:[]} };
   const ox=ch.cx*CHUNK, oz=ch.cz*CHUNK;
   const torchL=computeTorchLight(ch);
 
@@ -1337,7 +1589,9 @@ function buildChunkMesh(ch){
       if (def.nc===1){ emitTorch(buckets.gl,x,y,z); continue; }
       if (def.nc===2){ emitDoor(buckets.op,x,y,z,!!def.open,!!def.dz,wx,wz,torchL); continue; }
       if (def.nc===3){ emitBed(buckets.op,x,y,z,wx,wz,torchL); continue; }
-      const bucket = def.g ? buckets.gl : ((def.o||def.cut) ? buckets.op : buckets.tr);
+      const bucket = id===WATER ? buckets.wt
+                   : def.g ? buckets.gl
+                   : ((def.o||def.cut) ? buckets.op : buckets.tr);
       const depth = Math.min(1, 0.30 + 0.70*Math.max(0, y/(SEA+10)));   // cave gloom
 
       for(let f=0;f<6;f++){
@@ -1480,8 +1734,8 @@ function buildChunkMesh(ch){
     }
   }
 
-  const mats={op:matOpaque, tr:matTrans, gl:matGlow};
-  for(const k of ["op","tr","gl"]){
+  const mats={op:matOpaque, tr:matTrans, gl:matGlow, wt:matWater};
+  for(const k of ["op","tr","gl","wt"]){
     const bk=buckets[k];
     if (!bk.p.length) continue;
     const geo=new THREE.BufferGeometry();
@@ -1495,6 +1749,7 @@ function buildChunkMesh(ch){
     mesh.position.set(ox,0,oz);
     if (k==="op"){ mesh.castShadow=true; mesh.receiveShadow=true; }
     if (k==="tr"){ mesh.renderOrder=2; mesh.receiveShadow=true; }
+    if (k==="wt"){ mesh.renderOrder=2; }
     mesh.matrixAutoUpdate=false; mesh.updateMatrix();
     scene.add(mesh); ch.meshes.push(mesh);
   }
@@ -1534,6 +1789,202 @@ function streamChunks(){
   for(const ch of world.chunks.values()){
     if (Math.abs(ch.cx-pcx)>settings.rd+2 || Math.abs(ch.cz-pcz)>settings.rd+2) disposeChunk(ch);
   }
+}
+
+/* ----------------------------------- [7b] dimensions: Nether & End travel */
+/* Generate (and fully mesh) a square of chunks around the player so a freshly
+   entered dimension has solid ground underfoot before the player is dropped in. */
+function pregenAround(R){
+  const pcx=Math.floor(player.pos.x/CHUNK), pcz=Math.floor(player.pos.z/CHUNK);
+  const ring=[];
+  for(let dx=-R;dx<=R;dx++)for(let dz=-R;dz<=R;dz++) ring.push([pcx+dx,pcz+dz,dx*dx+dz*dz]);
+  ring.sort((a,b)=>a[2]-b[2]);
+  for(const [cx,cz] of ring) if(!world.chunks.has(cKey(cx,cz))) createChunk(cx,cz);
+  while(world.meshQueue.length){
+    const ch=world.meshQueue.shift();
+    if (ch.dirty && world.chunks.has(ch.key)) buildChunkMesh(ch);
+  }
+}
+function disposeAllMeshes(){
+  for(const ch of world.chunks.values()){
+    for(const m of ch.meshes){ scene.remove(m); if(m.geometry) m.geometry.dispose(); }
+    ch.meshes.length=0;
+  }
+}
+
+/* Carve a clear 3-tall pocket and lay a stone footing under a cell. */
+function clearStand(x,y,z,mat){
+  for(let dx=-1;dx<=1;dx++)for(let dz=-1;dz<=1;dz++){
+    setBlock(x+dx,y-1,z+dz, mat, true);
+    for(let dy=0;dy<=2;dy++) setBlock(x+dx,y+dy,z+dz, AIR, true);
+  }
+}
+
+/* Build a 4x5 obsidian frame (interior 2x3) on the X axis at (x,y,z) bottom-centre
+   and fill it with portal. Returns the cell the player should stand in. */
+function buildNetherFrame(x,y,z){
+  for(let dy=-1;dy<=3;dy++)for(let dx=-1;dx<=2;dx++){
+    const edge = dx===-1||dx===2||dy===-1||dy===3;
+    if (edge) setBlock(x+dx,y+dy,z,OBSIDIAN,true);
+  }
+  for(let dy=0;dy<=2;dy++)for(let dx=0;dx<=1;dx++){
+    setBlock(x+dx,y+dy,z,NETHER_PORTAL,true);
+    setBlock(x+dx,y+dy,z-1,AIR,true); setBlock(x+dx,y+dy,z+1,AIR,true);   // walking room
+  }
+  return {x:x+0.5, y:y+0.1, z:z+1.5};      // land in front of the portal, not inside it
+}
+
+/* Find a safe landing column in the live dimension near (tx,tz). */
+function safeColumn(tx,tz, loYBias){
+  for(let r=0;r<=10;r++){
+    const steps=Math.max(1,r*4);
+    for(let a=0;a<steps;a++){
+      const x=tx+Math.round(Math.cos(a/steps*6.2832)*r);
+      const z=tz+Math.round(Math.sin(a/steps*6.2832)*r);
+      for(let y=(loYBias||WORLD_H-4); y>2; y--){
+        const here=getBlock(x,y,z), above=getBlock(x,y+1,z), above2=getBlock(x,y+2,z), below=getBlock(x,y-1,z);
+        if (here===AIR && above===AIR && above2===AIR &&
+            below!==AIR && !B[below].l && below!==NETHER_PORTAL && below!==END_PORTAL)
+          return {x,y,z};
+      }
+    }
+  }
+  return null;
+}
+
+let traveling=false;
+async function travel(toDim){
+  if (traveling || toDim===world.dim) return;
+  traveling=true;
+  const from=world.dim;
+  $("toast") && toast(toDim===DIM_NETHER?"The veil tears open…":toDim===DIM_END?"Stepping into the void…":"Returning home…");
+  /* stash where we stood so we can come back to the same spot */
+  const fd=getDimData(from);
+  fd.savedPos={x:player.pos.x,y:player.pos.y,z:player.pos.z,yaw:player.yaw,pitch:player.pitch};
+
+  disposeAllMeshes(); while(mobs.length) killMob(mobs[0],false); dragonReset();
+  activateDim(toDim);
+
+  let dest=getDimData(toDim).savedPos, makeReturn=!dest;
+  const guessX = Math.floor(player.pos.x), guessZ = Math.floor(player.pos.z);
+  if (!dest){
+    if (toDim===DIM_NETHER){
+      player.pos.set(guessX+0.5, 70, guessZ+0.5);
+    } else if (toDim===DIM_END){
+      player.pos.set(0.5, END_BASE+6, 8.5);     // the central island
+    } else {
+      player.pos.set(guessX+0.5, 70, guessZ+0.5);
+    }
+  } else {
+    player.pos.set(dest.x,dest.y,dest.z); player.yaw=dest.yaw; player.pitch=dest.pitch;
+  }
+  player.vel.set(0,0,0);
+
+  await new Promise(r=>requestAnimationFrame(r));
+  pregenAround(Math.min(settings.rd,4));
+
+  if (makeReturn){
+    if (toDim===DIM_NETHER){
+      const col=safeColumn(guessX,guessZ, NETHER_CEIL-3) || {x:guessX,y:66,z:guessZ};
+      clearStand(col.x,col.y,col.z, OBSIDIAN);
+      const stand=buildNetherFrame(col.x,col.y,col.z);
+      player.pos.set(stand.x,stand.y,stand.z);
+    } else if (toDim===DIM_END){
+      let col=safeColumn(0,8, END_BASE+10) || {x:0,y:END_BASE+1,z:8};
+      clearStand(col.x,col.y,col.z, END_STONE);
+      setBlock(col.x+1,col.y-1,col.z, END_PORTAL, true);   // the way home, beside the platform
+      setBlock(col.x+1,col.y,col.z, AIR, true);
+      player.pos.set(col.x+0.5, col.y+0.2, col.z+0.5);     // stand on solid stone
+      endSpawnDragon();
+    } else {
+      const col=safeColumn(guessX,guessZ, WORLD_H-6) || {x:guessX,y:70,z:guessZ};
+      player.pos.set(col.x+0.5, col.y+0.2, col.z+0.5);
+    }
+    getDimData(toDim).savedPos={x:player.pos.x,y:player.pos.y,z:player.pos.z,yaw:player.yaw,pitch:player.pitch};
+  } else if (toDim===DIM_END && !endDragonDead){
+    endSpawnDragon();
+  }
+
+  /* nudge clear of the portal we arrive on so we don't bounce straight back */
+  pregenAround(Math.min(settings.rd,4));
+  applyDimVisuals();
+  portalCool=3.0; portalT=0;
+  traveling=false;
+}
+
+/* Standing in a portal block long enough sends you across. */
+let portalCool=0, portalT=0;
+function updatePortals(dt){
+  if (traveling) return;
+  if (portalCool>0) portalCool-=dt;
+  const p=player, bx=Math.floor(p.pos.x), bz=Math.floor(p.pos.z);
+  const body=getBlock(bx, Math.floor(p.pos.y+0.9), bz);
+  const feet=getBlock(bx, Math.floor(p.pos.y+0.1), bz);
+  const inN = body===NETHER_PORTAL || feet===NETHER_PORTAL;
+  const inE = body===END_PORTAL    || feet===END_PORTAL;
+  if (portalCool>0){ portalT=0; return; }
+  if (inN){
+    portalT+=dt;
+    if (portalT>=1.6){ portalT=0; travel(world.dim===DIM_NETHER?DIM_OVERWORLD:DIM_NETHER); }
+  } else if (inE){
+    portalT+=dt;
+    if (portalT>=0.6){ portalT=0; travel(world.dim===DIM_END?DIM_OVERWORLD:DIM_END); }
+  } else portalT=Math.max(0,portalT-dt*2);
+}
+
+/* ---- the Ender Dragon: a flying boss that wheels over the central island ---- */
+let dragonMob=null, endDragonDead=false;
+function bossBarShow(b){ const el=document.getElementById("bossBar"); if(el) el.style.display=b?"block":"none"; }
+function bossBarSet(f){ const el=document.getElementById("bossFill"); if(el) el.style.width=(Math.max(0,Math.min(1,f))*100).toFixed(1)+"%"; }
+function dragonReset(){
+  if (dragonMob){
+    const i=mobs.indexOf(dragonMob); if(i>=0) mobs.splice(i,1);
+    scene.remove(dragonMob.group);
+    dragonMob.group.traverse(o=>{ if(o.geometry)o.geometry.dispose();
+      if(o.material)(Array.isArray(o.material)?o.material:[o.material]).forEach(mt=>mt.dispose&&mt.dispose()); });
+    dragonMob=null;
+  }
+  bossBarShow(false);
+}
+function endSpawnDragon(){
+  if (endDragonDead || dragonMob || world.dim!==DIM_END) return;
+  dragonMob=makeMob("dragon", 0, END_BASE+26, 0.5);
+  bossBarShow(true); bossBarSet(1);
+}
+function updateDragon(m,dt){
+  m.flT=(m.flT||0)+dt; m.anim+=dt*4;
+  m.attackCd=Math.max(0,m.attackCd-dt); m.hurtT=Math.max(0,m.hurtT-dt);
+  m.diveCd=(m.diveCd||6)-dt;
+  const R=34, alt=END_BASE+24, ang=m.flT*0.42;
+  let tx=Math.cos(ang)*R, tz=Math.sin(ang)*R, ty=alt+Math.sin(m.flT*0.6)*4;
+  if (m.diving>0){ m.diving-=dt; tx=player.pos.x; tz=player.pos.z; ty=player.pos.y+2.5; }
+  else if (m.diveCd<=0 && Math.random()<0.02){ m.diving=2.2; m.diveCd=9; }
+  m.pos.x+=(tx-m.pos.x)*Math.min(1,dt*1.2);
+  m.pos.z+=(tz-m.pos.z)*Math.min(1,dt*1.2);
+  m.pos.y+=(ty-m.pos.y)*Math.min(1,dt*1.6);
+  const hx=tx-m.pos.x, hz=tz-m.pos.z; if (hx||hz) m.yaw=Math.atan2(hx,hz);
+  m.group.position.copy(m.pos); m.group.rotation.y=m.yaw;
+  if (m.wings){ const f=Math.sin(m.anim)*0.6; m.wings[0].rotation.z=0.3+f; m.wings[1].rotation.z=-0.3-f; }
+  const dd=Math.hypot(player.pos.x-m.pos.x, player.pos.y-m.pos.y, player.pos.z-m.pos.z);
+  if (dd<3.4 && m.attackCd<=0 && !dead){
+    m.attackCd=1.3; damagePlayer(6,"was swept from the sky by the dragon");
+    const kx=player.pos.x-m.pos.x, kz=player.pos.z-m.pos.z, kl=Math.hypot(kx,kz)||1;
+    player.vel.x+=kx/kl*8; player.vel.z+=kz/kl*8; player.vel.y=Math.max(player.vel.y,5);
+  }
+  const tint=m.hurtT>0?0xff5566:0x271836;
+  for(const mt of m.mats) mt.color.setHex(tint);
+  bossBarSet(m.hp/m.def.hp);
+}
+
+/* ---- per-dimension sky, light and atmosphere toggles ---- */
+function applyDimVisuals(){
+  const od=world.dim===DIM_OVERWORLD;
+  if (cloudMesh) cloudMesh.visible=od;
+  if (sunSpr)  sunSpr.visible=od;
+  if (moonSpr) moonSpr.visible=od;
+  if (starPts) starPts.visible=(world.dim!==DIM_NETHER);
+  if (precip)  precip.visible=(od && weather==="precip");
+  bossBarShow(world.dim===DIM_END && !!dragonMob);
 }
 
 /* ---------------------------------------------------- [8] voxel raycast */
@@ -1593,9 +2044,8 @@ function boxCollides(px,py,pz,hw,h){
   return false;
 }
 
-/* Move an entity {pos,vel,...} by vel*dt, resolving each axis separately.
-   Returns {hitX,hitY,hitZ} flags. Classic voxel-game sweep: cheap and stable. */
-function collideMove(e, hw, h, dt){
+/* One axis-separated resolution step over a (short) timestep. */
+function collideStep(e, hw, h, dt){
   const hit={x:false,y:false,z:false};
   /* X */
   let nx=e.pos.x + e.vel.x*dt;
@@ -1624,12 +2074,30 @@ function collideMove(e, hw, h, dt){
   return hit;
 }
 
+/* Move an entity {pos,vel,...} by vel*dt, resolving each axis separately.
+   The move is split into sub-steps no larger than ~0.4 blocks so a fast fall
+   can never tunnel through a thin floor (a real bug in single-shot sweeps).
+   Returns sticky {x,y,z} contact flags accumulated across the sub-steps. */
+function collideMove(e, hw, h, dt){
+  const reach=Math.max(Math.abs(e.vel.x),Math.abs(e.vel.y),Math.abs(e.vel.z))*dt;
+  const steps=Math.max(1, Math.min(8, Math.ceil(reach/0.4)));
+  const sdt=dt/steps;
+  const hit={x:false,y:false,z:false};
+  for(let s=0;s<steps;s++){
+    const r=collideStep(e,hw,h,sdt);
+    hit.x=hit.x||r.x; hit.y=hit.y||r.y; hit.z=hit.z||r.z;
+  }
+  return hit;
+}
+
 function updatePlayer(dt){
   if (dead) return;
   const p=player;
 
-  /* water sensing */
+  /* fluid + footing sensing */
   p.inWater     = getBlock(Math.floor(p.pos.x), Math.floor(p.pos.y+0.4), Math.floor(p.pos.z))===WATER;
+  p.inLava      = getBlock(Math.floor(p.pos.x), Math.floor(p.pos.y+0.4), Math.floor(p.pos.z))===LAVA;
+  const standId = getBlock(Math.floor(p.pos.x), Math.floor(p.pos.y-0.1), Math.floor(p.pos.z));
   const headBlk = getBlock(Math.floor(p.pos.x), Math.floor(p.pos.y+eyeHeight()), Math.floor(p.pos.z));
   p.headInWater = headBlk===WATER;
   p.headInLava  = headBlk===LAVA;
@@ -1649,6 +2117,7 @@ function updatePlayer(dt){
   let speed = p.sneak?2.0 : p.sprint?7.2 : 4.5;
   if (p.fly) speed = keys.ShiftLeft?16:9;
   if (p.inWater && !p.fly) speed*=0.6;
+  if (standId===SOUL_SAND && !p.fly) speed*=0.5;   // soul sand drags your boots
 
   if (p.fly){
     /* damped free flight */
@@ -1665,12 +2134,22 @@ function updatePlayer(dt){
     p.vel.y = Math.max(-4, Math.min(4, p.vel.y));
     /* swimming into a bank: vault up and out, the way pigs already do */
     if ((p.hitX||p.hitZ) && ml>0) p.vel.y = 8.2;
+  } else if (p.inLava){
+    /* molten rock is thick: you wade slowly and sink unless you struggle up */
+    speed*=0.35;
+    p.vel.x += (mx*speed - p.vel.x)*Math.min(1,dt*5);
+    p.vel.z += (mz*speed - p.vel.z)*Math.min(1,dt*5);
+    p.vel.y -= GRAVITY*0.25*dt;
+    if (keys.Space||touchJump) p.vel.y += GRAVITY*0.55*dt + 4*dt;
+    p.vel.y = Math.max(-2.5, Math.min(2.5, p.vel.y));
+    if ((p.hitX||p.hitZ) && ml>0) p.vel.y = 5;
   } else {
     const accel = p.onGround?12:4;
     p.vel.x += (mx*speed - p.vel.x)*Math.min(1,dt*accel);
     p.vel.z += (mz*speed - p.vel.z)*Math.min(1,dt*accel);
     p.vel.y -= GRAVITY*dt;
-    if ((keys.Space||touchJump) && p.onGround){ p.vel.y=8.6; p.onGround=false; }
+    if (p.vel.y < -MAX_FALL) p.vel.y = -MAX_FALL;   // terminal velocity
+    if ((keys.Space||touchJump) && p.onGround){ p.vel.y=JUMP_V; p.onGround=false; }
   }
 
   /* sneak edge-guard: don't walk off blocks while sneaking */
@@ -1952,7 +2431,8 @@ function armorTakeHit(){
 
 /* what a broken block leaves in your hands */
 const DROPS={ [GRASS]:DIRT, [SNOWGRASS]:DIRT, [STONE]:COBBLE,
-              [COAL_ORE]:ITEM_COAL, [DIAMOND_ORE]:ITEM_DIAMOND };
+              [COAL_ORE]:ITEM_COAL, [DIAMOND_ORE]:ITEM_DIAMOND,
+              [NETHER_PORTAL]:0, [END_PORTAL]:0 };   // portals leave nothing behind
 function dropFor(id, rng){
   if (id===LEAVES) return rng<0.06 ? ITEM_APPLE : 0;   // shake the canopy
   return DROPS[id]!==undefined ? DROPS[id] : id;
@@ -1994,13 +2474,21 @@ function die(cause){
 
 function respawn(){
   dead=false;
-  player.pos.copy(player.spawn); player.vel.set(0,0,0);
+  player.vel.set(0,0,0);
   player.hp=player.maxHp; player.hunger=20; player.fly=false;
   document.getElementById("deathScreen").classList.remove("show");
-  tryLock();
+  if (world.dim!==DIM_OVERWORLD){
+    /* die abroad, wake at home: send the overworld a landing at the spawn point */
+    getDimData(DIM_OVERWORLD).savedPos={x:player.spawn.x,y:player.spawn.y,z:player.spawn.z,
+                                        yaw:player.yaw,pitch:player.pitch};
+    travel(DIM_OVERWORLD);
+  } else {
+    player.pos.copy(player.spawn);
+    tryLock();
+  }
 }
 
-let hungerT=0, regenT=0, starveT=0, lavaT=0;
+let hungerT=0, regenT=0, starveT=0, lavaT=0, magmaT=0;
 function updateSurvival(dt){
   if (dead) return;
   const p=player;
@@ -2034,6 +2522,12 @@ function updateSurvival(dt){
     lavaT+=dt; if (lavaT>0.4){ lavaT=0; player.hurtCd=0; damagePlayer(4,"swam in liquid stone"); }
   } else lavaT=0;
 
+  /* a magma block scorches bare feet */
+  const stand=getBlock(Math.floor(p.pos.x),Math.floor(p.pos.y-0.1),Math.floor(p.pos.z));
+  if (stand===MAGMA && p.onGround && !p.sneak){
+    magmaT+=dt; if (magmaT>0.5){ magmaT=0; player.hurtCd=0; damagePlayer(1,"stood on burning stone"); }
+  } else magmaT=0;
+
   document.getElementById("lavaTint").style.opacity = (feet===LAVA||p.headInLava)?0.55:0;
   document.getElementById("waterTint").style.opacity = p.headInWater?0.42:0;
   document.getElementById("vignette").style.opacity = p.hp<=6 ? 0.85 : 0.35;
@@ -2061,6 +2555,8 @@ const MOB_DEF={
            body:0x4f7a3a, head:0x69995a, leg:0x3c5c2c, drops:[[ITEM_FLESH,0,1]]},
   villager:{hw:0.30, h:1.75, hp:14, speed:1.5, hostile:false, xp:0,
            body:0x8a6f4d, head:0xc9a07a, leg:0x6e5840, drops:[]},
+  dragon: {hw:2.0,  h:2.4,  hp:120, speed:0, hostile:true, xp:500, fly:true,
+           body:0x271836, head:0x271836, leg:0x271836, drops:[]},
 };
 
 /* tiny pixel-art textures for the faces (16x16, nearest-filtered) */
@@ -2093,6 +2589,24 @@ function makeMob(type,x,y,z){
     ms.castShadow=true; ms.receiveShadow=true; return ms; };
   const legs=[];
   let body,head;
+  if (type==="dragon"){
+    /* a chain of dark segments with two great membranous wings */
+    const seg=(w,h,l,yy,zz)=>{ const s=box(w,h,l,bodyM); s.position.set(0,yy,zz); g.add(s); return s; };
+    seg(1.6,1.4,2.6, 1.2, 0);            // torso
+    seg(1.0,1.0,1.6, 1.3,-2.0);          // neck
+    head=seg(1.2,1.0,1.4, 1.4,-3.4);     // head
+    const jaw=box(1.0,0.4,1.0,legM); jaw.position.set(0,0.95,-3.7); g.add(jaw);
+    for(let i=0;i<5;i++){ const t=box(0.9-i*0.13,0.7-i*0.08,1.0,bodyM);
+      t.position.set(0,1.2,1.6+i*0.9); g.add(t); }   // tail
+    const wing=side=>{ const w=box(3.4,0.18,2.0,headM);
+      w.position.set(side*1.9,1.7,0.2); g.add(w); return w; };
+    const wings=[wing(1),wing(-1)];
+    const m={type,def:d,group:g,legs,mats, wings, home:null,
+      pos:new THREE.Vector3(x,y,z), vel:new THREE.Vector3(),
+      yaw:0, hp:d.hp, onGround:false, wanderT:0, dirX:0, dirZ:0,
+      anim:0, hurtT:0, attackCd:0, burnT:0, flT:0, diveCd:6, diving:0};
+    scene.add(g); mobs.push(m); return m;
+  }
   if (type==="sheep"){
     body=box(0.95,0.68,1.2,bodyM); body.position.y=0.66; g.add(body);
     head=faced(0.46,0xd8d2c6,gg=>{
@@ -2158,6 +2672,14 @@ function killMob(m, byPlayer){
     if (o.geometry) o.geometry.dispose();
     if (o.material) (Array.isArray(o.material)?o.material:[o.material]).forEach(mt=>mt.dispose&&mt.dispose());
   });
+  if (m.type==="dragon"){
+    if (m===dragonMob) dragonMob=null;
+    bossBarShow(false);
+    if (byPlayer){ endDragonDead=true;
+      toast("The Ender Dragon falls — the way home shimmers at the centre.");
+      sfx("levelup"); addXP(m.def.xp); }
+    return;
+  }
   if (byPlayer){
     addXP(m.def.xp); sfx("pop");
     if (gameMode==="survival" && m.def.drops){
@@ -2181,6 +2703,7 @@ function hurtMob(m, dmg, fromX, fromZ){
 function updateMobs(dt){
   for(let i=mobs.length-1;i>=0;i--){
     const m=mobs[i], d=m.def;
+    if (m.type==="dragon"){ updateDragon(m,dt); continue; }
     /* villagers keep to their village green */
     if (m.type==="villager" && m.home){
       const hx=m.home.x-m.pos.x, hz=m.home.z-m.pos.z;
@@ -2195,9 +2718,10 @@ function updateMobs(dt){
     m.attackCd=Math.max(0,m.attackCd-dt);
 
     /* ---- brain */
+    const aggro = world.dim===DIM_OVERWORLD ? daylight<0.6 : world.dim===DIM_NETHER;
     let wantX=0, wantZ=0, spd=d.speed;
-    if (d.hostile && !dead && gameMode!=="creative" && distP<28 && daylight<0.6){
-      /* the night gives them purpose */
+    if (d.hostile && !dead && gameMode!=="creative" && distP<28 && aggro){
+      /* the dark — or the Nether's eternal gloom — gives them purpose */
       wantX=-ddx/(distP||1); wantZ=-ddz/(distP||1);
       if (distP<1.6 && m.attackCd<=0 && Math.abs(player.pos.y-m.pos.y)<2.2){
         m.attackCd=1.0; damagePlayer(3,"was unmade by the hungry dark");
@@ -2228,8 +2752,8 @@ function updateMobs(dt){
 
     if (m.pos.y<-8){ killMob(m,false); continue; }
 
-    /* zombies cannot abide the sun */
-    if (d.hostile && daylight>0.7){
+    /* zombies cannot abide the overworld sun (the Nether has none) */
+    if (d.hostile && world.dim===DIM_OVERWORLD && daylight>0.7){
       m.burnT+=dt;
       if (m.burnT>1){ m.burnT=0; m.hp-=4; m.hurtT=0.3; if(m.hp<=0){ killMob(m,false); continue; } }
     }
@@ -2296,9 +2820,11 @@ function settleSpawn(col){
 }
 function updateSpawning(dt){
   spawnT-=dt; if (spawnT>0) return; spawnT=1.5;
-  const hostiles=mobs.filter(m=>m.def.hostile).length;
+  if (world.dim===DIM_END) return;                 // the End breeds only the dragon
+  const hostiles=mobs.filter(m=>m.def.hostile&&m.type!=="dragon").length;
   const passives=mobs.length-hostiles;
-  const night=daylight<0.35;
+  const nether=world.dim===DIM_NETHER;
+  const night=nether || daylight<0.35;
   const tryOnce=(hostile)=>{
     const a=Math.random()*Math.PI*2, r=hostile?24+Math.random()*16:16+Math.random()*20;
     const x=Math.floor(player.pos.x+Math.cos(a)*r), z=Math.floor(player.pos.z+Math.sin(a)*r);
@@ -2306,11 +2832,12 @@ function updateSpawning(dt){
     if (!world.chunks.has(cKey(cx,cz))) return;
     const y=groundYAt(x,z); if (y<0||y>WORLD_H-3) return;
     if (getBlock(x,y,z)!==AIR || getBlock(x,y+1,z)!==AIR) return;
-    if (getBlock(x,y-1,z)===WATER) return;
+    const below=getBlock(x,y-1,z);
+    if (below===WATER||below===LAVA) return;
     makeMob(hostile?"zombie":(Math.random()<0.5?"sheep":"pig"), x+0.5, y, z+0.5);
   };
   if (night && hostiles<12) tryOnce(true);
-  if (!night && passives<10 && Math.random()<0.6) tryOnce(false);
+  if (!nether && !night && passives<10 && Math.random()<0.6) tryOnce(false);  // no peaceful beasts in hell
 }
 
 /* ---- player attack: slab-test ray vs each mob's AABB, nearest wins */
@@ -2352,11 +2879,13 @@ const PLACE_DELAY=0.25;
 
 /* which tool digs what, and which pick tier an ore demands */
 const TOOL_CLASS={
-  pick:  [STONE,COBBLE,BRICK,FURNACE,COAL_ORE,IRON_ORE,GOLD_ORE,DIAMOND_ORE,ICE],
+  pick:  [STONE,COBBLE,BRICK,FURNACE,COAL_ORE,IRON_ORE,GOLD_ORE,DIAMOND_ORE,ICE,
+          OBSIDIAN,NETHERRACK,END_STONE,MAGMA],
   axe:   [LOG,PLANKS,CRAFT_TABLE,CHEST,DOOR,DOOR_O,DOOR_Z,DOOR_ZO],
-  shovel:[DIRT,GRASS,SAND,GRAVEL,SNOWGRASS],
+  shovel:[DIRT,GRASS,SAND,GRAVEL,SNOWGRASS,SOUL_SAND],
 };
-const ORE_GATE={ [COAL_ORE]:0, [IRON_ORE]:1, [GOLD_ORE]:2, [DIAMOND_ORE]:2 };
+/* pick-tier gate: 0 wood,1 stone,2 iron,3 gold,4 diamond. Obsidian wants diamond. */
+const ORE_GATE={ [COAL_ORE]:0, [IRON_ORE]:1, [GOLD_ORE]:2, [DIAMOND_ORE]:2, [OBSIDIAN]:4 };
 const STONY=new Set(TOOL_CLASS.pick);
 
 /* how long this block takes with what's in hand, and whether it drops */
@@ -2371,6 +2900,11 @@ function digInfo(id, g){
   else if (id===GLASS)   base=0.45;
   else if (id===CACTUS)  base=0.50;
   else if (id===TORCH)   base=0.05;
+  else if (id===GLOWSTONE) base=0.40;
+  else if (id===NETHER_PORTAL||id===END_PORTAL) return {time:0.2, drop:false, wear:false};
+  if (id===OBSIDIAN)   base=5.0;          // famously stubborn
+  else if (id===NETHERRACK) base=0.5;     // crumbly
+  else if (id===END_STONE)  base=1.2;
   const gate=ORE_GATE[id];
   const effective = !!(tool && cls && tool.kind===cls && (gate===undefined || tool.tier>=gate));
   if (cls==="pick" && !effective)
@@ -2567,6 +3101,48 @@ function addAnything(id,n){
   else invAdd(id,n);
 }
 
+/* Flood the air enclosed by an obsidian frame (in one vertical plane) and fill
+   it with portal blocks. Returns true when a sealed frame was lit. */
+function fillPortal(sx,sy,sz,axis){
+  if (getBlock(sx,sy,sz)!==AIR) return null;
+  const seen=new Set(), cells=[], stack=[[sx,sy,sz]]; let ok=true;
+  while(stack.length){
+    const [cx,cy,cz]=stack.pop(), k=cx+","+cy+","+cz;
+    if (seen.has(k)) continue; seen.add(k);
+    const id=getBlock(cx,cy,cz);
+    if (id===OBSIDIAN) continue;            // the frame: a valid wall
+    if (id!==AIR){ ok=false; break; }       // a hole in the frame — not sealed
+    cells.push([cx,cy,cz]);
+    if (cells.length>42){ ok=false; break; }
+    const ns = axis==="x"
+      ? [[cx+1,cy,cz],[cx-1,cy,cz],[cx,cy+1,cz],[cx,cy-1,cz]]
+      : [[cx,cy,cz+1],[cx,cy,cz-1],[cx,cy+1,cz],[cx,cy-1,cz]];
+    for(const n of ns) stack.push(n);
+  }
+  return (ok && cells.length) ? cells : null;
+}
+function tryIgnitePortal(x,y,z){
+  for(const axis of ["x","z"]){
+    const cells=fillPortal(x,y,z,axis);
+    if (cells){
+      for(const [cx,cy,cz] of cells){ setBlock(cx,cy,cz,NETHER_PORTAL); mpSendEdit(cx,cy,cz,NETHER_PORTAL); }
+      toast("The portal hums to life."); return true;
+    }
+  }
+  return false;
+}
+/* water meeting lava hardens it to obsidian (the only way to it without a deep mine) */
+function coolLava(x,y,z,placedWater){
+  const dirs=[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+  if (placedWater){
+    for(const [dx,dy,dz] of dirs)
+      if (getBlock(x+dx,y+dy,z+dz)===LAVA){ setBlock(x+dx,y+dy,z+dz,OBSIDIAN); mpSendEdit(x+dx,y+dy,z+dz,OBSIDIAN); }
+  } else {
+    for(const [dx,dy,dz] of dirs)
+      if (getBlock(x+dx,y+dy,z+dz)===WATER){ setBlock(x,y,z,OBSIDIAN); mpSendEdit(x,y,z,OBSIDIAN); return; }
+  }
+}
+
 /* one placement/use: mouse RMB tick or a touch tap */
 function doPlaceOnce(hit){
   if (dead||paused||uiOpen) return;
@@ -2583,6 +3159,8 @@ function doPlaceOnce(hit){
     if (hit.id===BED_B){ trySleep(); return; }
   }
   if (isToolUid(item)){ return; }            // tools aren't placeable
+  /* a torch struck against a sealed obsidian frame opens a Nether portal */
+  if (item===TORCH && hit.id===OBSIDIAN && tryIgnitePortal(hit.px,hit.py,hit.pz)){ sfx("place"); return; }
   if (invCount(item)<1){ toast("Out of "+itemName(item)); return; }
   if (item===DOOR){
     const tx=hit.px, ty=hit.py, tz=hit.pz;
@@ -2601,7 +3179,10 @@ function doPlaceOnce(hit){
   if (item===TORCH && !solidAt(tx,ty-1,tz)){ toast("A torch needs solid footing."); return; }
   const cur=getBlock(tx,ty,tz);
   if ((cur===AIR||B[cur].l) && !playerOverlapsCell(tx,ty,tz)){
-    if (setBlock(tx,ty,tz,item)){ invTake(item,1); sfx("place"); mpSendEdit(tx,ty,tz,item); }
+    if (setBlock(tx,ty,tz,item)){ invTake(item,1); sfx("place"); mpSendEdit(tx,ty,tz,item);
+      if (item===WATER) coolLava(tx,ty,tz,true);
+      else if (item===LAVA) coolLava(tx,ty,tz,false);
+    }
   }
 }
 
@@ -2610,14 +3191,45 @@ let gameTime=60;        // seconds into the cycle; 60 = early morning
 let daylight=1;
 
 const SKY_NIGHT=new THREE.Color(0x0b1026), SKY_DAY=new THREE.Color(0x8fc7ff),
-      SKY_DAWN=new THREE.Color(0xff9a5c);
+      SKY_DAWN=new THREE.Color(0xff9a5c),
+      SKY_NETHER=new THREE.Color(0x310a0c), SKY_END=new THREE.Color(0x0c0617);
 const skyTmp=new THREE.Color();
+
+/* feed the live sky, sun and daylight into the water shader */
+function updateWaterUniforms(){
+  if (!matWater) return;
+  const u=matWater.uniforms;
+  u.time.value=gameTime;
+  if (scene.background && scene.background.isColor) u.skyCol.value.copy(scene.background);
+  u.daylight.value = world.dim===DIM_OVERWORLD ? Math.max(0.15,daylight) : 0.5;
+  u.sunDir.value.set(sunLight.position.x-player.pos.x,
+                     sunLight.position.y-player.pos.y,
+                     sunLight.position.z-player.pos.z).normalize();
+}
 
 function updateSky(dt){
   gameTime+=dt;
   const frac=(gameTime%DAY_LEN)/DAY_LEN;
   const s=Math.sin(frac*Math.PI*2);                  // + day, - night
   daylight=Math.max(0,Math.min(1,s*1.6+0.08));
+
+  /* the lower dimensions wear fixed skies — no sun, no clock overhead */
+  if (world.dim!==DIM_OVERWORLD){
+    const isNether=world.dim===DIM_NETHER;
+    skyTmp.copy(isNether?SKY_NETHER:SKY_END);
+    scene.background=skyTmp; scene.fog.color.copy(skyTmp);
+    hemiLight.color.setHex(isNether?0x9a3a2a:0x6a5a8a);
+    hemiLight.groundColor.setHex(isNether?0x2a0808:0x140c22);
+    hemiLight.intensity=isNether?0.62:0.55;
+    sunLight.intensity=isNether?0.0:0.22;
+    if (!isNether){ sunLight.position.set(player.pos.x+40,player.pos.y+140,player.pos.z+30);
+                    sunLight.target.position.copy(player.pos); }
+    if (starPts){ starPts.position.copy(camera.position); starPts.rotation.y+=dt*0.003;
+                  starPts.material.opacity=isNether?0:0.7; }
+    updateWaterUniforms();
+    return;
+  }
+  hemiLight.color.setHex(0xcfe8ff); hemiLight.groundColor.setHex(0x404038);
 
   skyTmp.copy(SKY_NIGHT).lerp(SKY_DAY,daylight);
   const dawnW=Math.max(0,1-Math.abs(s)*4)*0.55;      // blush at the horizons of the day
@@ -2645,6 +3257,7 @@ function updateSky(dt){
   cloudMesh.position.set(player.pos.x, WORLD_H-14, player.pos.z);
   cloudTex.offset.x += dt*0.0016; cloudTex.offset.y += dt*0.0004;
   cloudMesh.material.opacity = 0.25 + 0.55*daylight;
+  updateWaterUniforms();
 }
 
 function timeName(){
@@ -2682,6 +3295,17 @@ function playerBiome(){
 }
 
 function updateWeather(dt){
+  const overworld=world.dim===DIM_OVERWORLD;
+  if (!overworld){                                   // no weather below the surface
+    weather="clear"; if (precip) precip.visible=false;
+    const baseFar=settings.rd*CHUNK*(world.dim===DIM_NETHER?0.85:1.1)+20;
+    let far=baseFar, near=far*(world.dim===DIM_NETHER?0.25:0.5);
+    if (player.headInLava){ near=1; far=10; }
+    scene.fog.near+=(near-scene.fog.near)*Math.min(1,dt*3);
+    scene.fog.far +=(far -scene.fog.far )*Math.min(1,dt*3);
+    camera.far=Math.max(1200,far+400); camera.updateProjectionMatrix();
+    return;
+  }
   weatherT-=dt;
   if (weatherT<=0){
     weatherT=35+Math.random()*50;
@@ -2790,20 +3414,26 @@ function loadData(key){
   });
 }
 
-function buildSave(){
+function serializeDim(d){
   const edits={};
-  for(const [k,m] of world.edits) edits[k]=[...m.entries()];
+  for(const [k,m] of d.edits) edits[k]=[...m.entries()];
+  return { edits, chests:[...d.chests],
+    furnaces:[...d.furnaces].map(([k,f])=>[k,{inS:f.inS,fuelS:f.fuelS,outS:f.outS,prog:f.prog,burn:f.burn}]),
+    savedPos:d.savedPos||null };
+}
+function buildSave(){
+  const dims={};
+  for(const k in world.dimData) dims[k]=serializeDim(world.dimData[k]);
   return {
-    v:3, seed:world.seed, time:gameTime, mode:gameMode, inv:[...inv],
+    v:4, seed:world.seed, time:gameTime, mode:gameMode, dim:world.dim,
+    endDragonDead, dims, inv:[...inv],
     gear:[...gearBag].map(([uid,g])=>[uid,g.id,g.dur]),
     equip:{...equip}, gearUid,
-    chests:[...world.chests],
-    furnaces:[...world.furnaces].map(([k,f])=>[k,{inS:f.inS,fuelS:f.fuelS,outS:f.outS,prog:f.prog,burn:f.burn}]),
     player:{ x:player.pos.x,y:player.pos.y,z:player.pos.z,
              yaw:player.yaw,pitch:player.pitch, hp:player.hp,maxHp:player.maxHp,
              hunger:player.hunger,xp:player.xp,level:player.level,fly:player.fly,
              sx:player.spawn.x,sy:player.spawn.y,sz:player.spawn.z },
-    hotbar:[...hotbar], edits,
+    hotbar:[...hotbar],
   };
 }
 async function saveGame(){
@@ -2819,14 +3449,23 @@ function applySave(sv){
   gearBag.clear(); equip.head=equip.chest=equip.legs=equip.feet=0; gearUid=1000;
   if (sv.gear) for(const [uid,id,dur] of sv.gear){ gearBag.set(uid,{id,dur}); if(uid>=gearUid) gearUid=uid+1; }
   if (sv.equip) Object.assign(equip, sv.equip);
-  world.chests.clear();
-  if (sv.chests) for(const [k,st] of sv.chests) world.chests.set(k,st);
-  world.furnaces.clear();
-  if (sv.furnaces) for(const [k,f] of sv.furnaces) world.furnaces.set(k,f);
-  world.seed=sv.seed; world.gen=createGen(sv.seed);
+  world.seed=sv.seed;
+  endDragonDead=!!sv.endDragonDead;
+  /* rebuild each dimension's persistent stores from the save */
+  world.dimData={};
+  const loadDim=(dim,sd)=>{
+    const d={ edits:new Map(), chests:new Map(), furnaces:new Map(),
+              gen:makeDimGen(dim, world.seed), savedPos:sd.savedPos||null };
+    for(const ek in sd.edits) d.edits.set(ek, new Map(sd.edits[ek]));
+    if (sd.chests)   for(const [ck,st] of sd.chests)   d.chests.set(ck,st);
+    if (sd.furnaces) for(const [fk,f]  of sd.furnaces) d.furnaces.set(fk,f);
+    world.dimData[dim]=d;
+  };
+  if (sv.dims){ for(const k in sv.dims) loadDim(+k, sv.dims[k]); }
+  else loadDim(DIM_OVERWORLD, {edits:sv.edits||{}, chests:sv.chests, furnaces:sv.furnaces});  // v3 fallback
+  getDimData(DIM_OVERWORLD);                 // make sure home always exists
+  activateDim(sv.dim||DIM_OVERWORLD);        // point the live accessors at it
   gameTime=sv.time||60;
-  world.edits.clear(); world.chests.clear(); world.furnaces.clear();
-  for(const k in sv.edits) world.edits.set(k,new Map(sv.edits[k]));
   const p=sv.player;
   player.pos.set(p.x,p.y,p.z); player.vel.set(0,0,0);
   player.yaw=p.yaw; player.pitch=p.pitch;
@@ -2837,6 +3476,7 @@ function applySave(sv){
 }
 function clearWorldRuntime(){
   villagersUp.clear();
+  dragonReset(); endDragonDead=false;
   for(const ch of [...world.chunks.values()]) disposeChunk(ch);
   world.meshQueue.length=0;
   while(mobs.length) killMob(mobs[0],false);
@@ -3345,10 +3985,11 @@ function updateHUD(dt){
   $("hgFill").style.width=(p.hunger/20*100)+"%";
   $("xpFill").style.width=(p.xp/xpNeed()*100)+"%";
   $("lvl").textContent="Lv "+p.level;
+  const place = world.dim===DIM_OVERWORLD ? BIOME_NAME[playerBiome()]+" · "+timeName() : DIM_NAME[world.dim];
   $("debug").textContent=
     fps+" fps · "+p.pos.x.toFixed(0)+","+p.pos.y.toFixed(0)+","+p.pos.z.toFixed(0)
-    +" · "+BIOME_NAME[playerBiome()]+" · "+timeName()+" · "+gameMode
-    +(p.fly?" · flying":"")+(weather!=="clear"?" · "+precipMode:"");
+    +" · "+place+" · "+gameMode
+    +(p.fly?" · flying":"")+(world.dim===DIM_OVERWORLD&&weather!=="clear"?" · "+precipMode:"");
 }
 
 /* settings */
@@ -3541,6 +4182,11 @@ function initThree(){
   renderer=new THREE.WebGLRenderer({canvas:canvasEl,antialias:false,powerPreference:"high-performance"});
   renderer.setPixelRatio(Math.min(devicePixelRatio||1, isTouch?1.6:2));
   renderer.setSize(innerWidth,innerHeight);
+  /* physically-truer colour: sRGB output + filmic tone mapping so highlights
+     (sun glint, lava, glowstone) roll off instead of clipping to flat white */
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
   addEventListener("resize",()=>{ renderer.setSize(innerWidth,innerHeight);
     camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); });
 
@@ -3587,6 +4233,7 @@ function initThree(){
   }
   cloudTex=new THREE.DataTexture(cdata,CN,CN,THREE.RGBAFormat);
   cloudTex.needsUpdate=true;
+  cloudTex.encoding=THREE.sRGBEncoding;
   cloudTex.generateMipmaps=false;
   cloudTex.minFilter=THREE.LinearFilter; cloudTex.magFilter=THREE.LinearFilter;
   cloudTex.wrapS=cloudTex.wrapT=THREE.RepeatWrapping; cloudTex.repeat.set(3,3);
@@ -3614,7 +4261,7 @@ function initThree(){
     const gr=g2.createRadialGradient(32,32,4,32,32,30);
     gr.addColorStop(0,inner); gr.addColorStop(0.7,outer); gr.addColorStop(1,"rgba(0,0,0,0)");
     g2.fillStyle=gr; g2.fillRect(0,0,64,64);
-    const t=new THREE.CanvasTexture(c); return t;
+    const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t;
   };
   sunSpr=new THREE.Sprite(new THREE.SpriteMaterial({map:disc("#fff7d9","#ffcf6e"),
           transparent:true,depthWrite:false,depthTest:false}));
@@ -3636,8 +4283,16 @@ async function startWorld(seed, save){
   clearWorldRuntime();
   if (save){ applySave(save); }
   else {
-    world.seed=seed; world.gen=createGen(seed);
-    world.edits.clear(); world.chests.clear(); world.furnaces.clear();
+    /* a brand-new world always begins in the Overworld with its own fresh stores */
+    world.seed=seed;
+    world.dim=DIM_OVERWORLD;
+    world.dimData={};
+    world.chunks=new Map();
+    world.edits=new Map(); world.chests=new Map(); world.furnaces=new Map();
+    world.gen=createGen(seed);
+    world.dimData[DIM_OVERWORLD]={ edits:world.edits, chests:world.chests,
+                                   furnaces:world.furnaces, gen:world.gen, savedPos:null };
+    world.genQueue.length=0; world.meshQueue.length=0;
     gameTime=60;
     player.hp=20; player.maxHp=20; player.hunger=20; player.xp=0; player.level=1;
     player.fly=false; player.yaw=0; player.pitch=0;
@@ -3682,6 +4337,9 @@ async function startWorld(seed, save){
   }
   player.vel.set(0,0,0);
 
+  applyDimVisuals();
+  if (world.dim===DIM_END && !endDragonDead) endSpawnDragon();
+
   $("progressWrap").style.display="none";
   $("titleScreen").classList.remove("show");
   $("hud").classList.add("show");
@@ -3698,17 +4356,18 @@ function loop(now){
   requestAnimationFrame(loop);
   const dt=Math.min(0.05,(now-lastT)/1000); lastT=now;
   if (!inGame){ return; }
-  if (!paused && !uiOpen){
+  if (!paused && !uiOpen && !traveling){
     updatePlayer(dt);
     updateSurvival(dt);
     updateInteraction(dt);
+    updatePortals(dt);
     updateMobs(dt);
     updateSpawning(dt);
   }
   mpTick(dt);
   updateFurnaces(paused?0:dt);
-  if (!paused) populateVillages();
-  streamChunks();
+  if (!paused && !traveling && world.dim===DIM_OVERWORLD) populateVillages();
+  if (!traveling) streamChunks();
   updateSky(paused?0:dt);
   updateWeather(paused?0:dt);
   updateHUD(dt);
