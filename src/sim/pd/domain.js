@@ -292,6 +292,7 @@ export class PDDomain {
     this.bsp = new Float32Array(nb);     // accumulated plastic stretch
     this.bsy = new Float32Array(nb);     // yield stretch
     this.bsf = new Float32Array(nb);     // total stretch at failure (tension)
+    this.bsten = new Float32Array(nb);   // cap on hydrostatic tension
     this.bepf = new Float32Array(nb);    // reported plastic capacity
     this.bdamp = new Float32Array(nb);
     this.bdampQ = new Float32Array(nb);
@@ -331,6 +332,7 @@ export class PDDomain {
         const sScale = 0.5 * (this.strength[i] + this.strength[j]);
         this.bsy[b] = bp.sy;
         this.bsf[b] = bp.sf * sScale;
+        this.bsten[b] = bp.sTen;
         this.bepf[b] = bp.epsF * sScale;
         // Kelvin-Voigt bond damping at ~4.5 % of critical for the equivalent
         // linear spring K = k/r0. Keeps the explicit scheme quiet at the

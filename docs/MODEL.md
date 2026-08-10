@@ -122,7 +122,7 @@ formulation, which the modular layout permits (see §9).
 Each bond's stretch is split into an isotropic part and a deviatoric part:
 
 ```
-s_iso = ½ (θ_i + θ_j) ,     θ_i = mean stretch of node i's intact bonds
+s_iso = ½ (θ_i + θ_j) ,     θ_i = (1 / N⁰_i) Σ_{intact bonds} s
 s_dev = s - s_iso
 ```
 
@@ -134,8 +134,47 @@ like a pressure-limited fluid, dissipates the entire shock as spurious
 coupling, and disintegrates. With the split, hydrostatic compression stays
 elastic and only shear flows — which is what real metals do.
 
-`θ` is evaluated in the same step as the forces (a two-pass loop over the bond
-list), not lagged.
+`θ` is evaluated in the same step as the forces, not lagged.
+
+Two details of this split are load-bearing, and getting either wrong turns the
+model into an energy source rather than a constitutive law.
+
+**`s_dev` is measured against the raw dilatation.** The tension cap (§3.3.1)
+and the confinement factor (§3.6) both modify the isotropic *force*, and
+neither may be folded into `s_iso` before `s_dev = s - s_iso` is taken. If
+they are, part of a purely hydrostatic strain is relabelled as deviatoric and
+then flows plastically: at 2 % uniform compression the confinement factor
+alone manufactured a deviatoric stretch of six times yield, which heated and
+softened material that was never being sheared.
+
+**`θ` is normalised by the node's original bond count `N⁰_i`, not by the
+number still intact.** Re-averaging over the survivors makes `θ` jump every
+time a bond fails — the failing bond is by definition the most stretched of
+the set, so removing it rescales the mean discontinuously and every other bond
+on that node sees its isotropic force step. Integrated explicitly, those steps
+are work done with no displacement. A fixed denominator also states the right
+physics: a node that has lost most of its bonds is comminuted, and its ability
+to carry hydrostatic stress should fall with the damage rather than persist
+undiminished down to the last surviving bond.
+
+**The force is the gradient of a potential.** Because `s_iso` is a *node*
+average, bond (i,j)'s force depends on the stretch of every other bond at i
+and j, and the reaction terms are not optional. The model integrates
+
+```
+U = Σ_b r₀ c [ ½ s_iso² + ½ s_e² + φ(s_iso) ]
+```
+
+with `φ' ` carrying the tension cap and the confinement factor, and takes the
+force as `∂U/∂s` with `∂θ_i/∂s_b = 1/N⁰_i` carried through — giving a per-node
+reaction term added to every bond. Differentiating only the direct path (the
+obvious reading of the formula above) yields a force field that is not the
+gradient of anything: it is path-dependent and does net work around a closed
+loop. That defect contributed **+6.9 MJ of bond work on a 1.27 MJ impact** for
+a blunt-capped AP round, throwing armour nodes out at four times the striking
+velocity. The current force law is verified against a finite-difference
+gradient of `U` (agreement to 0.1 %) and conserves kinetic energy to 1 % on
+impacts that previously gained 150 %.
 
 ### 3.4 Failure — an explicit departure from textbook peridynamics
 
@@ -244,6 +283,16 @@ chain at spacing Δ carrying cross-section Δ·h — and a pair uses the two in
 series. A softer contact (an arbitrary penalty constant) lets the struck faces
 interpenetrate by a large fraction of a lattice spacing before force builds,
 and the shock never forms properly. Coulomb friction µ = 0.15 by default.
+
+**The bond-to-contact transition must be continuous.** A bond that fails in
+compression is already at a separation below the contact distance, so handing
+it to the shared penalty law would apply `k_c (d_c − r)` as a step change —
+measured at 200× the force the bond was carrying, worst case 358×, and
+delivered to a whole row of pairs in the same step when the impactor is
+blunt-nosed. Each failed pair therefore latches its own contact distance to
+the separation at the moment of failure: the pair is already compacted, and
+contact's job is to resist *further* approach rather than to violently undo
+the compaction. Pairs that fail while still separated keep the nominal `d_c`.
 
 ### 4.3 Viscosity
 

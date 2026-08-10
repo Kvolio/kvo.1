@@ -52,6 +52,12 @@ import { SpatialGrid, BOND, ROLE } from './domain.js';
 import { clamp } from '../../core/math.js';
 
 const COMP_DUCTILITY = 4.0;   // shear/compressive plastic allowance / tensile
+
+/**
+ * Contact-damping ramp. Zero at first touch, full at a quarter of the contact
+ * range, so the normal force is continuous as a pair comes into contact.
+ */
+const RAMP = (pen, dC) => (pen >= 0.25 * dC ? 1 : pen / (0.25 * dC));
 const MU_FRICTION = 0.15;     // dry sliding, high-pressure metal-on-metal
 
 export class PDSolver {
@@ -66,7 +72,12 @@ export class PDSolver {
     this.safety = opts.safety ?? 0.32;
     this.dt = domain.dtStable * this.safety;
     this.gravity = opts.gravity ?? -9.81;
-    this.contactRefresh = 8;
+    // Refreshed every step. At 8 the set went stale: a node newly exposed by
+    // erosion could overlap a quarter of a lattice spacing before it was even
+    // eligible for contact, and then met the full penalty force in one step.
+    // The set is an O(n) scan against a bond loop an order of magnitude larger,
+    // so making it exact costs almost nothing.
+    this.contactRefresh = 1;
     this.friction = opts.friction ?? MU_FRICTION;
 
     // CONTACT STIFFNESS
@@ -114,7 +125,21 @@ export class PDSolver {
     this.dt = Math.min(this.dt, dtC);
     this.dtBase = this.dt;
 
-    this.energy = { plastic: 0, fracture: 0, damping: 0, contact: 0 };
+    // Per-bond contact distance for pairs that have already failed. A bond
+    // that breaks under compression is sitting at r < dcContact, so switching
+    // it to the shared penalty law would apply kC*(dcContact - r) as a step
+    // change: measured at 200x the force the bond was carrying, up to 358x,
+    // delivered to a whole row of pairs in the same step under a blunt cap.
+    // The pair is already compacted; contact must resist FURTHER approach, not
+    // violently undo the compaction. Latching the reference to the separation
+    // at the moment of failure makes the force continuous through the
+    // transition and still blocks interpenetration from there on.
+    this.bdc = new Float32Array(domain.nb);
+    this.bdc.fill(this.dcContact);
+    this.isoAcc = new Float64Array(domain.n);
+    this.bstretch = new Float32Array(domain.nb);
+    this.bse = new Float32Array(domain.nb);
+    this.energy = { plastic: 0, fracture: 0, damping: 0, contact: 0, iso: 0 };
     // Energy audit. An explicit scheme with penalty contact and rate-dependent
     // plasticity is not exactly conservative; rather than hide that, the drift
     // is measured every step and reported in the diagnostics panel.
@@ -122,7 +147,6 @@ export class PDSolver {
     this.brokenThisStep = 0;
     this.totalBroken = 0;
     this.maxContactForce = 0;
-    this.newlyFree = [];
     this.refreshContactSet();
     this.computeForces();
     this.E0 = this.kinetic() + this.strainEnergy();
@@ -210,8 +234,9 @@ export class PDSolver {
     const px = d.px, py = d.py, vx = d.vx, vy = d.vy;
     const fx = d.fx, fy = d.fy;
     const bi = d.bi, bj = d.bj, bk = d.bk, bref = d.bref, bsp = d.bsp;
-    const bsy = d.bsy, bsf = d.bsf, bstate = d.bstate;
+    const bsy = d.bsy, bsf = d.bsf, bsten = d.bsten, bstate = d.bstate;
     const theta = d.theta, thetaAcc = d.thetaAcc, thetaCnt = d.thetaCnt;
+    const bstretch = this.bstretch, bse = this.bse;
     const plStrain = d.plStrain;
     const bdamp = d.bdamp, bdampQ = d.bdampQ, bcrit = d.bcrit;
     const mass = d.mass, temp = d.temp, flowMul = d.flowMul, srate = d.srate;
@@ -235,10 +260,23 @@ export class PDSolver {
       const dx = px[j] - px[i], dy = py[j] - py[i];
       const r0 = bref[b];
       const st = (Math.sqrt(dx * dx + dy * dy) - r0) / r0;
+      bstretch[b] = st;
       thetaAcc[i] += st; thetaAcc[j] += st;
       thetaCnt[i]++; thetaCnt[j]++;
     }
-    for (let i = 0; i < n; i++) theta[i] = thetaCnt[i] > 0 ? thetaAcc[i] / thetaCnt[i] : 0;
+    // Normalised by the node's ORIGINAL bond count, not by the number still
+    // intact. Re-averaging over the surviving bonds makes theta jump every
+    // time one fails - the failing bond is by definition the most stretched of
+    // the set, so dropping it re-scales the mean discontinuously, and every
+    // other bond on that node sees its isotropic force step. Integrated
+    // explicitly, those steps are work done with no displacement: with
+    // breaking suppressed the same impact conserves energy to 1 %, with it
+    // enabled the model gained 150 % on a blunt-capped AP round.
+    // A fixed denominator also states the right physics: a node that has lost
+    // most of its bonds is comminuted, and its ability to carry hydrostatic
+    // stress should fall with the damage rather than persist undiminished
+    // down to the last surviving bond.
+    for (let i = 0; i < n; i++) theta[i] = nBond0[i] > 0 ? thetaAcc[i] / nBond0[i] : 0;
 
     let ePlast = 0, eFrac = 0, eDamp = 0;
     let broken = 0;
@@ -247,6 +285,125 @@ export class PDSolver {
     const dC = this.dcContact;
     const mu = this.friction;
     const invDt = dt > 0 ? 1 / dt : 0;
+
+    // ---- pass 2: constitutive update and the nonlocal reaction ------------
+    // The bond force is the gradient of a potential written over the whole
+    // neighbourhood:
+    //
+    //   U = SUM_b  r0_b * bk_b * [ 0.5*sIso_b^2 + 0.5*se_b^2 + phi(sIso_b) ]
+    //
+    //   sIso_b = 0.5*(theta_i + theta_j)      neighbourhood dilatation
+    //   se_b   = clamp(s_b - sIso_b - sp_b)   deviatoric elastic stretch
+    //   phi'   = the tension cap and the confinement factor
+    //
+    // sIso_b is a NODE-AVERAGED quantity, so U depends on bond b's stretch
+    // both directly and through every other bond attached to i or j. The
+    // original code differentiated only the direct path: bond (i,j) felt a
+    // force from its neighbours' stretches while those neighbours felt no
+    // reaction. That force field is not the gradient of anything, so it is
+    // path-dependent and does net work around a closed loop - it was the
+    // dominant energy source in the model, contributing +6.9 MJ of bond work
+    // on a 1.27 MJ impact for a blunt-capped AP round and throwing armour
+    // nodes out at four times the striking velocity.
+    //
+    // Differentiating U properly, with d(theta_i)/d(s_b) = 1/cnt_i:
+    //
+    //   dU/ds_c = r0_c bk_c se_c + Acc_i + Acc_j
+    //   Acc_i   = (0.5/cnt_i) SUM_{b at i} r0_b bk_b [ sIso_b + phi'(sIso_b) - se_b ]
+    //
+    // and F_c = (1/r0_c) dU/ds_c because virtual work is F * r0 * ds. In the
+    // interior of a uniform lattice this reproduces the bond-based force
+    // F = bk*(s - sp) exactly, so the calibration of `confinement` is
+    // unchanged; it differs where the bond counts differ - at free surfaces
+    // and in heavily damaged material - which is precisely where the old form
+    // was manufacturing energy.
+    const isoAcc = this.isoAcc, bdc = this.bdc;
+    isoAcc.fill(0);
+    let uIso = 0;
+    for (let b = 0; b < nb; b++) {
+      if (bstate[b] !== BOND.INTACT) continue;
+      const i = bi[b], j = bj[b];
+      if (!alive[i] || !alive[j]) continue;
+      const r0 = bref[b];
+      const s = bstretch[b];
+
+      // VOLUMETRIC / DEVIATORIC SPLIT
+      // Plastic flow is deviatoric. Capping the whole bond stretch at yield
+      // would also cap the hydrostatic response, leaving the material with no
+      // bulk modulus above ~1 GPa - it would behave like a pressure-limited
+      // fluid under the impact shock, dissipate the entire shock as "plastic
+      // work", heat itself past its melting point and disintegrate. The
+      // isotropic part is therefore always elastic and only the deviatoric
+      // remainder can yield.
+      let sIso = 0.5 * (theta[i] + theta[j]);
+      if (sIso < -1) sIso = -1;
+      // The deviatoric remainder is measured against the RAW dilatation so a
+      // uniform deformation (every bond at s == theta) gives sDev == 0
+      // identically. The cap and the confinement factor act through phi below
+      // and must not leak into this subtraction: doing so relabels part of the
+      // hydrostatic strain as deviatoric, and under the shock of a blunt
+      // impact that manufactured deviatoric strain flows plastically. At 2 %
+      // uniform compression the old form invented a deviatoric stretch of six
+      // times yield, which heated and softened the material.
+      let sp = bsp[b];
+      let se = s - sIso - sp;
+      const sy = bsy[b] * 0.5 * (flowMul[i] + flowMul[j]);
+
+      if (se > sy || se < -sy) {
+        const dsp = se > sy ? se - sy : se + sy;
+        sp += dsp; se = se > 0 ? sy : -sy;
+        const w = Math.abs(dsp) * r0 * Math.abs(bk[b] * sy);
+        ePlast += w;
+        const hw = 0.5 * w;
+        temp[i] += hw / (mass[i] * d.matTable[d.matIndex[i]].pd.cp);
+        temp[j] += hw / (mass[j] * d.matTable[d.matIndex[j]].pd.cp);
+        bsp[b] = sp;
+        const dpe = Math.abs(dsp) * 0.5;
+        plStrain[i] += dpe; plStrain[j] += dpe;
+      }
+
+      // --- failure --------------------------------------------------------
+      // tension: total stretch reaches the measured failure strain
+      // shear/compression: accumulated *plastic* stretch exhausts the
+      //   ductility. Using the accumulated plastic variable rather than the
+      //   instantaneous deviatoric stretch matters: in a heavily damaged
+      //   region the local dilatation is estimated from a shrinking, biased
+      //   set of surviving bonds, so the instantaneous split is noisy and
+      //   feeds back into more breakage. The plastic accumulator is monotonic
+      //   and does not.
+      if (s >= bsf[b] || Math.abs(sp) >= bsf[b] * COMP_DUCTILITY) {
+        bstate[b] = BOND.BROKEN;
+        nBroken[i]++; nBroken[j]++;
+        damage[i] = nBroken[i] / (nBond0[i] || 1);
+        damage[j] = nBroken[j] / (nBond0[j] || 1);
+        if (damage[i] >= 0.96 && !(flags[i] & 8)) flags[i] |= 8;
+        if (damage[j] >= 0.96 && !(flags[j] & 8)) flags[j] |= 8;
+        const rBreak = r0 * (1 + s);
+        if (rBreak < dC) bdc[b] = rBreak;
+        // the whole stored potential of this bond is released, including its
+        // share of the dilatational term, which otherwise just vanishes from U
+        let phiB = 0;
+        if (sIso < 0) phiB = 0.5 * (conf - 1) * sIso * sIso;
+        else if (sIso > bsten[b]) { const e = sIso - bsten[b]; phiB = -0.5 * e * e; }
+        eFrac += r0 * bk[b] * (0.5 * se * se + 0.5 * sIso * sIso + phiB);
+        broken++;
+        continue;
+      }
+      if (bcrit[b] < s) bcrit[b] = s;
+      bse[b] = se;
+
+      // phi'(x) = (conf-1)x for x<0 ; 0 for 0 <= x <= sTen ; sTen-x for x>sTen
+      const stn = bsten[b];
+      let dphi = 0, phi = 0;
+      if (sIso < 0) { dphi = (conf - 1) * sIso; phi = 0.5 * (conf - 1) * sIso * sIso; }
+      else if (sIso > stn) { const e = sIso - stn; dphi = -e; phi = -0.5 * e * e; }
+      const w = r0 * bk[b];
+      uIso += w * (phi + 0.5 * sIso * sIso);
+      const g = w * (sIso + dphi - se) * 0.5;
+      isoAcc[i] += g / nBond0[i];
+      isoAcc[j] += g / nBond0[j];
+    }
+    this.energy.iso = uIso;
 
     // ------------------------------------------------------------- bonds --
     for (let b = 0; b < nb; b++) {
@@ -261,64 +418,12 @@ export class PDSolver {
 
       if (bstate[b] === BOND.INTACT) {
         const r0 = bref[b];
-        const s = (r - r0) / r0;
-
-        // VOLUMETRIC / DEVIATORIC SPLIT
-        // Plastic flow is deviatoric. Capping the whole bond stretch at yield
-        // would also cap the hydrostatic response, leaving the material with
-        // no bulk modulus above ~1 GPa - it would behave like a pressure-
-        // limited fluid under the impact shock, dissipate the entire shock as
-        // "plastic work", heat itself past its melting point and disintegrate.
-        // The isotropic part of the stretch is therefore always elastic and
-        // only the deviatoric remainder can yield.
-        let sIso = 0.5 * (theta[i] + theta[j]);
-        if (sIso < 0) sIso *= conf;
-        const sDev = s - sIso;
-        let sp = bsp[b];
-        let se = sDev - sp;
-        const sy = bsy[b] * 0.5 * (flowMul[i] + flowMul[j]);
-
-        if (se > sy || se < -sy) {
-          const dsp = se > sy ? se - sy : se + sy;
-          sp += dsp; se = se > 0 ? sy : -sy;
-          const w = Math.abs(dsp) * r0 * Math.abs(bk[b] * sy);
-          ePlast += w;
-          const hw = 0.5 * w;
-          temp[i] += hw / (mass[i] * d.matTable[d.matIndex[i]].pd.cp);
-          temp[j] += hw / (mass[j] * d.matTable[d.matIndex[j]].pd.cp);
-          bsp[b] = sp;
-          const dpe = Math.abs(dsp) * 0.5;
-          plStrain[i] += dpe; plStrain[j] += dpe;
-        }
-
-        // --- failure ------------------------------------------------------
-        // tension: total stretch reaches the measured failure strain
-        // shear/compression: accumulated *plastic* stretch exhausts the
-        //   ductility. Using the accumulated plastic variable rather than the
-        //   instantaneous deviatoric stretch matters: in a heavily damaged
-        //   region the local dilatation is estimated from a shrinking, biased
-        //   set of surviving bonds, so the instantaneous split is noisy and
-        //   feeds back into more breakage. The plastic accumulator is
-        //   monotonic and does not.
-        if (s >= bsf[b] || Math.abs(sp) >= bsf[b] * COMP_DUCTILITY) {
-          bstate[b] = BOND.BROKEN;
-          nBroken[i]++; nBroken[j]++;
-          damage[i] = nBroken[i] / (nBond0[i] || 1);
-          damage[j] = nBroken[j] / (nBond0[j] || 1);
-          if (damage[i] >= 0.96 && !(flags[i] & 8)) { flags[i] |= 8; this.newlyFree.push(i); }
-          if (damage[j] >= 0.96 && !(flags[j] & 8)) { flags[j] |= 8; this.newlyFree.push(j); }
-          // energy released = 0.5 k s_e^2 r0 stored elastically
-          eFrac += 0.5 * bk[b] * se * se * r0;
-          broken++;
-          continue;
-        }
-
-        if (bcrit[b] < s) bcrit[b] = s;
-
         const sdot = Math.abs(vn) / r0;
         srate[i] += sdot; srate[j] += sdot;
 
-        const F = bk[b] * (sIso + se);
+        // Constitutive state was resolved in pass 2; this is the gradient of
+        // the neighbourhood potential written out as a pair force.
+        const F = bk[b] * bse[b] + (isoAcc[i] + isoAcc[j]) / r0;
         // Kelvin-Voigt damping plus a compression-only shock viscosity.
         // Sign convention for this bond: positive = tension (pulls i toward
         // j), so a damper resisting approach (vn < 0) must be negative.
@@ -332,11 +437,17 @@ export class PDSolver {
         virial[i] += vir; virial[j] += vir;
       } else {
         // ---- broken bond acting as a contact pair ------------------------
-        if (r < dC) {
+        const dCb = bdc[b];
+        if (r < dCb) {
           const meff = (mass[i] * mass[j]) / (mass[i] + mass[j]);
           const kC = (2 * kNode[i] * kNode[j]) / (kNode[i] + kNode[j]);
-          let Fn = kC * (dC - r);                   // magnitude, repulsive
-          if (vn < 0) Fn += 2 * zetaC * Math.sqrt(kC * meff) * -vn;
+          const pen = dCb - r;
+          let Fn = kC * pen;                        // magnitude, repulsive
+          // Damping ramped in with overlap. Applied as a step at first touch it
+          // is a force discontinuity, and a flat-faced impact brings a whole
+          // row of nodes across that discontinuity in the same time step - a
+          // synchronised impulse that pumps energy into the lattice.
+          if (vn < 0) Fn += RAMP(pen, dCb) * 2 * zetaC * Math.sqrt(kC * meff) * -vn;
           fx[i] -= Fn * ex; fy[i] -= Fn * ey;
           fx[j] += Fn * ex; fy[j] += Fn * ey;
           // Coulomb friction along the contact tangent, capped so a single
@@ -382,7 +493,7 @@ export class PDSolver {
           const meff = (mass[i] * mass[j]) / (mass[i] + mass[j]);
           const kC = (2 * kNode[i] * kNode[j]) / (kNode[i] + kNode[j]);
           let Fn = kC * pen;
-          if (vn < 0) Fn += 2 * zetaC * Math.sqrt(kC * meff) * -vn;
+          if (vn < 0) Fn += RAMP(pen, dC) * 2 * zetaC * Math.sqrt(kC * meff) * -vn;
           if (Fn > maxF) maxF = Fn;
           fx[i] -= Fn * ex; fy[i] -= Fn * ey;
           fx[j] += Fn * ex; fy[j] += Fn * ey;
@@ -438,11 +549,16 @@ export class PDSolver {
       if (d.bstate[b] !== BOND.INTACT) continue;
       const i = d.bi[b], j = d.bj[b];
       if (!d.alive[i] || !d.alive[j]) continue;
+      // must use the same deviatoric measure the force law does, i.e. with the
+      // neighbourhood dilatation removed - otherwise the audit is comparing a
+      // different energy from the one the solver integrates
       const r = Math.hypot(d.px[j] - d.px[i], d.py[j] - d.py[i]);
-      const se = (r - d.bref[b]) / d.bref[b] - d.bsp[b];
+      const sIso = 0.5 * (d.theta[i] + d.theta[j]);
+      const se = (r - d.bref[b]) / d.bref[b] - sIso - d.bsp[b];
       U += 0.5 * d.bk[b] * se * se * d.bref[b];
     }
-    return U;
+    // the dilatational part of the same potential (see pass 2)
+    return U + this.energy.iso;
   }
 
   /**

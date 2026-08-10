@@ -77,6 +77,15 @@ export function derivePD(m, dx, mRatio, h) {
   // measured total failure strain, not at the fracture-energy critical stretch.
   const sf = Math.max(m.epsF, sy * 1.05);
 
+  // Limit on the ISOTROPIC (hydrostatic) part of the bond stretch, from the
+  // material's tensile strength: sigma_ten / E. A real metal cannot sustain
+  // hydrostatic tension beyond roughly its spall strength - a few GPa - before
+  // it cavitates. The isotropic term is deliberately exempt from the yield cap
+  // so the material keeps a bulk modulus in compression, but leaving it
+  // unbounded in tension lets a stretched region generate elastic forces tens
+  // of times yield, which is an energy source, not a stiffness.
+  const sTen = Math.max(m.UTS / m.E, sy);
+
   // Wave speed sets the explicit stability limit and the artificial-viscosity
   // scaling.
   const cWave = Math.sqrt(m.E / m.rho);
@@ -87,6 +96,7 @@ export function derivePD(m, dx, mRatio, h) {
     c,                       // micromodulus  [N/m^6]
     s0,                      // fracture-energy critical stretch (reported only)
     sf,                      // total stretch at failure (the active criterion)
+    sTen,                    // cap on hydrostatic tension (UTS/E)
     sy,                      // yield stretch
     epsF: m.epsF,            // measured failure strain
     brittle: m.brittle,
@@ -120,6 +130,7 @@ export function bondPair(a, b, interfaceFactor = 1) {
     c,
     s0: Math.min(a.s0, b.s0) * f,
     sf: Math.min(a.sf, b.sf) * f,
+    sTen: Math.min(a.sTen, b.sTen),
     sy: Math.min(a.sy, b.sy),
     epsF: Math.min(a.epsF, b.epsF) * f,
     brittle: Math.max(a.brittle, b.brittle),

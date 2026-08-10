@@ -101,7 +101,7 @@ export class World {
 
   blankStats() {
     return {
-      penetration: 0, maxDepth: 0, maxDepthLOS: 0, channelLength: 0,
+      penetration: 0, maxDepth: 0, maxDepthLOS: 0, armourDefeated: 0, channelLength: 0,
       residualMass: 0, residualVelocity: 0, residualLength: 0,
       erodedMass: 0, spallMass: 0, fragmentCount: 0,
       perforated: false, ricochet: false, embedded: false,
@@ -483,6 +483,15 @@ export class World {
     // solver is only tracking debris that the ballistic layer handles better.
     const elapsed = this.simTime - (this.trueContactTime ?? this.simTime);
     const overrun = this.contactSeen && elapsed > (this.settings.maxEventTime ?? 3.5e-4);
+    // A meshed shot that never touches anything - it missed inside the
+    // corridor, or the remnant left without contacting a later layer - would
+    // otherwise sit in the impact regime forever with nothing to resolve.
+    if (!this.contactSeen && this.simTime - this.impactStartTime > 3e-3) {
+      this.log.add(this.simTime, 'no-contact',
+        'Projectile left the meshed corridor without contacting the array', SEV.NOTE);
+      this.finish('miss');
+      return;
+    }
     if (this.state === 'impact' && (overrun || (quiet && armourKE < Math.max(this.impactKE0 * 0.004, 1)))) {
       this.state = 'settle';
       this.settleTime = this.simTime;
@@ -762,10 +771,23 @@ export class World {
     // of a histogram. Perforation uses the same measure in the last layer's
     // frame, so "depth exceeds the plate" and "perforated" can no longer
     // disagree - they are the same number read against the same threshold.
-    const NB = 256;
+    const NB = 256, NL = 64;
     if (!this._histA) { this._histA = new Float32Array(NB); this._histB = new Float32Array(NB); }
     const histA = this._histA, histB = this._histB;
     histA.fill(0); histB.fill(0);
+
+    // PER-LAYER PENETRATION
+    // Depth measured from the struck face counts air gaps: a round that has
+    // crossed a 300 mm stand-off in a spaced array reads as "300 mm of
+    // penetration" while having defeated 10 mm of plate. What the user wants
+    // is armour defeated, so each layer keeps its own histogram and the totals
+    // are summed with the gaps excluded.
+    if (!this._histL || this._histL.length < layers.length) {
+      this._histL = layers.map(() => new Float32Array(NL));
+      this._pastL = new Float32Array(layers.length);
+    }
+    const histL = this._histL, pastL = this._pastL;
+    for (let k = 0; k < layers.length; k++) { histL[k].fill(0); pastL[k] = 0; }
     const aLo = -0.03, aHi = this.scene.normalTotal + 0.20;
     const bLo = -0.05, bHi = tL + 0.20;
     const aStep = (aHi - aLo) / NB, bStep = (bHi - bLo) / NB;
@@ -817,6 +839,13 @@ export class World {
         if (dLast > tL) massThrough += m;
         const dLos = (d.px[i] - ix) * ax + (d.py[i] - iy) * ay;
         if (dLos > deepestLos) deepestLos = dLos;
+        for (let k = 0; k < layers.length; k++) {
+          const Lk = layers[k];
+          const dk = (d.px[i] - Lk.frontX) * Lk.normal[0] + d.py[i] * Lk.normal[1];
+          if (dk <= 0) continue;
+          if (dk >= Lk.thickness) { pastL[k] += m; continue; }
+          histL[k][Math.min(NL - 1, ((dk / Lk.thickness) * NL) | 0)] += m;
+        }
         const s = d.px[i], u = d.py[i];
         if (s < sMin) sMin = s; if (s > sMax) sMax = s;
         if (u < uMin) uMin = u; if (u > uMax) uMax = u;
@@ -861,6 +890,19 @@ export class World {
       acc += histB[k];
       if (acc >= need) { deepestLast = bLo + (k + 1) * bStep; break; }
     }
+
+    // armour actually defeated, layer by layer, gaps excluded
+    let defeated = 0;
+    for (let k = 0; k < layers.length; k++) {
+      const Lk = layers[k];
+      if (pastL[k] >= need) { defeated += Lk.thickness; continue; }
+      let a2 = pastL[k];
+      for (let j = NL - 1; j >= 0; j--) {
+        a2 += histL[k][j];
+        if (a2 >= need) { defeated += ((j + 1) / NL) * Lk.thickness; break; }
+      }
+    }
+    st.armourDefeated = Math.max(st.armourDefeated || 0, defeated);
 
     st.maxDepth = Math.max(st.maxDepth, isFinite(deepest) ? deepest : 0);
     st.maxDepthLOS = Math.max(st.maxDepthLOS || 0, isFinite(deepestLos) ? deepestLos : 0);
@@ -958,11 +1000,11 @@ export class World {
     if (this.finishReason === 'miss') headline = 'No contact';
     else if (st.perforated) headline = `Perforation — ${(st.atPerforation.velocity).toFixed(0)} m/s residual`;
     else if (st.ricochet) headline = 'Ricochet — armour defeated the attack';
-    else if (st.maxDepth > 0) headline = `Partial penetration — ${(st.maxDepth * 1000).toFixed(0)} mm`;
+    else if (st.armourDefeated > 0) headline = `Partial penetration — ${(st.armourDefeated * 1000).toFixed(0)} mm of armour defeated`;
     else headline = 'No penetration';
     return {
       headline, perforated: st.perforated, ricochet: st.ricochet,
-      depth: st.maxDepth, depthLOS: st.maxDepthLOS,
+      depth: st.maxDepth, depthLOS: st.maxDepthLOS, armourDefeated: st.armourDefeated,
       residualVelocity: st.atPerforation ? st.atPerforation.velocity : st.residualVelocity,
       residualMass: st.atPerforation ? st.atPerforation.mass : st.residualMass,
       erodedMass: st.atPerforation ? st.atPerforation.eroded : st.erodedMass,
