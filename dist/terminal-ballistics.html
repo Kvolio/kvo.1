@@ -157,6 +157,10 @@ a{color:var(--accent)}
   aside.show{display:block}
   #main{grid-area:main}
   .brand small{display:none}
+  /* keep the field legend clear of the readout chips on a narrow screen */
+  #legend{top:auto;bottom:10px;right:8px;max-width:150px;font-size:9px}
+  #hud{max-width:calc(100% - 20px)}
+  .chip{font-size:9.5px;padding:2px 5px}
 }
 </style>
 </head>
@@ -3785,7 +3789,7 @@ class World {
     }
     const dx0 = refD / q.across;
     const width = Math.max(corridorCal * (chemical ? cal : refD), 0.95 * this.scene.losTotal, 0.05);
-    return { dx0, width, chemical, budget: q.budget, mRatio: q.mRatio };
+    return { dx0, refD, width, chemical, budget: q.budget, mRatio: q.mRatio };
   }
 
   beginImpact(hits) {
@@ -3810,7 +3814,10 @@ class World {
     // for whatever the nominal spacing gives.
     const target = plan.budget * 0.82;
     const dxMin = Math.max(0.0004, plan.dx0 * 0.28);
-    const dxMax = Math.min(0.025, p.geom.penDiameter / 5);
+    // the coarse bound follows the mesh reference diameter, not the nominal
+    // penetrator: for a shaped charge the "penetrator" is the jet, which is far
+    // too fine to be the thing that limits how coarse the lattice may go
+    const dxMax = Math.min(0.030, Math.max(plan.refD / 3, plan.dx0 * 2.5));
     let dx = clamp(plan.dx0, dxMin, dxMax);
     let dom = null, count = 0;
     for (let attempt = 0; attempt < 7; attempt++) {
@@ -3823,9 +3830,12 @@ class World {
         dx = clamp(dx * Math.sqrt(Math.max(ratio, 0.2)), dxMin, dxMax);
       } else break;
     }
-    if (count > plan.budget) {
-      dom = this.assembleDomain({ dx: dx * 1.12, width: plan.width, length, originX, originY, dirx, diry, mRatio: plan.mRatio });
-      dx *= 1.12; dom.countSites();
+    // hard enforcement: the budget is what keeps the frame inside its time box
+    let guard = 0;
+    while (count > plan.budget && guard++ < 12) {
+      dx = Math.min(0.030, dx * 1.14);
+      dom = this.assembleDomain({ dx, width: plan.width, length, originX, originY, dirx, diry, mRatio: plan.mRatio });
+      count = dom.countSites();
     }
     dom.build();
     dom.applyLateralBC((x, y) => !!this.scene.isSolid(x, y));
@@ -4080,12 +4090,18 @@ class World {
       return;
     }
     cx /= cn; cy /= cn;
+    const keBefore = this.solver.kinetic();
     const radius = Math.sqrt(cn) * d.dx * 0.6;
     const info = detonate(d, {
       cx, cy, chargeMass: cm, gurneyVel: fm.gurney || 2400, radius,
       geometry: p.cfg.type === 'hesh' ? 'sandwich' : 'cylindrical',
     });
     info.chargeMass = cm; info.x = cx; info.y = cy;
+    // The burst injects chemical energy the audit baseline knows nothing about.
+    // Fold the delivered kinetic energy into E0 so the closure figure keeps
+    // meaning something after a detonation.
+    this.solver.E0 += Math.max(0, this.solver.kinetic() - keBefore);
+    info.deliveredKE = this.solver.kinetic() - keBefore;
     logDetonation(this.log, this.simTime, p.type.name, info);
     this.stats.detonation = info;
     this.bus.emit('detonation', info);
@@ -4115,6 +4131,7 @@ class World {
       if (s > sMax) sMax = s;
     }
     if (!idx.length) return;
+    const keBefore = this.solver.kinetic();
     const span = Math.max(sMax - sMin, 1e-4);
     for (const i of idx) {
       const s = (d.px[i] - p.x) * ax + (d.py[i] - p.y) * ay;
@@ -4126,6 +4143,7 @@ class World {
       d.vy[i] = ay * vAx - Math.sign(u) * by * collapse * clamp(Math.abs(u) / (span * 0.5), 0, 1);
       d.role[i] = ROLE.PENETRATOR;
     }
+    this.solver.E0 += Math.max(0, this.solver.kinetic() - keBefore);
     this.log.add(this.simTime, 'jet-formed',
       `Shaped-charge liner collapsed — imposed jet gradient ${tail.toFixed(0)}-${tip.toFixed(0)} m/s over ${(span * 1000).toFixed(0)} mm`,
       SEV.MAJOR);
@@ -4204,7 +4222,7 @@ class World {
 
     let deepest = -Infinity, penMass = 0, penKE = 0, penVX = 0, penVY = 0;
     let sMin = Infinity, sMax = -Infinity, uMin = Infinity, uMax = -Infinity;
-    let spall = 0, freeCount = 0, hot = 293;
+    let spall = 0, freeCount = 0, hot = 293, coherent = 0;
     let bulge = 0;
 
     const lastBack = layers[layers.length - 1];
@@ -4213,7 +4231,10 @@ class World {
     for (let i = 0; i < d.n; i++) {
       if (!d.alive[i]) continue;
       if (d.temp[i] > hot) hot = d.temp[i];
-      if (d.role[i] === ROLE.PENETRATOR && d.damage[i] < 0.75) {
+      // "residual" = still part of the penetrator body. A node on a freshly
+      // eroded surface legitimately loses a large fraction of its bonds (the
+      // peridynamic surface effect), so the test is detachment, not damage.
+      if (d.role[i] === ROLE.PENETRATOR && !(d.flags[i] & 8)) {
         const m = d.mass[i];
         penMass += m;
         penVX += d.vx[i] * m; penVY += d.vy[i] * m;
@@ -4223,6 +4244,7 @@ class World {
         const s = d.px[i], u = d.py[i];
         if (s < sMin) sMin = s; if (s > sMax) sMax = s;
         if (u < uMin) uMin = u; if (u > uMax) uMax = u;
+        if (d.damage[i] < 0.5) coherent += m;
       }
       if (d.role[i] === ROLE.ARMOUR) {
         if (d.flags[i] & 8) { spall += d.mass[i]; freeCount++; }
@@ -4243,6 +4265,7 @@ class World {
 
     st.maxDepth = Math.max(st.maxDepth, isFinite(deepest) ? deepest : 0);
     st.residualMass = penMass;
+    st.coherentMass = coherent;
     st.residualVelocity = penMass > 0 ? Math.hypot(penVX / penMass, penVY / penMass) : 0;
     st.residualLength = isFinite(sMax) ? Math.hypot(sMax - sMin, uMax - uMin) : 0;
     st.residualKE = penKE;
@@ -4263,6 +4286,7 @@ class World {
         t: this.simTime, mass: penMass, velocity: st.residualVelocity,
         ke: penKE, length: st.residualLength,
         eroded: this.penetratorMass0() - penMass,
+        coherent,
       };
       this.log.add(this.simTime, 'perforation',
         `PERFORATION — residual ${(penMass * 1000).toFixed(0)} g at ${st.residualVelocity.toFixed(0)} m/s ` +
@@ -5809,7 +5833,8 @@ class App {
       ['Max penetration depth', U.len(s.maxDepth), s.perforated ? 'bad' : ''],
       ['Perforated', s.perforated ? 'YES' : 'no', s.perforated ? 'bad' : 'good'],
       ['Ricochet', s.ricochet ? 'YES' : 'no'],
-      at ? ['Residual mass', U.mass(at.mass)] : ['Coherent penetrator mass', U.mass(s.residualMass)],
+      at ? ['Residual mass (attached)', U.mass(at.mass)] : ['Penetrator mass (attached)', U.mass(s.residualMass)],
+      ['Undamaged core mass', U.mass(at ? at.coherent : (s.coherentMass || 0))],
       at ? ['Residual velocity', U.vel(at.velocity)] : ['Penetrator velocity', U.vel(s.residualVelocity)],
       at ? ['Residual energy', U.energy(at.ke)] : null,
       ['Mass eroded / lost', U.mass(at ? at.eroded : s.erodedMass)],

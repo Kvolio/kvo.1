@@ -687,7 +687,7 @@ export class World {
 
     let deepest = -Infinity, penMass = 0, penKE = 0, penVX = 0, penVY = 0;
     let sMin = Infinity, sMax = -Infinity, uMin = Infinity, uMax = -Infinity;
-    let spall = 0, freeCount = 0, hot = 293;
+    let spall = 0, freeCount = 0, hot = 293, coherent = 0;
     let bulge = 0;
 
     const lastBack = layers[layers.length - 1];
@@ -696,7 +696,10 @@ export class World {
     for (let i = 0; i < d.n; i++) {
       if (!d.alive[i]) continue;
       if (d.temp[i] > hot) hot = d.temp[i];
-      if (d.role[i] === ROLE.PENETRATOR && d.damage[i] < 0.75) {
+      // "residual" = still part of the penetrator body. A node on a freshly
+      // eroded surface legitimately loses a large fraction of its bonds (the
+      // peridynamic surface effect), so the test is detachment, not damage.
+      if (d.role[i] === ROLE.PENETRATOR && !(d.flags[i] & 8)) {
         const m = d.mass[i];
         penMass += m;
         penVX += d.vx[i] * m; penVY += d.vy[i] * m;
@@ -706,6 +709,7 @@ export class World {
         const s = d.px[i], u = d.py[i];
         if (s < sMin) sMin = s; if (s > sMax) sMax = s;
         if (u < uMin) uMin = u; if (u > uMax) uMax = u;
+        if (d.damage[i] < 0.5) coherent += m;
       }
       if (d.role[i] === ROLE.ARMOUR) {
         if (d.flags[i] & 8) { spall += d.mass[i]; freeCount++; }
@@ -726,6 +730,7 @@ export class World {
 
     st.maxDepth = Math.max(st.maxDepth, isFinite(deepest) ? deepest : 0);
     st.residualMass = penMass;
+    st.coherentMass = coherent;
     st.residualVelocity = penMass > 0 ? Math.hypot(penVX / penMass, penVY / penMass) : 0;
     st.residualLength = isFinite(sMax) ? Math.hypot(sMax - sMin, uMax - uMin) : 0;
     st.residualKE = penKE;
@@ -746,6 +751,7 @@ export class World {
         t: this.simTime, mass: penMass, velocity: st.residualVelocity,
         ke: penKE, length: st.residualLength,
         eroded: this.penetratorMass0() - penMass,
+        coherent,
       };
       this.log.add(this.simTime, 'perforation',
         `PERFORATION — residual ${(penMass * 1000).toFixed(0)} g at ${st.residualVelocity.toFixed(0)} m/s ` +

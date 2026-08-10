@@ -156,6 +156,10 @@ a{color:var(--accent)}
   aside.show{display:block}
   #main{grid-area:main}
   .brand small{display:none}
+  /* keep the field legend clear of the readout chips on a narrow screen */
+  #legend{top:auto;bottom:10px;right:8px;max-width:150px;font-size:9px}
+  #hud{max-width:calc(100% - 20px)}
+  .chip{font-size:9.5px;padding:2px 5px}
 }
 </style>
 </head>
