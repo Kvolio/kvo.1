@@ -93,8 +93,16 @@ export class Renderer {
     this.dpr = dpr;
   }
 
+  /**
+   * The path that actually drew the last frame, not the one that is available.
+   * The renderer can fall back to Canvas 2-D per frame (context loss, or a
+   * zoom past the GPU's point-size limit), and a diagnostics panel that keeps
+   * claiming "WebGL 2" through that is reporting a capability rather than what
+   * happened.
+   */
   get backend() {
     if (!this.field || this.field.lost) return 'Canvas 2D';
+    if (this.lastPathGL === false) return 'Canvas 2D (zoom past GPU point limit)';
     return this.field.isGL2 ? 'WebGL 2' : 'WebGL 1';
   }
 
@@ -122,8 +130,18 @@ export class Renderer {
     this.drawScene(world);
     this.drawModules(world);
 
-    const useGL = this.field && !this.field.lost;
-    if (useGL) this.field.clear();
+    const useGL = this.field && !this.field.lost && !this.nodesTooLargeForGL(world);
+    // Whenever the frame is NOT going to GL, the GL canvas has to stop showing
+    // its last frame - it sits directly over the 2-D nodes, so a stale image
+    // there reads as the simulation having frozen. Clearing covers the case
+    // where the context is still alive (the point-size fallback); hiding the
+    // element covers context loss, where the clear cannot be issued at all.
+    this.lastPathGL = useGL;
+    if (this.glCanvas) {
+      if (useGL) this.field.clear();
+      const vis = useGL ? '' : 'hidden';
+      if (this.glCanvas.style.visibility !== vis) this.glCanvas.style.visibility = vis;
+    }
     if (world.domain) {
       if (useGL) this.drawNodesGL(world, frame);
       else this.drawNodes(world, frame);
@@ -198,15 +216,31 @@ export class Renderer {
     return n;
   }
 
-  drawNodesGL(world, frame) {
+  /** Node sprite size in device pixels at the current zoom. */
+  nodePointSize(world) {
     const d = world.domain;
+    if (!d) return 0;
+    return Math.max(1, d.dx * this.cam.scale * this.opts.nodeGain * 1.42);
+  }
+
+  /**
+   * True when the zoom has taken the node sprites past what GL_POINTS can
+   * draw. Clamping instead would open gaps between nodes and make solid
+   * material look porous, so the frame goes to the Canvas 2-D path.
+   */
+  nodesTooLargeForGL(world) {
+    if (!world.domain || !this.field) return false;
+    return this.nodePointSize(world) > this.field.maxPointSize;
+  }
+
+  drawNodesGL(world, frame) {
     const n = this.fillFieldBuffers(world, frame);
-    const size = Math.max(1, d.dx * this.cam.scale * this.opts.nodeGain * 1.42);
+    const size = this.nodePointSize(world);
     this.field.drawPoints({
       count: n,
       cam: this.cam,
       mode: this.opts.field,
-      pointSize: Math.min(size, 128),
+      pointSize: Math.min(size, this.field.maxPointSize),
       extrude: this.nodeExtrudeVec(size),
       alpha: 1,
     });
@@ -285,6 +319,11 @@ export class Renderer {
     const ctx = this.ctx;
     const [ex, ey] = this.extrudeVec();
     const dom = world.domain;
+    // The static plate and the corridor punch-out are one decision, not two:
+    // drawing the undeformed plate without removing it inside the corridor
+    // paints intact armour straight over the channel the solver opened, which
+    // is the renderer contradicting the simulation.
+    if (!this.opts.showFarField) return;
     for (const L of world.scene.activeLayers()) {
       const base = this.matColor(L.mat.color);
       const dark = this.matColor(L.mat.color2 || L.mat.color);
@@ -319,7 +358,7 @@ export class Renderer {
     // version has to be removed there — otherwise an opened channel would have
     // undeformed plate showing through it. Only the plate is punched out, not
     // the background, so the corridor itself stays invisible.
-    if (dom && this.opts.showFarField) {
+    if (dom) {
       ctx.save();
       this.corridorPath(dom);
       ctx.clip();
@@ -647,18 +686,24 @@ export class Renderer {
   }
 
   /** Hit test in world space for the inspector. */
+  /**
+   * Hit test, most specific first. Nodes are tested BEFORE layers: inside the
+   * meshed corridor the plate is drawn from nodes and punched out of the
+   * static polygon, so a click there lands on simulated material even though
+   * it is still geometrically inside the layer's outline. Testing layers first
+   * returned the undeformed layer for every point inside a plate, which made
+   * it impossible to inspect any node that was not in mid-air - the opposite
+   * of what the inspector is for.
+   */
   pick(world, sx, sy) {
     const [wx, wy] = this.cam.toWorld(sx, sy);
-    for (const m of world.scene.modules) {
-      const p = modulePoly(m);
-      if (pointIn(p, wx, wy)) return { kind: 'module', id: m.id, obj: m };
-    }
-    for (const L of world.scene.activeLayers()) {
-      if (pointIn(L.poly, wx, wy)) return { kind: 'layer', id: L.id, obj: L };
-    }
     if (world.domain) {
       const d = world.domain;
-      let best = -1, bd = (d.dx * 2) ** 2;
+      // Tolerance follows the zoom as well as the lattice: at low zoom a
+      // lattice spacing is a fraction of a pixel and nothing would ever be
+      // clickable, and on touch the finger is nowhere near that precise.
+      const tol = Math.max(d.dx * 0.75, (12 * (this.dpr || 1)) / Math.max(this.cam.scale, 1e-6));
+      let best = -1, bd = tol * tol;
       for (let i = 0; i < d.n; i++) {
         if (!d.alive[i]) continue;
         const dx = d.px[i] - wx, dy = d.py[i] - wy;
@@ -666,6 +711,13 @@ export class Renderer {
         if (r < bd) { bd = r; best = i; }
       }
       if (best >= 0) return { kind: 'node', id: best, obj: best };
+    }
+    for (const m of world.scene.modules) {
+      const p = modulePoly(m);
+      if (pointIn(p, wx, wy)) return { kind: 'module', id: m.id, obj: m };
+    }
+    for (const L of world.scene.activeLayers()) {
+      if (pointIn(L.poly, wx, wy)) return { kind: 'layer', id: L.id, obj: L };
     }
     return null;
   }

@@ -531,6 +531,15 @@ function derivePD(m, dx, mRatio, h) {
   // measured total failure strain, not at the fracture-energy critical stretch.
   const sf = Math.max(m.epsF, sy * 1.05);
 
+  // Limit on the ISOTROPIC (hydrostatic) part of the bond stretch, from the
+  // material's tensile strength: sigma_ten / E. A real metal cannot sustain
+  // hydrostatic tension beyond roughly its spall strength - a few GPa - before
+  // it cavitates. The isotropic term is deliberately exempt from the yield cap
+  // so the material keeps a bulk modulus in compression, but leaving it
+  // unbounded in tension lets a stretched region generate elastic forces tens
+  // of times yield, which is an energy source, not a stiffness.
+  const sTen = Math.max(m.UTS / m.E, sy);
+
   // Wave speed sets the explicit stability limit and the artificial-viscosity
   // scaling.
   const cWave = Math.sqrt(m.E / m.rho);
@@ -541,6 +550,7 @@ function derivePD(m, dx, mRatio, h) {
     c,                       // micromodulus  [N/m^6]
     s0,                      // fracture-energy critical stretch (reported only)
     sf,                      // total stretch at failure (the active criterion)
+    sTen,                    // cap on hydrostatic tension (UTS/E)
     sy,                      // yield stretch
     epsF: m.epsF,            // measured failure strain
     brittle: m.brittle,
@@ -574,6 +584,7 @@ function bondPair(a, b, interfaceFactor = 1) {
     c,
     s0: Math.min(a.s0, b.s0) * f,
     sf: Math.min(a.sf, b.sf) * f,
+    sTen: Math.min(a.sTen, b.sTen),
     sy: Math.min(a.sy, b.sy),
     epsF: Math.min(a.epsF, b.epsF) * f,
     brittle: Math.max(a.brittle, b.brittle),
@@ -1284,6 +1295,7 @@ class PDDomain {
     this.bsp = new Float32Array(nb);     // accumulated plastic stretch
     this.bsy = new Float32Array(nb);     // yield stretch
     this.bsf = new Float32Array(nb);     // total stretch at failure (tension)
+    this.bsten = new Float32Array(nb);   // cap on hydrostatic tension
     this.bepf = new Float32Array(nb);    // reported plastic capacity
     this.bdamp = new Float32Array(nb);
     this.bdampQ = new Float32Array(nb);
@@ -1323,6 +1335,7 @@ class PDDomain {
         const sScale = 0.5 * (this.strength[i] + this.strength[j]);
         this.bsy[b] = bp.sy;
         this.bsf[b] = bp.sf * sScale;
+        this.bsten[b] = bp.sTen;
         this.bepf[b] = bp.epsF * sScale;
         // Kelvin-Voigt bond damping at ~4.5 % of critical for the equivalent
         // linear spring K = k/r0. Keeps the explicit scheme quiet at the
@@ -1524,6 +1537,12 @@ const { SpatialGrid, BOND, ROLE } = __req("src/sim/pd/domain.js");
 const { clamp } = __req("src/core/math.js");
 
 const COMP_DUCTILITY = 4.0;   // shear/compressive plastic allowance / tensile
+
+/**
+ * Contact-damping ramp. Zero at first touch, full at a quarter of the contact
+ * range, so the normal force is continuous as a pair comes into contact.
+ */
+const RAMP = (pen, dC) => (pen >= 0.25 * dC ? 1 : pen / (0.25 * dC));
 const MU_FRICTION = 0.15;     // dry sliding, high-pressure metal-on-metal
 
 class PDSolver {
@@ -1538,7 +1557,12 @@ class PDSolver {
     this.safety = opts.safety ?? 0.32;
     this.dt = domain.dtStable * this.safety;
     this.gravity = opts.gravity ?? -9.81;
-    this.contactRefresh = 8;
+    // Refreshed every step. At 8 the set went stale: a node newly exposed by
+    // erosion could overlap a quarter of a lattice spacing before it was even
+    // eligible for contact, and then met the full penalty force in one step.
+    // The set is an O(n) scan against a bond loop an order of magnitude larger,
+    // so making it exact costs almost nothing.
+    this.contactRefresh = 1;
     this.friction = opts.friction ?? MU_FRICTION;
 
     // CONTACT STIFFNESS
@@ -1586,7 +1610,21 @@ class PDSolver {
     this.dt = Math.min(this.dt, dtC);
     this.dtBase = this.dt;
 
-    this.energy = { plastic: 0, fracture: 0, damping: 0, contact: 0 };
+    // Per-bond contact distance for pairs that have already failed. A bond
+    // that breaks under compression is sitting at r < dcContact, so switching
+    // it to the shared penalty law would apply kC*(dcContact - r) as a step
+    // change: measured at 200x the force the bond was carrying, up to 358x,
+    // delivered to a whole row of pairs in the same step under a blunt cap.
+    // The pair is already compacted; contact must resist FURTHER approach, not
+    // violently undo the compaction. Latching the reference to the separation
+    // at the moment of failure makes the force continuous through the
+    // transition and still blocks interpenetration from there on.
+    this.bdc = new Float32Array(domain.nb);
+    this.bdc.fill(this.dcContact);
+    this.isoAcc = new Float64Array(domain.n);
+    this.bstretch = new Float32Array(domain.nb);
+    this.bse = new Float32Array(domain.nb);
+    this.energy = { plastic: 0, fracture: 0, damping: 0, contact: 0, iso: 0 };
     // Energy audit. An explicit scheme with penalty contact and rate-dependent
     // plasticity is not exactly conservative; rather than hide that, the drift
     // is measured every step and reported in the diagnostics panel.
@@ -1594,7 +1632,6 @@ class PDSolver {
     this.brokenThisStep = 0;
     this.totalBroken = 0;
     this.maxContactForce = 0;
-    this.newlyFree = [];
     this.refreshContactSet();
     this.computeForces();
     this.E0 = this.kinetic() + this.strainEnergy();
@@ -1682,8 +1719,9 @@ class PDSolver {
     const px = d.px, py = d.py, vx = d.vx, vy = d.vy;
     const fx = d.fx, fy = d.fy;
     const bi = d.bi, bj = d.bj, bk = d.bk, bref = d.bref, bsp = d.bsp;
-    const bsy = d.bsy, bsf = d.bsf, bstate = d.bstate;
+    const bsy = d.bsy, bsf = d.bsf, bsten = d.bsten, bstate = d.bstate;
     const theta = d.theta, thetaAcc = d.thetaAcc, thetaCnt = d.thetaCnt;
+    const bstretch = this.bstretch, bse = this.bse;
     const plStrain = d.plStrain;
     const bdamp = d.bdamp, bdampQ = d.bdampQ, bcrit = d.bcrit;
     const mass = d.mass, temp = d.temp, flowMul = d.flowMul, srate = d.srate;
@@ -1707,10 +1745,23 @@ class PDSolver {
       const dx = px[j] - px[i], dy = py[j] - py[i];
       const r0 = bref[b];
       const st = (Math.sqrt(dx * dx + dy * dy) - r0) / r0;
+      bstretch[b] = st;
       thetaAcc[i] += st; thetaAcc[j] += st;
       thetaCnt[i]++; thetaCnt[j]++;
     }
-    for (let i = 0; i < n; i++) theta[i] = thetaCnt[i] > 0 ? thetaAcc[i] / thetaCnt[i] : 0;
+    // Normalised by the node's ORIGINAL bond count, not by the number still
+    // intact. Re-averaging over the surviving bonds makes theta jump every
+    // time one fails - the failing bond is by definition the most stretched of
+    // the set, so dropping it re-scales the mean discontinuously, and every
+    // other bond on that node sees its isotropic force step. Integrated
+    // explicitly, those steps are work done with no displacement: with
+    // breaking suppressed the same impact conserves energy to 1 %, with it
+    // enabled the model gained 150 % on a blunt-capped AP round.
+    // A fixed denominator also states the right physics: a node that has lost
+    // most of its bonds is comminuted, and its ability to carry hydrostatic
+    // stress should fall with the damage rather than persist undiminished
+    // down to the last surviving bond.
+    for (let i = 0; i < n; i++) theta[i] = nBond0[i] > 0 ? thetaAcc[i] / nBond0[i] : 0;
 
     let ePlast = 0, eFrac = 0, eDamp = 0;
     let broken = 0;
@@ -1719,6 +1770,125 @@ class PDSolver {
     const dC = this.dcContact;
     const mu = this.friction;
     const invDt = dt > 0 ? 1 / dt : 0;
+
+    // ---- pass 2: constitutive update and the nonlocal reaction ------------
+    // The bond force is the gradient of a potential written over the whole
+    // neighbourhood:
+    //
+    //   U = SUM_b  r0_b * bk_b * [ 0.5*sIso_b^2 + 0.5*se_b^2 + phi(sIso_b) ]
+    //
+    //   sIso_b = 0.5*(theta_i + theta_j)      neighbourhood dilatation
+    //   se_b   = clamp(s_b - sIso_b - sp_b)   deviatoric elastic stretch
+    //   phi'   = the tension cap and the confinement factor
+    //
+    // sIso_b is a NODE-AVERAGED quantity, so U depends on bond b's stretch
+    // both directly and through every other bond attached to i or j. The
+    // original code differentiated only the direct path: bond (i,j) felt a
+    // force from its neighbours' stretches while those neighbours felt no
+    // reaction. That force field is not the gradient of anything, so it is
+    // path-dependent and does net work around a closed loop - it was the
+    // dominant energy source in the model, contributing +6.9 MJ of bond work
+    // on a 1.27 MJ impact for a blunt-capped AP round and throwing armour
+    // nodes out at four times the striking velocity.
+    //
+    // Differentiating U properly, with d(theta_i)/d(s_b) = 1/cnt_i:
+    //
+    //   dU/ds_c = r0_c bk_c se_c + Acc_i + Acc_j
+    //   Acc_i   = (0.5/cnt_i) SUM_{b at i} r0_b bk_b [ sIso_b + phi'(sIso_b) - se_b ]
+    //
+    // and F_c = (1/r0_c) dU/ds_c because virtual work is F * r0 * ds. In the
+    // interior of a uniform lattice this reproduces the bond-based force
+    // F = bk*(s - sp) exactly, so the calibration of `confinement` is
+    // unchanged; it differs where the bond counts differ - at free surfaces
+    // and in heavily damaged material - which is precisely where the old form
+    // was manufacturing energy.
+    const isoAcc = this.isoAcc, bdc = this.bdc;
+    isoAcc.fill(0);
+    let uIso = 0;
+    for (let b = 0; b < nb; b++) {
+      if (bstate[b] !== BOND.INTACT) continue;
+      const i = bi[b], j = bj[b];
+      if (!alive[i] || !alive[j]) continue;
+      const r0 = bref[b];
+      const s = bstretch[b];
+
+      // VOLUMETRIC / DEVIATORIC SPLIT
+      // Plastic flow is deviatoric. Capping the whole bond stretch at yield
+      // would also cap the hydrostatic response, leaving the material with no
+      // bulk modulus above ~1 GPa - it would behave like a pressure-limited
+      // fluid under the impact shock, dissipate the entire shock as "plastic
+      // work", heat itself past its melting point and disintegrate. The
+      // isotropic part is therefore always elastic and only the deviatoric
+      // remainder can yield.
+      let sIso = 0.5 * (theta[i] + theta[j]);
+      if (sIso < -1) sIso = -1;
+      // The deviatoric remainder is measured against the RAW dilatation so a
+      // uniform deformation (every bond at s == theta) gives sDev == 0
+      // identically. The cap and the confinement factor act through phi below
+      // and must not leak into this subtraction: doing so relabels part of the
+      // hydrostatic strain as deviatoric, and under the shock of a blunt
+      // impact that manufactured deviatoric strain flows plastically. At 2 %
+      // uniform compression the old form invented a deviatoric stretch of six
+      // times yield, which heated and softened the material.
+      let sp = bsp[b];
+      let se = s - sIso - sp;
+      const sy = bsy[b] * 0.5 * (flowMul[i] + flowMul[j]);
+
+      if (se > sy || se < -sy) {
+        const dsp = se > sy ? se - sy : se + sy;
+        sp += dsp; se = se > 0 ? sy : -sy;
+        const w = Math.abs(dsp) * r0 * Math.abs(bk[b] * sy);
+        ePlast += w;
+        const hw = 0.5 * w;
+        temp[i] += hw / (mass[i] * d.matTable[d.matIndex[i]].pd.cp);
+        temp[j] += hw / (mass[j] * d.matTable[d.matIndex[j]].pd.cp);
+        bsp[b] = sp;
+        const dpe = Math.abs(dsp) * 0.5;
+        plStrain[i] += dpe; plStrain[j] += dpe;
+      }
+
+      // --- failure --------------------------------------------------------
+      // tension: total stretch reaches the measured failure strain
+      // shear/compression: accumulated *plastic* stretch exhausts the
+      //   ductility. Using the accumulated plastic variable rather than the
+      //   instantaneous deviatoric stretch matters: in a heavily damaged
+      //   region the local dilatation is estimated from a shrinking, biased
+      //   set of surviving bonds, so the instantaneous split is noisy and
+      //   feeds back into more breakage. The plastic accumulator is monotonic
+      //   and does not.
+      if (s >= bsf[b] || Math.abs(sp) >= bsf[b] * COMP_DUCTILITY) {
+        bstate[b] = BOND.BROKEN;
+        nBroken[i]++; nBroken[j]++;
+        damage[i] = nBroken[i] / (nBond0[i] || 1);
+        damage[j] = nBroken[j] / (nBond0[j] || 1);
+        if (damage[i] >= 0.96 && !(flags[i] & 8)) flags[i] |= 8;
+        if (damage[j] >= 0.96 && !(flags[j] & 8)) flags[j] |= 8;
+        const rBreak = r0 * (1 + s);
+        if (rBreak < dC) bdc[b] = rBreak;
+        // the whole stored potential of this bond is released, including its
+        // share of the dilatational term, which otherwise just vanishes from U
+        let phiB = 0;
+        if (sIso < 0) phiB = 0.5 * (conf - 1) * sIso * sIso;
+        else if (sIso > bsten[b]) { const e = sIso - bsten[b]; phiB = -0.5 * e * e; }
+        eFrac += r0 * bk[b] * (0.5 * se * se + 0.5 * sIso * sIso + phiB);
+        broken++;
+        continue;
+      }
+      if (bcrit[b] < s) bcrit[b] = s;
+      bse[b] = se;
+
+      // phi'(x) = (conf-1)x for x<0 ; 0 for 0 <= x <= sTen ; sTen-x for x>sTen
+      const stn = bsten[b];
+      let dphi = 0, phi = 0;
+      if (sIso < 0) { dphi = (conf - 1) * sIso; phi = 0.5 * (conf - 1) * sIso * sIso; }
+      else if (sIso > stn) { const e = sIso - stn; dphi = -e; phi = -0.5 * e * e; }
+      const w = r0 * bk[b];
+      uIso += w * (phi + 0.5 * sIso * sIso);
+      const g = w * (sIso + dphi - se) * 0.5;
+      isoAcc[i] += g / nBond0[i];
+      isoAcc[j] += g / nBond0[j];
+    }
+    this.energy.iso = uIso;
 
     // ------------------------------------------------------------- bonds --
     for (let b = 0; b < nb; b++) {
@@ -1733,64 +1903,12 @@ class PDSolver {
 
       if (bstate[b] === BOND.INTACT) {
         const r0 = bref[b];
-        const s = (r - r0) / r0;
-
-        // VOLUMETRIC / DEVIATORIC SPLIT
-        // Plastic flow is deviatoric. Capping the whole bond stretch at yield
-        // would also cap the hydrostatic response, leaving the material with
-        // no bulk modulus above ~1 GPa - it would behave like a pressure-
-        // limited fluid under the impact shock, dissipate the entire shock as
-        // "plastic work", heat itself past its melting point and disintegrate.
-        // The isotropic part of the stretch is therefore always elastic and
-        // only the deviatoric remainder can yield.
-        let sIso = 0.5 * (theta[i] + theta[j]);
-        if (sIso < 0) sIso *= conf;
-        const sDev = s - sIso;
-        let sp = bsp[b];
-        let se = sDev - sp;
-        const sy = bsy[b] * 0.5 * (flowMul[i] + flowMul[j]);
-
-        if (se > sy || se < -sy) {
-          const dsp = se > sy ? se - sy : se + sy;
-          sp += dsp; se = se > 0 ? sy : -sy;
-          const w = Math.abs(dsp) * r0 * Math.abs(bk[b] * sy);
-          ePlast += w;
-          const hw = 0.5 * w;
-          temp[i] += hw / (mass[i] * d.matTable[d.matIndex[i]].pd.cp);
-          temp[j] += hw / (mass[j] * d.matTable[d.matIndex[j]].pd.cp);
-          bsp[b] = sp;
-          const dpe = Math.abs(dsp) * 0.5;
-          plStrain[i] += dpe; plStrain[j] += dpe;
-        }
-
-        // --- failure ------------------------------------------------------
-        // tension: total stretch reaches the measured failure strain
-        // shear/compression: accumulated *plastic* stretch exhausts the
-        //   ductility. Using the accumulated plastic variable rather than the
-        //   instantaneous deviatoric stretch matters: in a heavily damaged
-        //   region the local dilatation is estimated from a shrinking, biased
-        //   set of surviving bonds, so the instantaneous split is noisy and
-        //   feeds back into more breakage. The plastic accumulator is
-        //   monotonic and does not.
-        if (s >= bsf[b] || Math.abs(sp) >= bsf[b] * COMP_DUCTILITY) {
-          bstate[b] = BOND.BROKEN;
-          nBroken[i]++; nBroken[j]++;
-          damage[i] = nBroken[i] / (nBond0[i] || 1);
-          damage[j] = nBroken[j] / (nBond0[j] || 1);
-          if (damage[i] >= 0.96 && !(flags[i] & 8)) { flags[i] |= 8; this.newlyFree.push(i); }
-          if (damage[j] >= 0.96 && !(flags[j] & 8)) { flags[j] |= 8; this.newlyFree.push(j); }
-          // energy released = 0.5 k s_e^2 r0 stored elastically
-          eFrac += 0.5 * bk[b] * se * se * r0;
-          broken++;
-          continue;
-        }
-
-        if (bcrit[b] < s) bcrit[b] = s;
-
         const sdot = Math.abs(vn) / r0;
         srate[i] += sdot; srate[j] += sdot;
 
-        const F = bk[b] * (sIso + se);
+        // Constitutive state was resolved in pass 2; this is the gradient of
+        // the neighbourhood potential written out as a pair force.
+        const F = bk[b] * bse[b] + (isoAcc[i] + isoAcc[j]) / r0;
         // Kelvin-Voigt damping plus a compression-only shock viscosity.
         // Sign convention for this bond: positive = tension (pulls i toward
         // j), so a damper resisting approach (vn < 0) must be negative.
@@ -1804,11 +1922,17 @@ class PDSolver {
         virial[i] += vir; virial[j] += vir;
       } else {
         // ---- broken bond acting as a contact pair ------------------------
-        if (r < dC) {
+        const dCb = bdc[b];
+        if (r < dCb) {
           const meff = (mass[i] * mass[j]) / (mass[i] + mass[j]);
           const kC = (2 * kNode[i] * kNode[j]) / (kNode[i] + kNode[j]);
-          let Fn = kC * (dC - r);                   // magnitude, repulsive
-          if (vn < 0) Fn += 2 * zetaC * Math.sqrt(kC * meff) * -vn;
+          const pen = dCb - r;
+          let Fn = kC * pen;                        // magnitude, repulsive
+          // Damping ramped in with overlap. Applied as a step at first touch it
+          // is a force discontinuity, and a flat-faced impact brings a whole
+          // row of nodes across that discontinuity in the same time step - a
+          // synchronised impulse that pumps energy into the lattice.
+          if (vn < 0) Fn += RAMP(pen, dCb) * 2 * zetaC * Math.sqrt(kC * meff) * -vn;
           fx[i] -= Fn * ex; fy[i] -= Fn * ey;
           fx[j] += Fn * ex; fy[j] += Fn * ey;
           // Coulomb friction along the contact tangent, capped so a single
@@ -1854,7 +1978,7 @@ class PDSolver {
           const meff = (mass[i] * mass[j]) / (mass[i] + mass[j]);
           const kC = (2 * kNode[i] * kNode[j]) / (kNode[i] + kNode[j]);
           let Fn = kC * pen;
-          if (vn < 0) Fn += 2 * zetaC * Math.sqrt(kC * meff) * -vn;
+          if (vn < 0) Fn += RAMP(pen, dC) * 2 * zetaC * Math.sqrt(kC * meff) * -vn;
           if (Fn > maxF) maxF = Fn;
           fx[i] -= Fn * ex; fy[i] -= Fn * ey;
           fx[j] += Fn * ex; fy[j] += Fn * ey;
@@ -1910,11 +2034,16 @@ class PDSolver {
       if (d.bstate[b] !== BOND.INTACT) continue;
       const i = d.bi[b], j = d.bj[b];
       if (!d.alive[i] || !d.alive[j]) continue;
+      // must use the same deviatoric measure the force law does, i.e. with the
+      // neighbourhood dilatation removed - otherwise the audit is comparing a
+      // different energy from the one the solver integrates
       const r = Math.hypot(d.px[j] - d.px[i], d.py[j] - d.py[i]);
-      const se = (r - d.bref[b]) / d.bref[b] - d.bsp[b];
+      const sIso = 0.5 * (d.theta[i] + d.theta[j]);
+      const se = (r - d.bref[b]) / d.bref[b] - sIso - d.bsp[b];
       U += 0.5 * d.bk[b] * se * se * d.bref[b];
     }
-    return U;
+    // the dilatational part of the same potential (see pass 2)
+    return U + this.energy.iso;
   }
 
   /**
@@ -3947,7 +4076,7 @@ class World {
 
   blankStats() {
     return {
-      penetration: 0, maxDepth: 0, maxDepthLOS: 0, channelLength: 0,
+      penetration: 0, maxDepth: 0, maxDepthLOS: 0, armourDefeated: 0, channelLength: 0,
       residualMass: 0, residualVelocity: 0, residualLength: 0,
       erodedMass: 0, spallMass: 0, fragmentCount: 0,
       perforated: false, ricochet: false, embedded: false,
@@ -4329,6 +4458,15 @@ class World {
     // solver is only tracking debris that the ballistic layer handles better.
     const elapsed = this.simTime - (this.trueContactTime ?? this.simTime);
     const overrun = this.contactSeen && elapsed > (this.settings.maxEventTime ?? 3.5e-4);
+    // A meshed shot that never touches anything - it missed inside the
+    // corridor, or the remnant left without contacting a later layer - would
+    // otherwise sit in the impact regime forever with nothing to resolve.
+    if (!this.contactSeen && this.simTime - this.impactStartTime > 3e-3) {
+      this.log.add(this.simTime, 'no-contact',
+        'Projectile left the meshed corridor without contacting the array', SEV.NOTE);
+      this.finish('miss');
+      return;
+    }
     if (this.state === 'impact' && (overrun || (quiet && armourKE < Math.max(this.impactKE0 * 0.004, 1)))) {
       this.state = 'settle';
       this.settleTime = this.simTime;
@@ -4608,10 +4746,23 @@ class World {
     // of a histogram. Perforation uses the same measure in the last layer's
     // frame, so "depth exceeds the plate" and "perforated" can no longer
     // disagree - they are the same number read against the same threshold.
-    const NB = 256;
+    const NB = 256, NL = 64;
     if (!this._histA) { this._histA = new Float32Array(NB); this._histB = new Float32Array(NB); }
     const histA = this._histA, histB = this._histB;
     histA.fill(0); histB.fill(0);
+
+    // PER-LAYER PENETRATION
+    // Depth measured from the struck face counts air gaps: a round that has
+    // crossed a 300 mm stand-off in a spaced array reads as "300 mm of
+    // penetration" while having defeated 10 mm of plate. What the user wants
+    // is armour defeated, so each layer keeps its own histogram and the totals
+    // are summed with the gaps excluded.
+    if (!this._histL || this._histL.length < layers.length) {
+      this._histL = layers.map(() => new Float32Array(NL));
+      this._pastL = new Float32Array(layers.length);
+    }
+    const histL = this._histL, pastL = this._pastL;
+    for (let k = 0; k < layers.length; k++) { histL[k].fill(0); pastL[k] = 0; }
     const aLo = -0.03, aHi = this.scene.normalTotal + 0.20;
     const bLo = -0.05, bHi = tL + 0.20;
     const aStep = (aHi - aLo) / NB, bStep = (bHi - bLo) / NB;
@@ -4663,6 +4814,13 @@ class World {
         if (dLast > tL) massThrough += m;
         const dLos = (d.px[i] - ix) * ax + (d.py[i] - iy) * ay;
         if (dLos > deepestLos) deepestLos = dLos;
+        for (let k = 0; k < layers.length; k++) {
+          const Lk = layers[k];
+          const dk = (d.px[i] - Lk.frontX) * Lk.normal[0] + d.py[i] * Lk.normal[1];
+          if (dk <= 0) continue;
+          if (dk >= Lk.thickness) { pastL[k] += m; continue; }
+          histL[k][Math.min(NL - 1, ((dk / Lk.thickness) * NL) | 0)] += m;
+        }
         const s = d.px[i], u = d.py[i];
         if (s < sMin) sMin = s; if (s > sMax) sMax = s;
         if (u < uMin) uMin = u; if (u > uMax) uMax = u;
@@ -4707,6 +4865,19 @@ class World {
       acc += histB[k];
       if (acc >= need) { deepestLast = bLo + (k + 1) * bStep; break; }
     }
+
+    // armour actually defeated, layer by layer, gaps excluded
+    let defeated = 0;
+    for (let k = 0; k < layers.length; k++) {
+      const Lk = layers[k];
+      if (pastL[k] >= need) { defeated += Lk.thickness; continue; }
+      let a2 = pastL[k];
+      for (let j = NL - 1; j >= 0; j--) {
+        a2 += histL[k][j];
+        if (a2 >= need) { defeated += ((j + 1) / NL) * Lk.thickness; break; }
+      }
+    }
+    st.armourDefeated = Math.max(st.armourDefeated || 0, defeated);
 
     st.maxDepth = Math.max(st.maxDepth, isFinite(deepest) ? deepest : 0);
     st.maxDepthLOS = Math.max(st.maxDepthLOS || 0, isFinite(deepestLos) ? deepestLos : 0);
@@ -4804,11 +4975,11 @@ class World {
     if (this.finishReason === 'miss') headline = 'No contact';
     else if (st.perforated) headline = `Perforation — ${(st.atPerforation.velocity).toFixed(0)} m/s residual`;
     else if (st.ricochet) headline = 'Ricochet — armour defeated the attack';
-    else if (st.maxDepth > 0) headline = `Partial penetration — ${(st.maxDepth * 1000).toFixed(0)} mm`;
+    else if (st.armourDefeated > 0) headline = `Partial penetration — ${(st.armourDefeated * 1000).toFixed(0)} mm of armour defeated`;
     else headline = 'No penetration';
     return {
       headline, perforated: st.perforated, ricochet: st.ricochet,
-      depth: st.maxDepth, depthLOS: st.maxDepthLOS,
+      depth: st.maxDepth, depthLOS: st.maxDepthLOS, armourDefeated: st.armourDefeated,
       residualVelocity: st.atPerforation ? st.atPerforation.velocity : st.residualVelocity,
       residualMass: st.atPerforation ? st.atPerforation.mass : st.residualMass,
       erodedMass: st.atPerforation ? st.atPerforation.eroded : st.erodedMass,
@@ -5079,6 +5250,14 @@ class NodeGL {
     this.lost = false;
     this.capacity = 0;
     this.matCache = new Map();
+    // GL_POINTS has a hardware ceiling on gl_PointSize, and it is not
+    // generous: 64 px on some mobile GPUs. Past it the driver silently clamps,
+    // so zooming in far enough turns a continuous body into a grid of dots
+    // with gaps between them - the view would then be showing the lattice
+    // rather than the material. The renderer reads this and hands the frame to
+    // the Canvas 2-D path instead of drawing something misleading.
+    const rng = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE);
+    this.maxPointSize = rng && rng.length ? Math.max(1, rng[1]) : 64;
 
     canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; }, false);
     canvas.addEventListener('webglcontextrestored', () => { this.lost = false; this.init(); this.capacity = 0; }, false);
@@ -5365,8 +5544,16 @@ class Renderer {
     this.dpr = dpr;
   }
 
+  /**
+   * The path that actually drew the last frame, not the one that is available.
+   * The renderer can fall back to Canvas 2-D per frame (context loss, or a
+   * zoom past the GPU's point-size limit), and a diagnostics panel that keeps
+   * claiming "WebGL 2" through that is reporting a capability rather than what
+   * happened.
+   */
   get backend() {
     if (!this.field || this.field.lost) return 'Canvas 2D';
+    if (this.lastPathGL === false) return 'Canvas 2D (zoom past GPU point limit)';
     return this.field.isGL2 ? 'WebGL 2' : 'WebGL 1';
   }
 
@@ -5394,8 +5581,18 @@ class Renderer {
     this.drawScene(world);
     this.drawModules(world);
 
-    const useGL = this.field && !this.field.lost;
-    if (useGL) this.field.clear();
+    const useGL = this.field && !this.field.lost && !this.nodesTooLargeForGL(world);
+    // Whenever the frame is NOT going to GL, the GL canvas has to stop showing
+    // its last frame - it sits directly over the 2-D nodes, so a stale image
+    // there reads as the simulation having frozen. Clearing covers the case
+    // where the context is still alive (the point-size fallback); hiding the
+    // element covers context loss, where the clear cannot be issued at all.
+    this.lastPathGL = useGL;
+    if (this.glCanvas) {
+      if (useGL) this.field.clear();
+      const vis = useGL ? '' : 'hidden';
+      if (this.glCanvas.style.visibility !== vis) this.glCanvas.style.visibility = vis;
+    }
     if (world.domain) {
       if (useGL) this.drawNodesGL(world, frame);
       else this.drawNodes(world, frame);
@@ -5470,15 +5667,31 @@ class Renderer {
     return n;
   }
 
-  drawNodesGL(world, frame) {
+  /** Node sprite size in device pixels at the current zoom. */
+  nodePointSize(world) {
     const d = world.domain;
+    if (!d) return 0;
+    return Math.max(1, d.dx * this.cam.scale * this.opts.nodeGain * 1.42);
+  }
+
+  /**
+   * True when the zoom has taken the node sprites past what GL_POINTS can
+   * draw. Clamping instead would open gaps between nodes and make solid
+   * material look porous, so the frame goes to the Canvas 2-D path.
+   */
+  nodesTooLargeForGL(world) {
+    if (!world.domain || !this.field) return false;
+    return this.nodePointSize(world) > this.field.maxPointSize;
+  }
+
+  drawNodesGL(world, frame) {
     const n = this.fillFieldBuffers(world, frame);
-    const size = Math.max(1, d.dx * this.cam.scale * this.opts.nodeGain * 1.42);
+    const size = this.nodePointSize(world);
     this.field.drawPoints({
       count: n,
       cam: this.cam,
       mode: this.opts.field,
-      pointSize: Math.min(size, 128),
+      pointSize: Math.min(size, this.field.maxPointSize),
       extrude: this.nodeExtrudeVec(size),
       alpha: 1,
     });
@@ -5557,6 +5770,11 @@ class Renderer {
     const ctx = this.ctx;
     const [ex, ey] = this.extrudeVec();
     const dom = world.domain;
+    // The static plate and the corridor punch-out are one decision, not two:
+    // drawing the undeformed plate without removing it inside the corridor
+    // paints intact armour straight over the channel the solver opened, which
+    // is the renderer contradicting the simulation.
+    if (!this.opts.showFarField) return;
     for (const L of world.scene.activeLayers()) {
       const base = this.matColor(L.mat.color);
       const dark = this.matColor(L.mat.color2 || L.mat.color);
@@ -5591,7 +5809,7 @@ class Renderer {
     // version has to be removed there — otherwise an opened channel would have
     // undeformed plate showing through it. Only the plate is punched out, not
     // the background, so the corridor itself stays invisible.
-    if (dom && this.opts.showFarField) {
+    if (dom) {
       ctx.save();
       this.corridorPath(dom);
       ctx.clip();
@@ -5919,18 +6137,24 @@ class Renderer {
   }
 
   /** Hit test in world space for the inspector. */
+  /**
+   * Hit test, most specific first. Nodes are tested BEFORE layers: inside the
+   * meshed corridor the plate is drawn from nodes and punched out of the
+   * static polygon, so a click there lands on simulated material even though
+   * it is still geometrically inside the layer's outline. Testing layers first
+   * returned the undeformed layer for every point inside a plate, which made
+   * it impossible to inspect any node that was not in mid-air - the opposite
+   * of what the inspector is for.
+   */
   pick(world, sx, sy) {
     const [wx, wy] = this.cam.toWorld(sx, sy);
-    for (const m of world.scene.modules) {
-      const p = modulePoly(m);
-      if (pointIn(p, wx, wy)) return { kind: 'module', id: m.id, obj: m };
-    }
-    for (const L of world.scene.activeLayers()) {
-      if (pointIn(L.poly, wx, wy)) return { kind: 'layer', id: L.id, obj: L };
-    }
     if (world.domain) {
       const d = world.domain;
-      let best = -1, bd = (d.dx * 2) ** 2;
+      // Tolerance follows the zoom as well as the lattice: at low zoom a
+      // lattice spacing is a fraction of a pixel and nothing would ever be
+      // clickable, and on touch the finger is nowhere near that precise.
+      const tol = Math.max(d.dx * 0.75, (12 * (this.dpr || 1)) / Math.max(this.cam.scale, 1e-6));
+      let best = -1, bd = tol * tol;
       for (let i = 0; i < d.n; i++) {
         if (!d.alive[i]) continue;
         const dx = d.px[i] - wx, dy = d.py[i] - wy;
@@ -5938,6 +6162,13 @@ class Renderer {
         if (r < bd) { bd = r; best = i; }
       }
       if (best >= 0) return { kind: 'node', id: best, obj: best };
+    }
+    for (const m of world.scene.modules) {
+      const p = modulePoly(m);
+      if (pointIn(p, wx, wy)) return { kind: 'module', id: m.id, obj: m };
+    }
+    for (const L of world.scene.activeLayers()) {
+      if (pointIn(L.poly, wx, wy)) return { kind: 'layer', id: L.id, obj: L };
     }
     return null;
   }
@@ -6907,9 +7138,10 @@ class App {
     }
     const at = s.atPerforation;
     p.body.appendChild(kv([
-      ['Penetration — plate normal', U.len(s.maxDepth), s.perforated ? 'bad' : ''],
-      ['Penetration — along shot line', U.len(s.maxDepthLOS || 0)],
+      ['Armour defeated', U.len(s.armourDefeated || 0), s.perforated ? 'bad' : 'hi'],
       ['Array — normal / LOS', `${U.len(w.scene.normalTotal)} / ${U.len(w.scene.losTotal)}`],
+      ['Depth from struck face', U.len(s.maxDepth)],
+      ['— along shot line', U.len(s.maxDepthLOS || 0)],
       ['Perforated', s.perforated ? 'YES' : 'no', s.perforated ? 'bad' : 'good'],
       ['Ricochet', s.ricochet ? 'YES' : 'no'],
       at ? ['Residual mass in target', U.mass(at.mass)] : ['Penetrator mass in target', U.mass(s.residualMass)],
@@ -6953,7 +7185,7 @@ class App {
       p.body.appendChild(el('div', { class: 'note' }, `${m.name}: ${m.note}`));
     }
     p.body.appendChild(kv([
-      ['Simulated depth (normal)', U.len(w.stats.maxDepth)],
+      ['Simulated armour defeated', U.len(w.stats.armourDefeated || 0)],
       ['Array LOS', U.len(w.analytics.arrayLOS || 0)],
       ['Array areal mass', `${(w.analytics.arealMass || 0).toFixed(0)} kg/m²`],
     ]));
@@ -7318,8 +7550,8 @@ class App {
     }
     if (w.domain) {
       const s = w.stats;
-      push(`<b>penetration</b> ${U.len(s.maxDepth)} normal of ${U.len(w.scene.normalTotal)}`
-        + `  ·  ${U.len(s.maxDepthLOS || 0)} along shot line`);
+      push(`<b>armour defeated</b> ${U.len(s.armourDefeated || 0)} of ${U.len(w.scene.normalTotal)}`
+        + `  ·  tip ${U.len(s.maxDepth)} from the struck face`);
       push(`<b>penetrator</b> ${U.mass(s.residualMass)} @ ${U.vel(s.residualVelocity)}`
         + `  ·  ${U.mass(s.attachedMass || 0)} coherent  ·  lost ${U.mass(s.erodedMass)}`);
       push(`<b>armour</b> ${s.brokenBonds.toLocaleString()} failed bonds · spall ${U.mass(s.spallMass)} · bulge ${U.len(s.backfaceBulge)}`);

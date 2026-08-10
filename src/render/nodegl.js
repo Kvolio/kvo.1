@@ -127,6 +127,14 @@ export class NodeGL {
     this.lost = false;
     this.capacity = 0;
     this.matCache = new Map();
+    // GL_POINTS has a hardware ceiling on gl_PointSize, and it is not
+    // generous: 64 px on some mobile GPUs. Past it the driver silently clamps,
+    // so zooming in far enough turns a continuous body into a grid of dots
+    // with gaps between them - the view would then be showing the lattice
+    // rather than the material. The renderer reads this and hands the frame to
+    // the Canvas 2-D path instead of drawing something misleading.
+    const rng = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE);
+    this.maxPointSize = rng && rng.length ? Math.max(1, rng[1]) : 64;
 
     canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; }, false);
     canvas.addEventListener('webglcontextrestored', () => { this.lost = false; this.init(); this.capacity = 0; }, false);

@@ -131,7 +131,7 @@ td{color:var(--ink2)}
 <p>formulation, which the modular layout permits (see §9).</p>
 <h3 id="3-3-plasticity-volumetric-deviatoric-split">3.3 Plasticity — volumetric/deviatoric split</h3>
 <p>Each bond's stretch is split into an isotropic part and a deviatoric part:</p>
-<pre><code>s_iso = ½ (θ_i + θ_j) ,     θ_i = mean stretch of node i's intact bonds
+<pre><code>s_iso = ½ (θ_i + θ_j) ,     θ_i = (1 / N⁰_i) Σ_{intact bonds} s
 s_dev = s - s_iso</code></pre>
 <p>Only <code>s_dev</code> can yield. <strong>This is not a refinement, it is a requirement.</strong> If</p>
 <p>the whole bond stretch is capped at yield, the material also loses its bulk</p>
@@ -140,8 +140,39 @@ s_dev = s - s_iso</code></pre>
 <p>"plastic work", heats itself past its melting point through the adiabatic</p>
 <p>coupling, and disintegrates. With the split, hydrostatic compression stays</p>
 <p>elastic and only shear flows — which is what real metals do.</p>
-<p><code>θ</code> is evaluated in the same step as the forces (a two-pass loop over the bond</p>
-<p>list), not lagged.</p>
+<p><code>θ</code> is evaluated in the same step as the forces, not lagged.</p>
+<p>Two details of this split are load-bearing, and getting either wrong turns the</p>
+<p>model into an energy source rather than a constitutive law.</p>
+<p><strong><code>s_dev</code> is measured against the raw dilatation.</strong> The tension cap (§3.3.1)</p>
+<p>and the confinement factor (§3.6) both modify the isotropic <em>force</em>, and</p>
+<p>neither may be folded into <code>s_iso</code> before <code>s_dev = s - s_iso</code> is taken. If</p>
+<p>they are, part of a purely hydrostatic strain is relabelled as deviatoric and</p>
+<p>then flows plastically: at 2 % uniform compression the confinement factor</p>
+<p>alone manufactured a deviatoric stretch of six times yield, which heated and</p>
+<p>softened material that was never being sheared.</p>
+<p>**<code>θ</code> is normalised by the node's original bond count <code>N⁰_i</code>, not by the</p>
+<p>number still intact.** Re-averaging over the survivors makes <code>θ</code> jump every</p>
+<p>time a bond fails — the failing bond is by definition the most stretched of</p>
+<p>the set, so removing it rescales the mean discontinuously and every other bond</p>
+<p>on that node sees its isotropic force step. Integrated explicitly, those steps</p>
+<p>are work done with no displacement. A fixed denominator also states the right</p>
+<p>physics: a node that has lost most of its bonds is comminuted, and its ability</p>
+<p>to carry hydrostatic stress should fall with the damage rather than persist</p>
+<p>undiminished down to the last surviving bond.</p>
+<p><strong>The force is the gradient of a potential.</strong> Because <code>s_iso</code> is a <em>node</em></p>
+<p>average, bond (i,j)'s force depends on the stretch of every other bond at i</p>
+<p>and j, and the reaction terms are not optional. The model integrates</p>
+<pre><code>U = Σ_b r₀ c [ ½ s_iso² + ½ s_e² + φ(s_iso) ]</code></pre>
+<p>with <code>φ' </code> carrying the tension cap and the confinement factor, and takes the</p>
+<p>force as <code>∂U/∂s</code> with <code>∂θ_i/∂s_b = 1/N⁰_i</code> carried through — giving a per-node</p>
+<p>reaction term added to every bond. Differentiating only the direct path (the</p>
+<p>obvious reading of the formula above) yields a force field that is not the</p>
+<p>gradient of anything: it is path-dependent and does net work around a closed</p>
+<p>loop. That defect contributed <strong>+6.9 MJ of bond work on a 1.27 MJ impact</strong> for</p>
+<p>a blunt-capped AP round, throwing armour nodes out at four times the striking</p>
+<p>velocity. The current force law is verified against a finite-difference</p>
+<p>gradient of <code>U</code> (agreement to 0.1 %) and conserves kinetic energy to 1 % on</p>
+<p>impacts that previously gained 150 %.</p>
 <h3 id="3-4-failure-an-explicit-departure-from-textbook-peridynamics">3.4 Failure — an explicit departure from textbook peridynamics</h3>
 <p>The classical criterion is the critical stretch</p>
 <p><code>s₀ = √(4πG₀ / (9Eδ))</code>. It is <strong>horizon dependent</strong>: <code>s₀ ∝ δ^(-1/2)</code>. At the</p>
@@ -224,6 +255,15 @@ shear/compression  |s_p| ≥ 4 ε_f       (accumulated plastic stretch)</code></
 <p>series. A softer contact (an arbitrary penalty constant) lets the struck faces</p>
 <p>interpenetrate by a large fraction of a lattice spacing before force builds,</p>
 <p>and the shock never forms properly. Coulomb friction µ = 0.15 by default.</p>
+<p><strong>The bond-to-contact transition must be continuous.</strong> A bond that fails in</p>
+<p>compression is already at a separation below the contact distance, so handing</p>
+<p>it to the shared penalty law would apply <code>k_c (d_c − r)</code> as a step change —</p>
+<p>measured at 200× the force the bond was carrying, worst case 358×, and</p>
+<p>delivered to a whole row of pairs in the same step when the impactor is</p>
+<p>blunt-nosed. Each failed pair therefore latches its own contact distance to</p>
+<p>the separation at the moment of failure: the pair is already compacted, and</p>
+<p>contact's job is to resist <em>further</em> approach rather than to violently undo</p>
+<p>the compaction. Pairs that fail while still separated keep the nominal <code>d_c</code>.</p>
 <h3 id="4-3-viscosity">4.3 Viscosity</h3>
 <p>A small linear Kelvin–Voigt term (≈ 1 % of critical by default) plus a</p>
 <p>compression-only quadratic term in the von Neumann–Richtmyer spirit, scaled so</p>
