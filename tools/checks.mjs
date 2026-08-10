@@ -120,7 +120,26 @@ const spall = run({
   type: 'hesh', proj: { velocity: 730, standoff: 0.6 },
   layers: [{ material: 'rha', thickness: 0.05 }],
 });
-check(spall.stats.brokenBonds > 0, `HESH damages the plate without perforating (${spall.stats.brokenBonds} failed bonds, perforated=${spall.stats.perforated})`);
+check(spall.stats.brokenBonds > 0, `HESH damages the plate (${spall.stats.brokenBonds} failed bonds)`);
+check(!spall.stats.perforated,
+  'HESH does not report perforating a plate it never entered (chemical rounds have no kinetic penetrator, '
+  + 'so the depth threshold must not be zero)');
+
+console.log('\n== depth and perforation cannot disagree ==');
+// Both are read from the same mass-percentile measure, so "the depth exceeds
+// the plate" and "perforated" must always agree. They disagreed before: depth
+// came from the single deepest node, perforation from a bulk-mass test, and a
+// comminuted penetrator would report 155 mm into a 150 mm plate as "partial".
+for (const [name, r, thickness] of [
+  ['60 mm flat', thin, 0.06], ['200 mm flat', thick, 0.20],
+  ['70 mm flat', flat, 0.07], ['70 mm at 60 deg', sloped, 0.07],
+  ['40 mm at 60 deg', slopeThrough, 0.04],
+]) {
+  const past = r.stats.maxDepth > thickness;
+  check(past === r.stats.perforated,
+    `${name}: depth ${(r.stats.maxDepth * 1000).toFixed(0)} mm vs ${(thickness * 1000).toFixed(0)} mm `
+    + `-> past=${past}, perforated=${r.stats.perforated}`);
+}
 
 console.log(`\n${failures === 0 ? 'all checks passed' : `${failures} CHECK(S) FAILED`}\n`);
 process.exit(failures === 0 ? 0 : 1);

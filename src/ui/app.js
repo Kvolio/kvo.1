@@ -207,6 +207,15 @@ export class App {
       (v) => { w.settings.maxEventTime = v * 1e-6; }, (v) => `${v} µs`);
     p.body.appendChild(el('div', { class: 'row' }, el('label', {}, 'Resolved window'), ev.out, ev.range));
 
+    const cw = slider(0.6, 4, w.settings.corridorScale ?? 1, 0.1,
+      (v) => { w.settings.corridorScale = v; w.reset(); }, (v) => `${v.toFixed(1)}×`);
+    p.body.appendChild(el('div', { class: 'row' }, el('label', {}, 'Deformable zone width'), cw.out, cw.range));
+    p.body.appendChild(el('div', { class: 'hint' },
+      'How much of the plate is meshed as deformable continuum. Everything outside it is '
+      + 'static geometry. Widening it enlarges the region that can crater, crack and spall — '
+      + 'but at a fixed node budget it also coarsens the lattice, so raise Discretisation '
+      + 'alongside it if the device can afford to.'));
+
     p.body.appendChild(el('h3', { style: 'background:none;padding:8px 0 2px;position:static' }, 'Model parameters'));
     const mk = (label, get, set, min, max, step, fmt2) => {
       const s = slider(min, max, get(), step, set, fmt2);
@@ -380,11 +389,15 @@ export class App {
       ['Array — normal / LOS', `${U.len(w.scene.normalTotal)} / ${U.len(w.scene.losTotal)}`],
       ['Perforated', s.perforated ? 'YES' : 'no', s.perforated ? 'bad' : 'good'],
       ['Ricochet', s.ricochet ? 'YES' : 'no'],
-      at ? ['Residual mass (attached)', U.mass(at.mass)] : ['Penetrator mass (attached)', U.mass(s.residualMass)],
-      ['Undamaged core mass', U.mass(at ? at.coherent : (s.coherentMass || 0))],
+      at ? ['Residual mass in target', U.mass(at.mass)] : ['Penetrator mass in target', U.mass(s.residualMass)],
+      ['— in the channel', U.mass(s.channelMass || 0)],
+      ['— still one body', U.mass(at ? at.attached : (s.attachedMass || 0))],
+      ['— comminuted debris', U.mass(s.comminutedMass || 0)],
+      ['— largely undamaged', U.mass(at ? at.coherent : (s.coherentMass || 0))],
       at ? ['Residual velocity', U.vel(at.velocity)] : ['Penetrator velocity', U.vel(s.residualVelocity)],
       at ? ['Residual energy', U.energy(at.ke)] : null,
-      ['Mass eroded / lost', U.mass(at ? at.eroded : s.erodedMass)],
+      at && at.through ? ['Mass through back face', U.mass(at.through)] : null,
+      ['Mass lost from domain', U.mass(at ? at.eroded : s.erodedMass)],
       ['Back-face bulge', U.len(s.backfaceBulge)],
       ['Spall mass (detached)', U.mass(s.spallMass)],
       ['Fragments transported', String(s.fragmentCount)],
@@ -784,7 +797,8 @@ export class App {
       const s = w.stats;
       push(`<b>penetration</b> ${U.len(s.maxDepth)} normal of ${U.len(w.scene.normalTotal)}`
         + `  ·  ${U.len(s.maxDepthLOS || 0)} along shot line`);
-      push(`<b>penetrator</b> ${U.mass(s.residualMass)} @ ${U.vel(s.residualVelocity)}  ·  eroded ${U.mass(s.erodedMass)}`);
+      push(`<b>penetrator</b> ${U.mass(s.residualMass)} @ ${U.vel(s.residualVelocity)}`
+        + `  ·  ${U.mass(s.attachedMass || 0)} coherent  ·  lost ${U.mass(s.erodedMass)}`);
       push(`<b>armour</b> ${s.brokenBonds.toLocaleString()} failed bonds · spall ${U.mass(s.spallMass)} · bulge ${U.len(s.backfaceBulge)}`);
       if (s.perforated) push('<b>PERFORATED</b>', true);
       if (s.ricochet) push('<b>RICOCHET</b>', true);

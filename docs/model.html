@@ -353,6 +353,17 @@ v_r    = m/(m + m_plug) · √(v² - v_bl²)    (Recht &amp; Ipson 1963)</code><
 </ul>
 <p>  sloped at theta it is longer by <code>1/cos(theta)</code>: 120 mm of plate at 60 deg is</p>
 <p>  240 mm of line of sight.</p>
+<p>Both are read as a <strong>mass percentile, not as the deepest single node</strong>: depth</p>
+<p>is the deepest plane that at least 1 % of the original penetrator mass has</p>
+<p>reached, accumulated from the deep end of a histogram over the channel. A</p>
+<p>comminuted penetrator has a cloud for a tip and its foremost node is noise. The</p>
+<p>perforation test reads the <em>same</em> measure against the last layer's back face,</p>
+<p>so "the depth exceeds the plate" and "perforated" cannot disagree — they are</p>
+<p>one number against one threshold.</p>
+<p>Only material inside the channel counts — within about two penetrator diameters</p>
+<p>of the shot axis, and not moving backwards out of the crater. Material thrown</p>
+<p>sideways along the struck face is ejecta; letting it set the depth would report</p>
+<p>a penetration that never happened.</p>
 <p>The back-face bulge is measured in the last layer's own frame, and only for</p>
 <p>material more than about one penetrator diameter off the shot axis. Material</p>
 <p>pushed out through the hole is petalling, not bulging, and would otherwise</p>
@@ -391,9 +402,26 @@ v_r    = m/(m + m_plug) · √(v² - v_bl²)    (Recht &amp; Ipson 1963)</code><
 <p>   documented data points and is displayed as such. RHA-equivalence figures are</p>
 <p>   coarse scalings from density/hardness/toughness and are labelled indicative.</p>
 <ol>
+<li><strong>Comminuted material has no pressure-dependent strength.</strong> This is the</li>
+</ol>
+<p>    most consequential gap for brittle penetrators and ceramic armour. Once a</p>
+<p>    region's bonds have failed, load transfer is by short-range contact with a</p>
+<p>    single Coulomb friction coefficient. Real comminuted ceramic and carbide</p>
+<p>    retain substantial strength under confining pressure — that is the entire</p>
+<p>    basis of the Johnson-Holmquist family of models, which carry separate</p>
+<p>    intact and failed strength surfaces with the failed surface rising with</p>
+<p>    pressure. Without it, a tungsten-carbide core that shatters on impact</p>
+<p>    (which it correctly does — WC fails at ~0.4 % strain, and lateral Poisson</p>
+<p>    expansion under a 50+ GPa shock reaches several times that) then does less</p>
+<p>    work than it should as a confined granular slug. Expect this model to</p>
+<p>    under-predict for APCR and APDS, and for ceramic arrays, more than for</p>
+<p>    monolithic steel. Adding a JH-style failed-strength surface in</p>
+<p>    <code>materials/derive.js</code> and <code>sim/pd/solver.js</code> is the single highest-value</p>
+<p>    improvement available.</p>
+<ol>
 <li><strong>Ceramic strength collapse</strong> at very high impact stress (the</li>
 </ol>
-<p>   Wilkins/Curran "failed ceramic" regime) is not modelled.</p>
+<p>    Wilkins/Curran "failed ceramic" regime) is not modelled.</p>
 <ol>
 <li><strong>Fragment count is capped</strong> (1400) for performance; retired mass is</li>
 </ol>

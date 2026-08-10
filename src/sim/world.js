@@ -48,6 +48,13 @@ import { analyticPanel } from './analytics.js';
  * horizon/spacing ratio (a larger horizon is more accurate peridynamics but
  * costs O(m^2) bonds), `substeps` the CFL steps evaluated per rendered frame.
  */
+/**
+ * Fraction of the original penetrator mass that has to reach a plane before
+ * that plane counts as "reached". Used identically by the depth measure and
+ * the perforation test so the two cannot contradict each other.
+ */
+const PEN_FRACTION = 0.01;
+
 export const QUALITY = {
   low: { budget: 3200, across: 8, mRatio: 2.415, substeps: 3, label: 'Low — fastest' },
   normal: { budget: 6000, across: 11, mRatio: 2.715, substeps: 4, label: 'Normal' },
@@ -76,6 +83,7 @@ export class World {
       recordFrames: true,
       seed: 20260810,
       maxEventTime: 3.5e-4,     // hard bound on the resolved continuum window
+      corridorScale: 1.0,       // width multiplier for the deformable corridor
     };
 
     this.state = 'idle';
@@ -285,7 +293,13 @@ export class World {
       corridorCal = 5.5;
     }
     const dx0 = refD / q.across;
-    const width = Math.max(corridorCal * (chemical ? cal : refD), 0.95 * this.scene.losTotal, 0.05);
+    // The corridor is the deformable region. Everything outside it is drawn as
+    // static geometry and enters only through the boundary treatment, so
+    // widening it enlarges the part of the plate that can actually crater,
+    // crack and spall. At a fixed node budget a wider corridor means a coarser
+    // lattice, which is the trade the user is making with this control.
+    const width = Math.max(corridorCal * (chemical ? cal : refD), 0.95 * this.scene.losTotal, 0.05)
+      * (this.settings.corridorScale ?? 1);
     return { dx0, refD, width, chemical, budget: q.budget, mRatio: q.mRatio };
   }
 
@@ -641,6 +655,9 @@ export class World {
       d.role[i] = ROLE.PENETRATOR;
     }
     this.solver.E0 += Math.max(0, this.solver.kinetic() - keBefore);
+    // the liner has just become the penetrator; the cached initial penetrator
+    // mass was measured before that and is now stale
+    this._penMass0Domain = null;
     this.log.add(this.simTime, 'jet-formed',
       `Shaped-charge liner collapsed — imposed jet gradient ${tail.toFixed(0)}-${tip.toFixed(0)} m/s over ${(span * 1000).toFixed(0)} mm`,
       SEV.MAJOR);
@@ -736,34 +753,73 @@ export class World {
     const ix = st.impactX ?? fx, iy = st.impactY ?? 0;
     const ax = d.ax, ay = d.ay;             // shot direction
     const channelHalfWidth = this.projectile.geom.penDiameter * 0.9;
+    const channelRadius = this.projectile.geom.penDiameter * 2.0;
+
+    // DEPTH AS A MASS PERCENTILE, NOT A SINGLE DEEPEST NODE
+    // The tip of a comminuted penetrator is a cloud, and its foremost node is
+    // noise. Depth is therefore the deepest plane that at least PEN_FRACTION of
+    // the original penetrator mass has reached, accumulated from the deep end
+    // of a histogram. Perforation uses the same measure in the last layer's
+    // frame, so "depth exceeds the plate" and "perforated" can no longer
+    // disagree - they are the same number read against the same threshold.
+    const NB = 256;
+    if (!this._histA) { this._histA = new Float32Array(NB); this._histB = new Float32Array(NB); }
+    const histA = this._histA, histB = this._histB;
+    histA.fill(0); histB.fill(0);
+    const aLo = -0.03, aHi = this.scene.normalTotal + 0.20;
+    const bLo = -0.05, bHi = tL + 0.20;
+    const aStep = (aHi - aLo) / NB, bStep = (bHi - bLo) / NB;
 
     let deepest = -Infinity, deepestLast = -Infinity, deepestLos = -Infinity;
-    let penMass = 0, penKE = 0, penVX = 0, penVY = 0;
+    let penMass = 0;
+    let chanMass = 0, chanKE = 0, chanVX = 0, chanVY = 0, massThrough = 0;
     let sMin = Infinity, sMax = -Infinity, uMin = Infinity, uMax = -Infinity;
-    let spall = 0, freeCount = 0, hot = 293, coherent = 0;
+    let spall = 0, freeCount = 0, hot = 293, coherent = 0, attached = 0;
     let bulge = 0;
 
     for (let i = 0; i < d.n; i++) {
       if (!d.alive[i]) continue;
       if (d.temp[i] > hot) hot = d.temp[i];
-      // "residual" = still part of the penetrator body. A node on a freshly
-      // eroded surface legitimately loses a large fraction of its bonds (the
-      // peridynamic surface effect), so the test is detachment, not damage.
-      if (d.role[i] === ROLE.PENETRATOR && !(d.flags[i] & 8)) {
+      // PENETRATOR ACCOUNTING
+      // Comminuted material has not gone anywhere: a shattered carbide core is
+      // still 1.8 kg of dense debris inside the cavity, still being driven
+      // forward, still doing work through contact. Counting only *attached*
+      // nodes reports a fully comminuted penetrator as "0 mg at 0 m/s", which
+      // is not what the solver computed. So the primary figures cover every
+      // penetrator node still in the domain, and coherence is reported beside
+      // them rather than instead of them.
+      if (d.role[i] === ROLE.PENETRATOR) {
         const m = d.mass[i];
         penMass += m;
-        penVX += d.vx[i] * m; penVY += d.vy[i] * m;
-        penKE += 0.5 * m * (d.vx[i] * d.vx[i] + d.vy[i] * d.vy[i]);
+        if (!(d.flags[i] & 8)) attached += m;
+        if (d.damage[i] < 0.5) coherent += m;
+
+        // DEPTH IS A PROPERTY OF THE CHANNEL, NOT OF THE DEBRIS CLOUD.
+        // A comminuted penetrator throws material sideways and backwards along
+        // the struck face in wide fans. Taking the deepest node over all of it
+        // lets one ejected fragment define the penetration depth. Only material
+        // still inside the channel - within a couple of penetrator diameters of
+        // the shot axis - counts towards depth, velocity and perforation.
+        const lat = Math.abs((d.px[i] - d.ox) * d.bx + (d.py[i] - d.oy) * d.by);
+        if (lat > channelRadius) continue;
+        // material spraying back out of the crater is ejecta, not penetration
+        if (d.vx[i] * ax + d.vy[i] * ay < -50) continue;
+
+        chanMass += m;
+        chanVX += d.vx[i] * m; chanVY += d.vy[i] * m;
+        chanKE += 0.5 * m * (d.vx[i] * d.vx[i] + d.vy[i] * d.vy[i]);
         const depth = (d.px[i] - fx) * n0[0] + d.py[i] * n0[1];
-        if (depth > deepest) deepest = depth;
+        const ia = Math.min(NB - 1, Math.max(0, ((depth - aLo) / aStep) | 0));
+        histA[ia] += m;
         const dLast = (d.px[i] - fxL) * nL[0] + d.py[i] * nL[1];
-        if (dLast > deepestLast) deepestLast = dLast;
+        const ib = Math.min(NB - 1, Math.max(0, ((dLast - bLo) / bStep) | 0));
+        histB[ib] += m;
+        if (dLast > tL) massThrough += m;
         const dLos = (d.px[i] - ix) * ax + (d.py[i] - iy) * ay;
         if (dLos > deepestLos) deepestLos = dLos;
         const s = d.px[i], u = d.py[i];
         if (s < sMin) sMin = s; if (s > sMax) sMax = s;
         if (u < uMin) uMin = u; if (u > uMax) uMax = u;
-        if (d.damage[i] < 0.5) coherent += m;
       }
       if (d.role[i] === ROLE.ARMOUR) {
         if (d.flags[i] & 8) { spall += d.mass[i]; freeCount++; }
@@ -790,13 +846,34 @@ export class World {
       }
     }
 
+    // read both histograms from the deep end
+    // A chemical round has no kinetic penetrator at all, so the threshold must
+    // have a floor: with need = 0 the very first histogram bin satisfies it and
+    // a HESH round would report perforating a plate it never entered.
+    const need = Math.max(this.penetratorMass0() * PEN_FRACTION, 1e-9);
+    let acc = 0;
+    for (let k = NB - 1; k >= 0; k--) {
+      acc += histA[k];
+      if (acc >= need) { deepest = aLo + (k + 1) * aStep; break; }
+    }
+    acc = 0;
+    for (let k = NB - 1; k >= 0; k--) {
+      acc += histB[k];
+      if (acc >= need) { deepestLast = bLo + (k + 1) * bStep; break; }
+    }
+
     st.maxDepth = Math.max(st.maxDepth, isFinite(deepest) ? deepest : 0);
     st.maxDepthLOS = Math.max(st.maxDepthLOS || 0, isFinite(deepestLos) ? deepestLos : 0);
-    st.residualMass = penMass;
-    st.coherentMass = coherent;
-    st.residualVelocity = penMass > 0 ? Math.hypot(penVX / penMass, penVY / penMass) : 0;
+    st.residualMass = penMass;          // penetrator material still in the domain
+    st.attachedMass = attached;         // of that, still bonded into one body
+    st.coherentMass = coherent;         // of that, still largely undamaged
+    st.comminutedMass = Math.max(0, penMass - attached);
+    st.channelMass = chanMass;
+    st.residualVelocity = chanMass > 0 ? Math.hypot(chanVX / chanMass, chanVY / chanMass) : 0;
     st.residualLength = isFinite(sMax) ? Math.hypot(sMax - sMin, uMax - uMin) : 0;
-    st.residualKE = penKE;
+    st.residualKE = chanKE;
+    // "lost" means gone from the domain - promoted to a ballistic fragment or
+    // retired - not merely fragmented in place
     st.erodedMass = Math.max(0, this.penetratorMass0() - penMass);
     st.spallMass = spall;
     st.spallCount = freeCount;
@@ -808,24 +885,28 @@ export class World {
     // through when the deepest coherent node has passed the back face of the
     // last layer, measured along that layer's own normal against its own
     // normal thickness
-    if (!st.perforated && deepestLast > tL * 0.995 && penMass > this.penetratorMass0() * 0.02) {
+    // Perforation = a measurable amount of penetrator material got past the
+    // back face inside the channel. Testing a single deepest node instead lets
+    // one stray fragment call a perforation that did not happen.
+    if (!st.perforated && isFinite(deepestLast) && deepestLast > tL) {
       st.perforated = true;
       // freeze the residual state at the moment of break-out: afterwards the
       // remnant simply leaves the meshed corridor and the live counters fall
       st.atPerforation = {
         t: this.simTime, mass: penMass, velocity: st.residualVelocity,
-        ke: penKE, length: st.residualLength,
+        ke: chanKE, length: st.residualLength, through: massThrough,
         eroded: this.penetratorMass0() - penMass,
-        coherent,
+        coherent, attached,
         depthNormal: st.maxDepth, depthLOS: st.maxDepthLOS,
       };
       this.log.add(this.simTime, 'perforation',
-        `PERFORATION — residual ${(penMass * 1000).toFixed(0)} g at ${st.residualVelocity.toFixed(0)} m/s ` +
-        `(${(penKE / 1000).toFixed(0)} kJ)`, SEV.CRITICAL, { ...st.atPerforation });
+        `PERFORATION — ${(massThrough * 1000).toFixed(0)} g through the back face at ` +
+        `${st.residualVelocity.toFixed(0)} m/s (${(chanKE / 1000).toFixed(0)} kJ in the channel)`,
+        SEV.CRITICAL, { ...st.atPerforation });
     }
     // ricochet: penetrator turned away and is leaving without perforating
-    if (!st.perforated && penMass > 0 && st.residualVelocity > 80) {
-      const away = (penVX / penMass) * n0[0] + (penVY / penMass) * n0[1];
+    if (!st.perforated && chanMass > 0 && st.residualVelocity > 80) {
+      const away = (chanVX / chanMass) * n0[0] + (chanVY / chanMass) * n0[1];
       if (away < -30 && !st.ricochet) {
         st.ricochet = true;
         this.log.add(this.simTime, 'ricochet',
