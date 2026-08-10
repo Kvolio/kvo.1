@@ -1,9 +1,35 @@
-name: Deploy to GitHub Pages
+name: CI and Pages deploy
 
+# WHAT THIS DOES
+#
 # The site is static: index.html plus the src/ module tree, which GitHub Pages
-# can serve as-is over HTTPS. The build step exists to regenerate the
-# single-file bundle and the rendered model document, and the check step runs
-# the solver headlessly so a physics regression cannot reach the published URL.
+# serves as-is over HTTPS. There is nothing to compile, so publishing does not
+# depend on this workflow at all.
+#
+# On every push to main it:
+#   1. runs the headless physics checks, so a solver regression is visible
+#      before anyone opens the site;
+#   2. regenerates the single-file bundle and the rendered model document.
+#
+# PAGES DEPLOYMENT
+#
+# Two ways to publish, and only one of them involves this workflow:
+#
+#   Settings -> Pages -> Source -> "Deploy from a branch" (main, / root)
+#       GitHub serves the branch directly. Pushing to main updates the site.
+#       This is the current setup, and the deploy job below is skipped.
+#
+#   Settings -> Pages -> Source -> "GitHub Actions"
+#       The deploy job takes over. Enable it by adding a repository variable
+#       (Settings -> Secrets and variables -> Actions -> Variables):
+#           PAGES_VIA_ACTIONS = true
+#       Note that the github-pages environment only accepts deployments from
+#       the repository's default branch, so main must be the default branch.
+#
+# The deploy job is gated rather than deleted because a job that cannot
+# succeed in the current configuration should be *skipped*, not left to fail
+# on every push - a permanently red workflow trains you to ignore the one that
+# actually matters.
 
 on:
   push:
@@ -15,7 +41,6 @@ permissions:
   pages: write
   id-token: write
 
-# Never let two deployments race; always finish the newest one.
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -36,21 +61,19 @@ jobs:
       - name: Build single-file bundle and rendered docs
         run: node tools/build.mjs
 
-      # enablement:true lets the first successful run turn Pages on by itself,
-      # so the only manual step is choosing "GitHub Actions" as the source if
-      # the repository has never had Pages enabled.
       - name: Configure Pages
+        if: vars.PAGES_VIA_ACTIONS == 'true'
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - name: Upload site
+        if: vars.PAGES_VIA_ACTIONS == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: .
 
   deploy:
     needs: build
+    if: vars.PAGES_VIA_ACTIONS == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

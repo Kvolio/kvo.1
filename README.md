@@ -36,17 +36,19 @@ That build inlines every module and runs from `file://`. It also renders
 
 ## Publishing it
 
-The repository is already configured for GitHub Pages. Push to `main` and the
-workflow in `.github/workflows/deploy.yml` runs the headless physics checks,
-builds, and publishes to
+The site is static — `index.html` plus the `src/` module tree — so GitHub Pages
+serves it with no build step. Every path is relative, so it works from a
+repository subdirectory with no base-path configuration.
 
-```
-https://<your-user>.github.io/<your-repo>/
-```
+**Settings → Pages → Source → Deploy from a branch → `main` / `(root)`.**
+Pushing to `main` then updates the site directly.
 
-Enable it once under **Settings → Pages → Source → GitHub Actions**. Every
-path in the project is relative, so the site works from a subdirectory without
-any base-path configuration.
+`.github/workflows/deploy.yml` runs the headless physics checks and the build
+on every push, so a solver regression shows up before anyone opens the site. It
+can also do the publishing itself: set **Source → GitHub Actions**, make `main`
+the default branch (the `github-pages` environment only accepts deployments
+from it), and add the repository variable `PAGES_VIA_ACTIONS = true`. Until
+then the deploy job is skipped rather than left to fail.
 
 On a phone, **Share → Add to Home Screen** installs it as a standalone app
 (there is a web manifest and an apple-touch-icon), which gets rid of the Safari
