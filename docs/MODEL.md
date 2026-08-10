@@ -469,7 +469,17 @@ dominate the figure the moment the plate is perforated.
 ## 7. Known limitations
 
 1. **Not validated.** No comparison against firing trials has been performed.
-2. **Energy drift** of tens of per cent on violent impacts (§4.5).
+2. **Energy drift** of tens of per cent on violent impacts (§4.5). The
+   *creation* of energy has been eliminated — kinetic energy no longer grows
+   over the course of an impact for any projectile type, and the bond force is
+   verified against a finite-difference gradient of its potential (§3.3) — but
+   the audit does not yet close. What remains is bookkeeping rather than a
+   blow-up: the broken-bond contact branch records neither its damping nor its
+   friction work, so dissipation goes unattributed, and fracture releases a
+   bond's whole potential while its neighbours' dilatational energy shifts
+   unaccounted at the same instant. Read the reported drift as the width of the
+   error bar on the energy breakdown, not as a statement that the run is
+   diverging.
 3. **Poisson's ratio locked to 1/3** by the bond-based formulation (§3.2).
 4. **Plane strain.** Radial flow, hoop stress and out-of-plane confinement are
    represented by a single scalar calibration factor (§3.6). Anything whose

@@ -235,7 +235,7 @@ export class PDSolver {
     const fx = d.fx, fy = d.fy;
     const bi = d.bi, bj = d.bj, bk = d.bk, bref = d.bref, bsp = d.bsp;
     const bsy = d.bsy, bsf = d.bsf, bsten = d.bsten, bstate = d.bstate;
-    const theta = d.theta, thetaAcc = d.thetaAcc, thetaCnt = d.thetaCnt;
+    const theta = d.theta, thetaAcc = d.thetaAcc;
     const bstretch = this.bstretch, bse = this.bse;
     const plStrain = d.plStrain;
     const bdamp = d.bdamp, bdampQ = d.bdampQ, bcrit = d.bcrit;
@@ -246,13 +246,14 @@ export class PDSolver {
     fx.fill(0); fy.fill(0); virial.fill(0);
 
     // ---- pass 1: local dilatation ---------------------------------------
-    // theta_i is the mean stretch of the bonds still attached to node i. For
-    // uniform dilatation every bond stretches equally and theta recovers the
-    // volumetric strain; for pure shear the bond stretches average to zero.
+    // theta_i sums the stretch of the bonds still attached to node i and
+    // divides by the node's ORIGINAL bond count (see below). For uniform
+    // dilatation of undamaged material every bond stretches equally and theta
+    // recovers the volumetric strain; for pure shear the stretches cancel.
     // It must be evaluated at the *current* configuration: lagging it by even
     // one step couples the stiffest (hydrostatic) mode to a delayed force and
     // drives an explicit instability that no realistic time step survives.
-    thetaAcc.fill(0); thetaCnt.fill(0);
+    thetaAcc.fill(0);
     for (let b = 0; b < nb; b++) {
       if (bstate[b] !== BOND.INTACT) continue;
       const i = bi[b], j = bj[b];
@@ -262,7 +263,6 @@ export class PDSolver {
       const st = (Math.sqrt(dx * dx + dy * dy) - r0) / r0;
       bstretch[b] = st;
       thetaAcc[i] += st; thetaAcc[j] += st;
-      thetaCnt[i]++; thetaCnt[j]++;
     }
     // Normalised by the node's ORIGINAL bond count, not by the number still
     // intact. Re-averaging over the surviving bonds makes theta jump every

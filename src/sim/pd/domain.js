@@ -254,7 +254,6 @@ export class PDDomain {
     this.srate = F(n);         // smoothed local strain rate (1/s)
     this.theta = F(n);         // local dilatation (mean bond stretch)
     this.thetaAcc = F(n);      // accumulator for the next step's dilatation
-    this.thetaCnt = new Uint16Array(n);
     this.plStrain = F(n);      // accumulated equivalent plastic strain
     this.flowMul = F(n);       // cached Johnson-Cook flow-stress multiplier
     this.flowMul.fill(1);
