@@ -36,8 +36,13 @@ jobs:
       - name: Build single-file bundle and rendered docs
         run: node tools/build.mjs
 
+      # enablement:true lets the first successful run turn Pages on by itself,
+      # so the only manual step is choosing "GitHub Actions" as the source if
+      # the repository has never had Pages enabled.
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
