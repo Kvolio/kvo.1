@@ -86,6 +86,25 @@ const sloped = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 }, laye
 check(sloped.stats.maxDepth < flat.stats.maxDepth,
   `obliquity helps the armour: 0° -> ${(flat.stats.maxDepth * 1000).toFixed(0)} mm, 60° -> ${(sloped.stats.maxDepth * 1000).toFixed(0)} mm`);
 
+console.log('\n== depth frames: normal vs line of sight ==');
+// Regression guard. Depth is measured along the plate normal; the perforation
+// threshold must therefore be the plate's NORMAL thickness, not its
+// line-of-sight thickness. Comparing the two under-reports perforation by
+// 1/cos(theta) and pins the back-face bulge at zero, and only shows up on
+// sloped plate - a flat-plate test cannot see it.
+const slopeThrough = run({
+  type: 'apcbc', proj: { velocity: 800, standoff: 0.6 },
+  layers: [{ material: 'rha', thickness: 0.04, slope: 60 }],
+});
+check(slopeThrough.stats.perforated,
+  `40 mm RHA at 60 deg (80 mm LOS) is reported perforated `
+  + `(normal depth ${(slopeThrough.stats.maxDepth * 1000).toFixed(0)} mm vs 40 mm of plate)`);
+check(slopeThrough.stats.maxDepthLOS >= slopeThrough.stats.maxDepth * 0.999,
+  `line-of-sight depth >= normal depth on sloped plate `
+  + `(${(slopeThrough.stats.maxDepthLOS * 1000).toFixed(0)} vs ${(slopeThrough.stats.maxDepth * 1000).toFixed(0)} mm)`);
+check(slopeThrough.stats.backfaceBulge > 0,
+  `back-face bulge is measured on sloped plate (${(slopeThrough.stats.backfaceBulge * 1000).toFixed(1)} mm)`);
+
 console.log('\n== conservation and sanity ==');
 check(thin.w.solver && Number.isFinite(thin.w.solver.energyAudit().drift),
   `energy audit produces a finite drift (${(thin.w.solver.energyAudit().drift * 100).toFixed(0)} %)`);

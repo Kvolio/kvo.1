@@ -3939,7 +3939,7 @@ class World {
 
   blankStats() {
     return {
-      penetration: 0, maxDepth: 0, channelLength: 0,
+      penetration: 0, maxDepth: 0, maxDepthLOS: 0, channelLength: 0,
       residualMass: 0, residualVelocity: 0, residualLength: 0,
       erodedMass: 0, spallMass: 0, fragmentCount: 0,
       perforated: false, ricochet: false, embedded: false,
@@ -4560,16 +4560,34 @@ class World {
     const layers = this.scene.activeLayers();
     const first = layers[0];
     if (!first) return;
+
+    // DEPTH FRAMES
+    // Two different measures get confused very easily, so they are kept
+    // explicitly apart here:
+    //   normal depth  - distance through the plate along its own normal. This
+    //                   is "how much plate thickness has been defeated", and it
+    //                   is what the perforation test must use.
+    //   line of sight - distance along the shot line. On a plate sloped at
+    //                   theta this is longer by 1/cos(theta): a 120 mm plate at
+    //                   60 deg is 240 mm of LOS.
+    // Comparing a normal depth against an LOS thickness under-reports
+    // perforation by exactly that factor, and pins the back-face bulge test at
+    // a threshold the plate can never reach.
     const n0 = first.normal;
     const fx = first.frontX;
+    const last = layers[layers.length - 1];
+    const nL = last.normal, fxL = last.frontX;
+    const tL = last.thickness;              // NORMAL thickness of the last layer
+    const lastIdx = layers.length - 1;
+    const ix = st.impactX ?? fx, iy = st.impactY ?? 0;
+    const ax = d.ax, ay = d.ay;             // shot direction
+    const channelHalfWidth = this.projectile.geom.penDiameter * 0.9;
 
-    let deepest = -Infinity, penMass = 0, penKE = 0, penVX = 0, penVY = 0;
+    let deepest = -Infinity, deepestLast = -Infinity, deepestLos = -Infinity;
+    let penMass = 0, penKE = 0, penVX = 0, penVY = 0;
     let sMin = Infinity, sMax = -Infinity, uMin = Infinity, uMax = -Infinity;
     let spall = 0, freeCount = 0, hot = 293, coherent = 0;
     let bulge = 0;
-
-    const lastBack = layers[layers.length - 1];
-    const backPlane = lastBack.frontX + lastBack.thickness / Math.max(0.15, Math.cos(lastBack.slope * Math.PI / 180));
 
     for (let i = 0; i < d.n; i++) {
       if (!d.alive[i]) continue;
@@ -4584,6 +4602,10 @@ class World {
         penKE += 0.5 * m * (d.vx[i] * d.vx[i] + d.vy[i] * d.vy[i]);
         const depth = (d.px[i] - fx) * n0[0] + d.py[i] * n0[1];
         if (depth > deepest) deepest = depth;
+        const dLast = (d.px[i] - fxL) * nL[0] + d.py[i] * nL[1];
+        if (dLast > deepestLast) deepestLast = dLast;
+        const dLos = (d.px[i] - ix) * ax + (d.py[i] - iy) * ay;
+        if (dLos > deepestLos) deepestLos = dLos;
         const s = d.px[i], u = d.py[i];
         if (s < sMin) sMin = s; if (s > sMax) sMax = s;
         if (u < uMin) uMin = u; if (u > uMax) uMax = u;
@@ -4595,18 +4617,27 @@ class World {
         // is still attached. Detached material is spall, not bulge, so it is
         // excluded - otherwise a scab flying off would be reported as an
         // enormous bulge.
-        if (d.damage[i] < 0.45) {
-          const dep = (d.px[i] - fx) * n0[0] + d.py[i] * n0[1];
-          const ref = (d.rx[i] - fx) * n0[0] + d.ry[i] * n0[1];
-          if (ref > (backPlane - fx) * 0.82) {
-            const move = dep - ref;
-            if (move > bulge) bulge = move;
+        // Measured in the LAST layer's own frame against its NORMAL thickness,
+        // and only outside the channel: material being pushed out through the
+        // hole is petalling, not bulging, and would otherwise dominate the
+        // figure once the plate is perforated. A bulge is the dishing of the
+        // rear face *around* the impact.
+        if (d.damage[i] < 0.45 && d.layer[i] === lastIdx) {
+          const lat = Math.abs((d.rx[i] - d.ox) * d.bx + (d.ry[i] - d.oy) * d.by);
+          if (lat > channelHalfWidth) {
+            const dep = (d.px[i] - fxL) * nL[0] + d.py[i] * nL[1];
+            const ref = (d.rx[i] - fxL) * nL[0] + d.ry[i] * nL[1];
+            if (ref > tL * 0.82) {
+              const move = dep - ref;
+              if (move > bulge) bulge = move;
+            }
           }
         }
       }
     }
 
     st.maxDepth = Math.max(st.maxDepth, isFinite(deepest) ? deepest : 0);
+    st.maxDepthLOS = Math.max(st.maxDepthLOS || 0, isFinite(deepestLos) ? deepestLos : 0);
     st.residualMass = penMass;
     st.coherentMass = coherent;
     st.residualVelocity = penMass > 0 ? Math.hypot(penVX / penMass, penVY / penMass) : 0;
@@ -4620,8 +4651,10 @@ class World {
     st.backfaceBulge = bulge;
     st.peakTemp = hot;
 
-    const throughDepth = (backPlane - fx);
-    if (!st.perforated && st.maxDepth > throughDepth * 0.995 && penMass > this.penetratorMass0() * 0.02) {
+    // through when the deepest coherent node has passed the back face of the
+    // last layer, measured along that layer's own normal against its own
+    // normal thickness
+    if (!st.perforated && deepestLast > tL * 0.995 && penMass > this.penetratorMass0() * 0.02) {
       st.perforated = true;
       // freeze the residual state at the moment of break-out: afterwards the
       // remnant simply leaves the meshed corridor and the live counters fall
@@ -4630,6 +4663,7 @@ class World {
         ke: penKE, length: st.residualLength,
         eroded: this.penetratorMass0() - penMass,
         coherent,
+        depthNormal: st.maxDepth, depthLOS: st.maxDepthLOS,
       };
       this.log.add(this.simTime, 'perforation',
         `PERFORATION — residual ${(penMass * 1000).toFixed(0)} g at ${st.residualVelocity.toFixed(0)} m/s ` +
@@ -4693,7 +4727,7 @@ class World {
     else headline = 'No penetration';
     return {
       headline, perforated: st.perforated, ricochet: st.ricochet,
-      depth: st.maxDepth,
+      depth: st.maxDepth, depthLOS: st.maxDepthLOS,
       residualVelocity: st.atPerforation ? st.atPerforation.velocity : st.residualVelocity,
       residualMass: st.atPerforation ? st.atPerforation.mass : st.residualMass,
       erodedMass: st.atPerforation ? st.atPerforation.eroded : st.erodedMass,
@@ -6783,7 +6817,9 @@ class App {
     }
     const at = s.atPerforation;
     p.body.appendChild(kv([
-      ['Max penetration depth', U.len(s.maxDepth), s.perforated ? 'bad' : ''],
+      ['Penetration — plate normal', U.len(s.maxDepth), s.perforated ? 'bad' : ''],
+      ['Penetration — along shot line', U.len(s.maxDepthLOS || 0)],
+      ['Array — normal / LOS', `${U.len(w.scene.normalTotal)} / ${U.len(w.scene.losTotal)}`],
       ['Perforated', s.perforated ? 'YES' : 'no', s.perforated ? 'bad' : 'good'],
       ['Ricochet', s.ricochet ? 'YES' : 'no'],
       at ? ['Residual mass (attached)', U.mass(at.mass)] : ['Penetrator mass (attached)', U.mass(s.residualMass)],
@@ -6823,7 +6859,7 @@ class App {
       p.body.appendChild(el('div', { class: 'note' }, `${m.name}: ${m.note}`));
     }
     p.body.appendChild(kv([
-      ['Simulated depth', U.len(w.stats.maxDepth)],
+      ['Simulated depth (normal)', U.len(w.stats.maxDepth)],
       ['Array LOS', U.len(w.analytics.arrayLOS || 0)],
       ['Array areal mass', `${(w.analytics.arealMass || 0).toFixed(0)} kg/m²`],
     ]));
@@ -7188,7 +7224,8 @@ class App {
     }
     if (w.domain) {
       const s = w.stats;
-      push(`<b>penetration</b> ${U.len(s.maxDepth)} of ${U.len(w.scene.losTotal)} LOS`);
+      push(`<b>penetration</b> ${U.len(s.maxDepth)} normal of ${U.len(w.scene.normalTotal)}`
+        + `  ·  ${U.len(s.maxDepthLOS || 0)} along shot line`);
       push(`<b>penetrator</b> ${U.mass(s.residualMass)} @ ${U.vel(s.residualVelocity)}  ·  eroded ${U.mass(s.erodedMass)}`);
       push(`<b>armour</b> ${s.brokenBonds.toLocaleString()} failed bonds · spall ${U.mass(s.spallMass)} · bulge ${U.len(s.backfaceBulge)}`);
       if (s.perforated) push('<b>PERFORATED</b>', true);

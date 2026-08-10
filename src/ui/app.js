@@ -375,7 +375,9 @@ export class App {
     }
     const at = s.atPerforation;
     p.body.appendChild(kv([
-      ['Max penetration depth', U.len(s.maxDepth), s.perforated ? 'bad' : ''],
+      ['Penetration — plate normal', U.len(s.maxDepth), s.perforated ? 'bad' : ''],
+      ['Penetration — along shot line', U.len(s.maxDepthLOS || 0)],
+      ['Array — normal / LOS', `${U.len(w.scene.normalTotal)} / ${U.len(w.scene.losTotal)}`],
       ['Perforated', s.perforated ? 'YES' : 'no', s.perforated ? 'bad' : 'good'],
       ['Ricochet', s.ricochet ? 'YES' : 'no'],
       at ? ['Residual mass (attached)', U.mass(at.mass)] : ['Penetrator mass (attached)', U.mass(s.residualMass)],
@@ -415,7 +417,7 @@ export class App {
       p.body.appendChild(el('div', { class: 'note' }, `${m.name}: ${m.note}`));
     }
     p.body.appendChild(kv([
-      ['Simulated depth', U.len(w.stats.maxDepth)],
+      ['Simulated depth (normal)', U.len(w.stats.maxDepth)],
       ['Array LOS', U.len(w.analytics.arrayLOS || 0)],
       ['Array areal mass', `${(w.analytics.arealMass || 0).toFixed(0)} kg/m²`],
     ]));
@@ -780,7 +782,8 @@ export class App {
     }
     if (w.domain) {
       const s = w.stats;
-      push(`<b>penetration</b> ${U.len(s.maxDepth)} of ${U.len(w.scene.losTotal)} LOS`);
+      push(`<b>penetration</b> ${U.len(s.maxDepth)} normal of ${U.len(w.scene.normalTotal)}`
+        + `  ·  ${U.len(s.maxDepthLOS || 0)} along shot line`);
       push(`<b>penetrator</b> ${U.mass(s.residualMass)} @ ${U.vel(s.residualVelocity)}  ·  eroded ${U.mass(s.erodedMass)}`);
       push(`<b>armour</b> ${s.brokenBonds.toLocaleString()} failed bonds · spall ${U.mass(s.spallMass)} · bulge ${U.len(s.backfaceBulge)}`);
       if (s.perforated) push('<b>PERFORATED</b>', true);

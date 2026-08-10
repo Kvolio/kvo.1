@@ -385,6 +385,25 @@ figures.
 
 ---
 
+## 6.1 Reported depths — two different measures
+
+Penetration is reported two ways, and they are not interchangeable:
+
+- **Normal depth** — distance through the plate along the plate's *own normal*.
+  This is "how much plate thickness has been defeated" and is the figure that
+  compares directly against a plate's quoted thickness. The perforation test
+  uses it against the last layer's normal thickness.
+- **Line-of-sight depth** — distance travelled along the shot line. On a plate
+  sloped at theta it is longer by `1/cos(theta)`: 120 mm of plate at 60 deg is
+  240 mm of line of sight.
+
+The back-face bulge is measured in the last layer's own frame, and only for
+material more than about one penetrator diameter off the shot axis. Material
+pushed out through the hole is petalling, not bulging, and would otherwise
+dominate the figure the moment the plate is perforated.
+
+---
+
 ## 7. Known limitations
 
 1. **Not validated.** No comparison against firing trials has been performed.
