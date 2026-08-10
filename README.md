@@ -17,21 +17,64 @@ node by node.
 
 ## Running it
 
-The application is plain ES modules with no build step and no dependencies, so
-it needs an HTTP origin:
+Nothing to install — plain ES modules, no framework, no dependencies. They need
+an HTTP origin, so:
 
 ```bash
-python3 -m http.server 8080
+npm start           # or: python3 -m http.server 8080
 # then open http://localhost:8080/
 ```
 
 If you would rather have one file you can double-click:
 
 ```bash
-node tools/build.mjs      # writes dist/terminal-ballistics.html
+npm run build       # writes dist/terminal-ballistics.html
 ```
 
-That build inlines every module and runs from `file://`.
+That build inlines every module and runs from `file://`. It also renders
+`docs/model.html` and regenerates the home-screen icons.
+
+## Publishing it
+
+The repository is already configured for GitHub Pages. Push to `main` and the
+workflow in `.github/workflows/deploy.yml` runs the headless physics checks,
+builds, and publishes to
+
+```
+https://<your-user>.github.io/<your-repo>/
+```
+
+Enable it once under **Settings → Pages → Source → GitHub Actions**. Every
+path in the project is relative, so the site works from a subdirectory without
+any base-path configuration.
+
+On a phone, **Share → Add to Home Screen** installs it as a standalone app
+(there is a web manifest and an apple-touch-icon), which gets rid of the Safari
+chrome and gives the viewport the full screen.
+
+## Performance and devices
+
+The simulation is the same on every device. What changes with the hardware is
+the node budget and how much simulated time fits into each frame — never the
+solver, the constitutive model or the time step.
+
+- **Device tier** is *measured*, not sniffed. Safari exposes no useful signal
+  for ranking Apple silicon, so a short latency-bound benchmark shaped like the
+  solver's bond loop runs at start-up and picks the tier. It is re-checked
+  between shots against the sub-step count the device actually sustained, so a
+  misjudged device corrects itself after one run. Override it in
+  **Simulation → Device profile**.
+- **The node field is drawn on the GPU** (WebGL 2, falling back to WebGL 1 then
+  Canvas 2D). Positions and one scalar per node are uploaded per frame; colour
+  ramps live in a texture, so switching field mode costs nothing and no
+  per-node colour arithmetic happens in JavaScript. Canvas 2 D remains as the
+  fallback path and after a context loss.
+- **The renderer allocates nothing per frame** and the frame recorder is a ring
+  of preallocated typed arrays sized to a memory budget rather than a frame
+  count.
+- **The governor** trims pixel ratio and sub-steps per frame to hold the frame
+  time. Current tier, backend, pixel ratio and benchmark score are all shown in
+  **Solver diagnostics**.
 
 ---
 
@@ -77,7 +120,9 @@ not because a lookup table said so.
 | `1`–`6` | field mode |
 | `+` / `-` / `0` | zoom in / out / fit |
 
-Drag to pan, wheel or pinch to zoom, click to inspect.
+Drag to pan, wheel or pinch to zoom, click to inspect. On a touch screen the
+panels collapse behind the Setup / Results / Viewport tabs, one-finger drag
+pans, two fingers pinch, and a tap inspects.
 
 ---
 

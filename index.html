@@ -5,6 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230a0d12'/%3E%3Crect x='18' y='4' width='7' height='24' fill='%237d8798'/%3E%3Cpath d='M4 16 L13 12 L13 20 Z' fill='%23d8564a'/%3E%3C/svg%3E">
+<meta name="description" content="Real-time peridynamic terminal-ballistics simulator: deformable armour, dynamic projectiles, penetration, spall and internal damage, all driven by the solver.">
+<meta name="theme-color" content="#0a0d12">
+<link rel="manifest" href="./manifest.webmanifest">
+<!-- iOS home-screen install: black-translucent puts the app under the status
+     bar, which the safe-area padding below already accounts for. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ballistics">
+<link rel="apple-touch-icon" href="./icons/icon-180.png">
 <title>Terminal Ballistics Sandbox — deformable armour / dynamic projectile simulation</title>
 <style>
 :root{
@@ -17,17 +27,24 @@
   --row:26px;
 }
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
-  font-family:var(--mono);font-size:12px;-webkit-text-size-adjust:100%}
-button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+/* 100dvh tracks mobile Safari's collapsing URL bar; the -webkit-fill-available
+   line is the fallback for older iOS that predates dvh units. */
+html,body{height:100%;height:-webkit-fill-available;height:100dvh;
+  overflow:hidden;overscroll-behavior:none;background:var(--bg);color:var(--ink);
+  font-family:var(--mono);font-size:12px;-webkit-text-size-adjust:100%;
+  -webkit-tap-highlight-color:transparent;
+  -webkit-touch-callout:none;text-size-adjust:100%}
+button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit;
+  touch-action:manipulation}
 
-#app{display:grid;height:100%;
+#app{display:grid;height:100%;height:100dvh;
   grid-template-columns:var(--lw,280px) 1fr var(--rw,320px);
   grid-template-rows:40px 1fr;
   grid-template-areas:"top top top" "left main right";}
 
 /* ---------------------------------------------------------------- topbar */
-#top{grid-area:top;display:flex;align-items:center;gap:8px;padding:0 10px;
+#top{grid-area:top;display:flex;align-items:center;gap:8px;
+  padding:0 max(10px,env(safe-area-inset-right)) 0 max(10px,env(safe-area-inset-left));
   background:linear-gradient(180deg,#161c25,#10151d);border-bottom:1px solid var(--edge);
   overflow-x:auto;overflow-y:hidden;white-space:nowrap;scrollbar-width:none}
 #top::-webkit-scrollbar{display:none}
@@ -55,8 +72,8 @@ aside{background:var(--panel);overflow-y:auto;overflow-x:hidden;
   -webkit-overflow-scrolling:touch;scrollbar-width:thin}
 aside::-webkit-scrollbar{width:8px}
 aside::-webkit-scrollbar-thumb{background:var(--edge2);border-radius:4px}
-#left{grid-area:left;border-right:1px solid var(--edge)}
-#right{grid-area:right;border-left:1px solid var(--edge)}
+#left{grid-area:left;border-right:1px solid var(--edge);padding-bottom:env(safe-area-inset-bottom)}
+#right{grid-area:right;border-left:1px solid var(--edge);padding-bottom:env(safe-area-inset-bottom)}
 
 .panel{border-bottom:1px solid var(--edge)}
 .panel>h3{display:flex;align-items:center;gap:6px;padding:7px 10px;cursor:pointer;
@@ -85,7 +102,11 @@ input:focus,select:focus{outline:1px solid var(--accent);border-color:var(--acce
 /* ------------------------------------------------------------------ main */
 #main{grid-area:main;position:relative;background:var(--bg);display:flex;flex-direction:column;min-width:0}
 #view{flex:1 1 auto;position:relative;min-height:0;touch-action:none}
-canvas#viewport{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:crosshair}
+#view canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+canvas#viewport{cursor:crosshair}
+/* the upper layers are painted over the base but must not steal the pointer:
+   all gestures are handled on the base canvas */
+canvas#viewportField,canvas#viewportFx{pointer-events:none}
 
 #hud{position:absolute;left:10px;top:10px;pointer-events:none;
   display:flex;flex-direction:column;gap:3px}
@@ -104,7 +125,7 @@ canvas#viewport{position:absolute;inset:0;width:100%;height:100%;display:block;c
 
 /* ------------------------------------------------------------- transport */
 #transport{flex:0 0 auto;border-top:1px solid var(--edge);background:#12171f;
-  padding:5px 8px;display:flex;align-items:center;gap:7px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  padding:5px max(8px,env(safe-area-inset-right)) max(5px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left));display:flex;align-items:center;gap:7px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
 #transport::-webkit-scrollbar{display:none}
 #scrub{flex:1 1 220px;min-width:120px;accent-color:var(--accent);height:18px}
 #tlabel{color:var(--dim);font-size:10px;white-space:nowrap;font-variant-numeric:tabular-nums}
@@ -143,17 +164,44 @@ table.kv tr.good td:last-child{color:var(--ok)}
 a{color:var(--accent)}
 
 /* ----------------------------------------------------------- responsive */
-#tabs{display:none;grid-area:top}
+/* assigned to its own row only in the mobile layout below; on desktop it is
+   not rendered at all */
+#tabs{display:none}
+/* Coarse pointers get larger hit targets: 36 px is the smallest control that
+   is comfortably tappable, and it keeps the dense engineering layout usable
+   without changing any of it. */
+@media (pointer: coarse){
+  button{min-height:36px;padding:8px 12px}
+  button.icon{min-width:42px;font-size:15px}
+  button.mini{min-height:30px}
+  input[type=number],input[type=text],select{min-height:34px;font-size:13px}
+  .row input[type=range]{height:30px}
+  #scrub{height:30px}
+  .layer .lh{padding:9px 8px}
+  .panel>h3{padding:11px 10px}
+}
+
 @media (max-width: 980px){
-  #app{grid-template-columns:1fr;grid-template-rows:40px 32px 1fr;
+  #app{grid-template-columns:1fr;grid-template-rows:44px auto 1fr;
     grid-template-areas:"top" "tabs" "main"}
-  #tabs{display:flex;gap:4px;padding:4px 6px;background:#12171f;border-bottom:1px solid var(--edge);
+  #tabs{grid-area:tabs;display:flex;gap:4px;background:#12171f;border-bottom:1px solid var(--edge);
+    padding:4px max(6px,env(safe-area-inset-right)) 4px max(6px,env(safe-area-inset-left));
     overflow-x:auto;scrollbar-width:none}
   #tabs::-webkit-scrollbar{display:none}
-  #tabs button{flex:0 0 auto;font-size:11px}
-  aside{position:fixed;left:0;right:0;bottom:0;top:112px;z-index:30;display:none;
-    background:var(--panel);border:none}
-  aside.show{display:block}
+  #tabs button{flex:0 0 auto;font-size:12px}
+  /* the HUD chips already carry the live readouts, so the top bar gives its
+     width to the controls instead */
+  #top .readout,#top .sep{display:none}
+  .brand{font-size:11px;letter-spacing:0}
+  #legend{max-width:132px;font-size:8.5px;padding:4px 6px;opacity:.92}
+  #legend .ends{font-size:8px}
+  /* the rails share the viewport's grid cell instead of being positioned
+     against a hard-coded header height, so notches and the dynamic URL bar
+     cannot push them off-screen */
+  /* the id selectors in the desktop layout outrank a bare `aside` rule, so the
+     override has to match their specificity */
+  #left,#right{grid-area:main;position:relative;z-index:30;display:none;border:none}
+  #left.show,#right.show{display:block}
   #main{grid-area:main}
   .brand small{display:none}
   /* keep the field legend clear of the readout chips on a narrow screen */
@@ -197,6 +245,8 @@ a{color:var(--accent)}
   <main id="main">
     <div id="view">
       <canvas id="viewport"></canvas>
+      <canvas id="viewportField"></canvas>
+      <canvas id="viewportFx"></canvas>
       <div id="hud"></div>
       <div id="legend"></div>
     </div>

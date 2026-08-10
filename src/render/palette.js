@@ -81,6 +81,18 @@ export const RAMP_STRESS = ramp([
   [1.00, [216, 74, 58]],
 ]);
 
+/**
+ * Fixed normalisation constants for the scalar fields. They are shared by the
+ * renderer, the GPU shader and the frame recorder so that a scrubbed frame is
+ * coloured on exactly the same scale as the live one.
+ */
+export const FIELD_SCALES = {
+  tempSpan: 1200,     // K above ambient mapped across the ramp
+  velocity: 2000,     // m/s at the top of the ramp
+  stress: 2.5e9,      // Pa at each end of the diverging ramp
+  plasticSpan: 3,     // multiples of the material failure strain
+};
+
 export const FIELD_MODES = [
   { key: 'material', label: 'Material', legend: 'body colour by material, darkened by local damage' },
   { key: 'damage', label: 'Damage φ', unit: '0–1', legend: 'fraction of a node\'s bonds that have failed' },

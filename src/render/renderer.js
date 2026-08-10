@@ -21,15 +21,39 @@
  *   7  overlays: shot line, corridor bounds, measurements, selection
  */
 
-import { UI, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, rgb, shade, hexToRgb } from './palette.js';
+import { UI, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, FIELD_SCALES, rgb, shade, hexToRgb } from './palette.js';
+import { NodeGL } from './nodegl.js';
 import { clamp, DEG } from '../core/math.js';
 import { modulePoly, MODULE_TYPES } from '../sim/scene.js';
 import { ROLE } from '../sim/pd/domain.js';
 
+/**
+ * THREE STACKED CANVASES
+ * ----------------------
+ * The draw order that the scene needs is: plates, then the node field over
+ * them, then fragments and overlays over that. A single GPU canvas cannot be
+ * interleaved with a 2-D one, so the layers are stacked instead:
+ *
+ *   base (2-D, opaque)      background, grid, plates, components
+ *   field (WebGL, alpha)    the peridynamic node field
+ *   fx   (2-D, alpha)       fragments, trails, in-flight projectile, overlays
+ *
+ * All three share one camera and one pixel ratio, so they stay registered.
+ * If WebGL is unavailable — or the context is lost, which iOS does on
+ * backgrounding — the node field is drawn on the base canvas by the original
+ * Canvas 2-D path and everything still works.
+ */
 export class Renderer {
-  constructor(canvas, camera) {
-    this.canvas = canvas;
-    this.ctx = canvas.getContext('2d', { alpha: false });
+  constructor(canvases, camera) {
+    const c = canvases instanceof HTMLCanvasElement ? { base: canvases } : canvases;
+    this.canvas = c.base;
+    this.ctx = c.base.getContext('2d', { alpha: false });
+    this.fxCanvas = c.fx || null;
+    this.fx = this.fxCanvas ? this.fxCanvas.getContext('2d', { alpha: true }) : this.ctx;
+    this.glCanvas = c.field || null;
+    this.field = this.glCanvas ? NodeGL.create(this.glCanvas) : null;
+    if (this.glCanvas && !this.field) this.glCanvas.style.display = 'none';
+    this.pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
     this.cam = camera;
     this.opts = {
       field: 'material',
@@ -41,8 +65,8 @@ export class Renderer {
       showFarField: true,
       extrude: true,
       nodeGain: 1.0,
-      velScale: 1600,
-      stressScale: 2.5e9,
+      velScale: FIELD_SCALES.velocity,
+      stressScale: FIELD_SCALES.stress,
     };
     this.matColorCache = new Map();
     this.selection = null;
@@ -50,16 +74,28 @@ export class Renderer {
     this.frameOverride = null;   // a recorded frame to draw instead of live state
   }
 
+  /** Pixel ratio comes from the performance governor, not from the device. */
+  setPixelRatio(r) { this.pixelRatio = Math.max(0.5, r); }
+
   resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = this.pixelRatio;
     const r = this.canvas.getBoundingClientRect();
     const w = Math.max(1, Math.round(r.width * dpr));
     const h = Math.max(1, Math.round(r.height * dpr));
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w; this.canvas.height = h;
     }
+    if (this.fxCanvas && (this.fxCanvas.width !== w || this.fxCanvas.height !== h)) {
+      this.fxCanvas.width = w; this.fxCanvas.height = h;
+    }
+    if (this.field) this.field.resize(w, h);
     this.cam.resize(w, h, dpr);
     this.dpr = dpr;
+  }
+
+  get backend() {
+    if (!this.field || this.field.lost) return 'Canvas 2D';
+    return this.field.isGL2 ? 'WebGL 2' : 'WebGL 1';
   }
 
   matColor(key) {
@@ -73,19 +109,107 @@ export class Renderer {
     const ctx = this.ctx, cam = this.cam;
     const W = cam.w, H = cam.h;
 
-    const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, UI.bg1); g.addColorStop(1, UI.bg0);
-    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    if (!this.bgGrad || this.bgH !== H) {
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, UI.bg1); g.addColorStop(1, UI.bg0);
+      this.bgGrad = g; this.bgH = H;
+    }
+    ctx.fillStyle = this.bgGrad; ctx.fillRect(0, 0, W, H);
 
     if (this.opts.showGrid) this.drawGrid();
 
     const frame = this.frameOverride;
     this.drawScene(world);
     this.drawModules(world);
-    if (world.domain) this.drawNodes(world, frame);
+
+    const useGL = this.field && !this.field.lost;
+    if (useGL) this.field.clear();
+    if (world.domain) {
+      if (useGL) this.drawNodesGL(world, frame);
+      else this.drawNodes(world, frame);
+    }
+
+    if (this.fx !== ctx) this.fx.clearRect(0, 0, W, H);
+    const save = this.ctx;
+    this.ctx = this.fx;                       // overlay layer
     if (this.opts.showFragments) this.drawFragments(world, frame);
     this.drawProjectile(world, frame);
     this.drawOverlays(world);
+    if (world.domain && this.opts.showVectors) this.drawVectors(world, frame);
+    this.ctx = save;
+  }
+
+  // ------------------------------------------------------- GPU node field
+
+  /**
+   * Normalised field value per node, for the GPU path. Reads the recorded
+   * frame when one is being scrubbed so a replayed frame shows the field as it
+   * was, not as it is now.
+   */
+  fillFieldBuffers(world, frame) {
+    const d = world.domain, f = this.field;
+    const n = frame && frame.px ? frame.n : d.n;
+    f.ensure(n);
+    if (f.colourStamp !== d) f.uploadColours(d, hexToRgb);
+
+    const pos = f.pos, val = f.val, flag = f.flag;
+    const mode = this.opts.field;
+    const S = FIELD_SCALES;
+
+    if (frame && frame.px) {
+      const px = frame.px, py = frame.py, alv = frame.alv;
+      const src = mode === 'material' || mode === 'damage' ? frame.dmg
+        : mode === 'plastic' ? frame.pls
+          : mode === 'temp' ? frame.tmp
+            : mode === 'velocity' ? frame.vel : frame.str;
+      for (let i = 0; i < n; i++) {
+        pos[i * 2] = px[i]; pos[i * 2 + 1] = py[i];
+        val[i] = src[i] * (1 / 255);
+        flag[i] = alv[i] & 1 ? ((alv[i] & 2) ? 3 : 1) : 0;
+      }
+    } else {
+      const px = d.px, py = d.py, alive = d.alive, flags = d.flags;
+      for (let i = 0; i < n; i++) {
+        pos[i * 2] = px[i]; pos[i * 2 + 1] = py[i];
+        flag[i] = alive[i] ? ((flags[i] & 8) ? 3 : 1) : 0;
+      }
+      switch (mode) {
+        case 'plastic':
+          for (let i = 0; i < n; i++) {
+            const pd = d.matTable[d.matIndex[i]].pd;
+            val[i] = d.plStrain[i] / Math.max(pd.epsF * S.plasticSpan, 1e-4);
+          }
+          break;
+        case 'temp':
+          for (let i = 0; i < n; i++) val[i] = (d.temp[i] - 293) / S.tempSpan;
+          break;
+        case 'velocity':
+          for (let i = 0; i < n; i++) {
+            val[i] = Math.sqrt(d.vx[i] * d.vx[i] + d.vy[i] * d.vy[i]) / this.opts.velScale;
+          }
+          break;
+        case 'stress':
+          for (let i = 0; i < n; i++) val[i] = 0.5 + d.virial[i] / (2 * this.opts.stressScale);
+          break;
+        default:
+          for (let i = 0; i < n; i++) val[i] = d.damage[i];
+      }
+    }
+    return n;
+  }
+
+  drawNodesGL(world, frame) {
+    const d = world.domain;
+    const n = this.fillFieldBuffers(world, frame);
+    const size = Math.max(1, d.dx * this.cam.scale * this.opts.nodeGain * 1.42);
+    this.field.drawPoints({
+      count: n,
+      cam: this.cam,
+      mode: this.opts.field,
+      pointSize: Math.min(size, 128),
+      extrude: this.nodeExtrudeVec(size),
+      alpha: 1,
+    });
   }
 
   // ------------------------------------------------------------------ grid
@@ -385,7 +509,6 @@ export class Renderer {
       ctx.stroke();
     }
 
-    if (this.opts.showVectors) this.drawVectors(world, frame);
   }
 
   drawVectors(world, frame) {

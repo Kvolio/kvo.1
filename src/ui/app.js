@@ -18,6 +18,7 @@ import { QUALITY } from '../sim/world.js';
 import { FIELD_MODES, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, rgb } from '../render/palette.js';
 import * as U from '../core/units.js';
 import { ROLE } from '../sim/pd/domain.js';
+import { TIERS, TIER_ORDER } from '../core/device.js';
 
 const FIELDS = {
   velocity: { label: 'Impact velocity', unit: 'm/s', dp: 0, step: 10 },
@@ -168,6 +169,21 @@ export class App {
   panelSim() {
     const w = this.world;
     const p = panel('Simulation');
+
+    if (w.device) {
+      p.body.appendChild(row('Device profile', select(
+        TIER_ORDER.map((k) => ({ value: k, label: TIERS[k].label })),
+        w.device.tier,
+        (v) => {
+          w.governor.setTier(v);
+          w.settings.quality = TIERS[v].quality;
+          this.renderer.setPixelRatio(w.governor.pixelRatio());
+          this.refreshLeft();
+        },
+      )));
+      p.body.appendChild(el('div', { class: 'hint' }, TIERS[w.device.tier].note));
+    }
+
     p.body.appendChild(row('Discretisation', select(
       Object.keys(QUALITY).map((k) => ({ value: k, label: QUALITY[k].label })),
       w.settings.quality, (v) => { w.settings.quality = v; this.refreshRight(); },
@@ -501,12 +517,25 @@ export class App {
         + 'The drift is reported rather than hidden: beyond roughly ±35 % treat the run as qualitative only, '
         + 'and refine the discretisation or lower the bond viscosity.'));
     }
+    p.body.appendChild(el('div', { class: 'hint' }, 'Runtime'));
+    const g = w.governor ? w.governor.describe() : null;
     p.body.appendChild(kv([
       ['Solver ms / frame', w.perf.msLastFrame.toFixed(2)],
       ['Steps / frame', String(w.perf.stepsLastFrame)],
-      ['Recorded frames', String(w.recorder.length)],
+      g ? ['Frame rate', `${g.fps.toFixed(0)} fps`, g.fps < 30 ? 'bad' : 'good'] : null,
+      ['Render backend', this.renderer.backend, this.renderer.backend === 'Canvas 2D' ? 'hi' : 'good'],
+      g ? ['Pixel ratio', g.dpr.toFixed(2)] : null,
+      w.device ? ['Device tier', w.device.tier] : null,
+      w.device ? ['Benchmark', `${w.device.score.toFixed(0)} M it/s`] : null,
+      w.device && w.device.glRenderer !== 'unknown' ? ['GPU', String(w.device.glRenderer).slice(0, 28)] : null,
+      ['Recorded frames', `${w.recorder.length} / ${w.recorder.maxFrames}`],
       ['Recorder memory', `${(w.recorder.memoryBytes() / 1e6).toFixed(1)} MB`],
     ]));
+    p.body.appendChild(el('div', { class: 'note' },
+      'The device tier sets the node budget only. The solver, the constitutive model and '
+      + 'the time step are identical at every tier — a lower tier resolves less detail, it '
+      + 'does not simulate less. The governor trims pixel ratio and sub-steps per frame, '
+      + 'never the physics.'));
     return p;
   }
 
@@ -536,7 +565,7 @@ export class App {
     $('btnStepF').onclick = () => this.stepFrame(1);
     $('btnStepB').onclick = () => this.stepFrame(-1);
     $('btnStep10').onclick = () => { this.goLive(); w.paused = true; w.requestSteps(10); this.syncPlayBtn(); };
-    $('btnDocs').onclick = () => window.open('./docs/MODEL.md', '_blank');
+    $('btnDocs').onclick = () => window.open('./docs/model.html', '_blank');
 
     $('btnZoomIn').onclick = () => this.cam.setZoom(this.cam.targetScale * 1.4);
     $('btnZoomOut').onclick = () => this.cam.setZoom(this.cam.targetScale / 1.4);
@@ -578,9 +607,8 @@ export class App {
       // re-run forward. The solver is deterministic, so this is exact.
       const idx = +this.scrub.value;
       const k = w.recorder.keyAtOrBefore(idx);
-      if (k >= 0 && w.domain) {
-        w.recorder.restoreKey(w, k);
-        w.recorder.frames.length = k + 1;
+      if (k >= 0 && w.domain && w.recorder.restoreKey(w, k)) {
+        w.recorder.truncate(k);
       }
       this.renderer.frameOverride = null;
       this.scrubbing = false;
@@ -634,7 +662,11 @@ export class App {
     let pinchDist = 0;
 
     c.addEventListener('pointerdown', (e) => {
-      c.setPointerCapture(e.pointerId);
+      // Pointer capture is an optimisation, not a requirement: it keeps a drag
+      // alive if the finger leaves the canvas. It can throw (a pointer that is
+      // already gone, or a synthetic event), and if it does the gesture must
+      // still work — so it must never be the first thing that can fail.
+      try { c.setPointerCapture(e.pointerId); } catch (err) { /* non-fatal */ }
       pointers.set(e.pointerId, [e.clientX, e.clientY]);
       dragging = true; moved = 0;
       lastX = e.clientX; lastY = e.clientY;

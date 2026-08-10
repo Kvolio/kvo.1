@@ -18,6 +18,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { deflateSync } from 'node:zlib';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = resolve(ROOT, 'src/main.js');
@@ -119,7 +120,7 @@ html = html.replace(/<script type="module">[\s\S]*?<\/script>\s*/, '');   // the
 html = html.replace(/<script type="module" src="\.\/src\/main\.js"><\/script>/,
   `<script>\n${out}\n</script>`);
 html = html.replace('<title>', '<!-- single-file build: run tools/build.mjs to regenerate -->\n<title>');
-html = html.replace('href="./docs/MODEL.md"', 'href="https://github.com/kvolio/kvo.1/blob/main/docs/MODEL.md"');
+
 
 mkdirSync(resolve(ROOT, 'dist'), { recursive: true });
 const target = resolve(ROOT, 'dist/terminal-ballistics.html');
@@ -127,3 +128,227 @@ writeFileSync(target, html);
 
 console.log(`bundled ${modules.size} modules -> dist/terminal-ballistics.html `
   + `(${(html.length / 1024).toFixed(0)} kB)`);
+
+// ---------------------------------------------------------------------------
+// docs/model.html — the assumptions document, readable on a phone.
+// GitHub Pages serves raw .md as a download, which is useless from Safari, so
+// the markdown is rendered to a styled page at build time.
+// ---------------------------------------------------------------------------
+
+function esc(t) {
+  return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function inline(t) {
+  return esc(t)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+}
+
+function renderMarkdown(md) {
+  const lines = md.split(/\r?\n/);
+  const out = [];
+  let i = 0, listType = null, inTable = false;
+  const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
+  const closeTable = () => { if (inTable) { out.push('</tbody></table></div>'); inTable = false; } };
+
+  while (i < lines.length) {
+    const raw = lines[i];
+    const line = raw.trimEnd();
+
+    if (line.startsWith('```')) {                       // fenced code
+      closeList(); closeTable();
+      const buf = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith('```')) buf.push(lines[i++]);
+      i++;
+      out.push(`<pre><code>${esc(buf.join('\n'))}</code></pre>`);
+      continue;
+    }
+    if (/^\s*$/.test(line)) { closeList(); closeTable(); i++; continue; }
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) { closeList(); closeTable(); out.push('<hr>'); i++; continue; }
+
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      closeList(); closeTable();
+      const id = h[2].toLowerCase().replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
+      out.push(`<h${h[1].length} id="${id}">${inline(h[2])}</h${h[1].length}>`);
+      i++; continue;
+    }
+
+    if (line.startsWith('|')) {                          // table
+      const cells = (r) => r.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+      if (!inTable) {
+        const sep = lines[i + 1] || '';
+        if (/^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(sep)) {
+          closeList();
+          out.push('<div class="tw"><table><thead><tr>'
+            + cells(line).map((c) => `<th>${inline(c)}</th>`).join('') + '</tr></thead><tbody>');
+          inTable = true; i += 2; continue;
+        }
+      } else {
+        out.push('<tr>' + cells(line).map((c) => `<td>${inline(c)}</td>`).join('') + '</tr>');
+        i++; continue;
+      }
+    } else closeTable();
+
+    const ul = line.match(/^\s*[-*]\s+(.*)$/);
+    const ol = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (ul || ol) {
+      const want = ul ? 'ul' : 'ol';
+      if (listType !== want) { closeList(); out.push(`<${want}>`); listType = want; }
+      out.push(`<li>${inline((ul || ol)[1])}</li>`);
+      i++; continue;
+    }
+    closeList();
+    out.push(`<p>${inline(line)}</p>`);
+    i++;
+  }
+  closeList(); closeTable();
+  return out.join('\n');
+}
+
+const modelMd = readFileSync(resolve(ROOT, 'docs/MODEL.md'), 'utf8');
+const modelHtml = `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Model description — Terminal Ballistics Sandbox</title>
+<style>
+:root{--bg:#0a0d12;--panel:#141922;--ink:#d6dde6;--ink2:#98a3b2;--dim:#6d7787;
+  --accent:#4fb0d8;--edge:#252d3a;--warn:#e0a23c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);line-height:1.65;
+  font:15px/1.65 ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  padding:24px max(18px,env(safe-area-inset-right)) max(48px,env(safe-area-inset-bottom)) max(18px,env(safe-area-inset-left));
+  -webkit-text-size-adjust:100%}
+main{max-width:820px;margin:0 auto}
+h1,h2,h3,h4{line-height:1.25;margin:1.9em 0 .6em;color:#fff}
+h1{font-size:1.6em;margin-top:0}h2{font-size:1.25em;border-bottom:1px solid var(--edge);padding-bottom:.3em}
+h3{font-size:1.05em;color:var(--accent)}h4{font-size:.98em;color:var(--ink2)}
+p{margin:.7em 0;color:var(--ink2)}
+li{margin:.35em 0;color:var(--ink2)}
+ul,ol{padding-left:1.4em}
+code{background:#1b212c;padding:1px 5px;border-radius:3px;color:#cfe3ee;font-size:.92em}
+pre{background:#11161f;border:1px solid var(--edge);border-radius:6px;padding:12px;
+  overflow-x:auto;-webkit-overflow-scrolling:touch}
+pre code{background:none;padding:0;color:var(--ink)}
+strong{color:var(--ink)}
+hr{border:0;border-top:1px solid var(--edge);margin:2em 0}
+a{color:var(--accent)}
+.tw{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:1em 0}
+table{border-collapse:collapse;width:100%;font-size:.9em}
+th,td{border:1px solid var(--edge);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:#171d26;color:var(--ink)}
+td{color:var(--ink2)}
+.back{display:inline-block;margin-bottom:18px;padding:8px 14px;border:1px solid var(--edge);
+  border-radius:5px;text-decoration:none;color:var(--ink2);background:var(--panel)}
+</style></head>
+<body><main><a class="back" href="../index.html">&larr; back to the simulator</a>
+${renderMarkdown(modelMd)}
+</main></body></html>`;
+writeFileSync(resolve(ROOT, 'docs/model.html'), modelHtml);
+console.log(`rendered docs/model.html (${(modelHtml.length / 1024).toFixed(0)} kB)`);
+
+// ---------------------------------------------------------------------------
+// Home-screen icons. Written as real PNGs (node's zlib is enough) because iOS
+// will not use an SVG for apple-touch-icon, and "Add to Home Screen" is the
+// natural way to use this on a phone.
+// ---------------------------------------------------------------------------
+
+const CRC = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c;
+  }
+  return (buf) => {
+    let c = -1;
+    for (let i = 0; i < buf.length; i++) c = t[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ -1) >>> 0;
+  };
+})();
+
+function chunk(type, data) {
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+  const td = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(CRC(td));
+  return Buffer.concat([len, td, crc]);
+}
+
+function makeIcon(size) {
+  const px = Buffer.alloc(size * size * 4);
+  const set = (x, y, r, g, b) => {
+    if (x < 0 || y < 0 || x >= size || y >= size) return;
+    const o = (y * size + x) * 4;
+    px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
+  };
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const t = y / size;
+      set(x, y, 10 + 7 * t, 13 + 8 * t, 18 + 10 * t);       // background gradient
+    }
+  }
+  const plateX0 = Math.round(size * 0.60), plateX1 = Math.round(size * 0.76);
+  for (let y = Math.round(size * 0.10); y < size * 0.90; y++) {
+    for (let x = plateX0; x < plateX1; x++) {
+      const f = 1 - (x - plateX0) / (plateX1 - plateX0) * 0.35;
+      set(x, y, 125 * f, 135 * f, 152 * f);                  // armour plate
+    }
+  }
+  const rodY0 = Math.round(size * 0.45), rodY1 = Math.round(size * 0.55);
+  for (let y = rodY0; y < rodY1; y++) {
+    for (let x = Math.round(size * 0.12); x < plateX0 - 1; x++) set(x, y, 176, 183, 191);
+  }
+  const cx = plateX0, cy = size * 0.5, rad = size * 0.20;    // impact glow
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const d = Math.hypot(x - cx, y - cy);
+      if (d > rad) continue;
+      const a = Math.pow(1 - d / rad, 2.2);
+      const o = (y * size + x) * 4;
+      px[o] = Math.min(255, px[o] + 235 * a);
+      px[o + 1] = Math.min(255, px[o + 1] + 130 * a);
+      px[o + 2] = Math.min(255, px[o + 2] + 50 * a);
+    }
+  }
+  const rows = Buffer.alloc((size * 4 + 1) * size);
+  for (let y = 0; y < size; y++) {
+    rows[y * (size * 4 + 1)] = 0;
+    px.copy(rows, y * (size * 4 + 1) + 1, y * size * 4, (y + 1) * size * 4);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8; ihdr[9] = 6; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(rows, { level: 9 })),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+mkdirSync(resolve(ROOT, 'icons'), { recursive: true });
+for (const s of [180, 192, 512]) {
+  writeFileSync(resolve(ROOT, `icons/icon-${s}.png`), makeIcon(s));
+}
+writeFileSync(resolve(ROOT, 'manifest.webmanifest'), JSON.stringify({
+  name: 'Terminal Ballistics Sandbox',
+  short_name: 'Ballistics',
+  description: 'Real-time peridynamic terminal-ballistics simulator with deformable armour.',
+  start_url: './index.html',
+  scope: './',
+  display: 'standalone',
+  orientation: 'any',
+  background_color: '#0a0d12',
+  theme_color: '#0a0d12',
+  icons: [
+    { src: './icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: './icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+  ],
+}, null, 2));
+console.log('wrote icons/ and manifest.webmanifest');

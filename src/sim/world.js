@@ -83,7 +83,10 @@ export class World {
     this.paused = false;
     this.pendingSteps = 0;
     this.stats = this.blankStats();
-    this.perf = { stepsLastFrame: 0, msLastFrame: 0, coast: false, substeps: 4, avgMs: 0 };
+    this.perf = {
+      stepsLastFrame: 0, msLastFrame: 0, coast: false, substeps: 4, avgMs: 0,
+      impactMs: 0, impactFrames: 0, impactSubsteps: 0,
+    };
     this.impactStartTime = 0;
     this.setProjectile(makeProjectileConfig('apcbc'));
   }
@@ -137,6 +140,26 @@ export class World {
   }
 
   fire() {
+    // Re-tier from what the previous run actually cost. The node budget cannot
+    // change mid-impact, so this is the one safe moment to revise it.
+    if (this.governor && this.perf.impactFrames > 40) {
+      const mean = this.perf.impactMs / this.perf.impactFrames;
+      const meanSteps = this.perf.impactSubsteps / this.perf.impactFrames;
+      const moved = this.governor.reviewAfterRun(mean, meanSteps, QUALITY[this.settings.quality].substeps);
+      if (moved) {
+        this.settings.quality = this.governor.spec.quality;
+        this.settings.deviceTier = moved;
+        this.bus.emit('tier-changed', { tier: moved, meanSolverMs: mean });
+      }
+    }
+    this.perf.impactMs = 0; this.perf.impactFrames = 0; this.perf.impactSubsteps = 0;
+    // size the frame recorder by memory rather than a flat frame count: the
+    // per-frame cost is proportional to the node count, which the tier sets
+    if (this.governor) {
+      const budget = { high: 90e6, balanced: 60e6, fallback: 35e6 }[this.governor.spec.key] || 60e6;
+      const perFrame = QUALITY[this.settings.quality].budget * 14;
+      this.recorder.setCapacity(clamp(Math.round(budget / perFrame), 90, 600));
+    }
     this.reset();
     this.state = 'flight';
     this.paused = false;
@@ -178,6 +201,11 @@ export class World {
 
     this.perf.msLastFrame = performance.now() - t0;
     this.perf.avgMs = this.perf.avgMs * 0.85 + this.perf.msLastFrame * 0.15;
+    if (this.state === 'impact') {
+      this.perf.impactMs += this.perf.msLastFrame;
+      this.perf.impactSubsteps += this.perf.stepsLastFrame;
+      this.perf.impactFrames++;
+    }
     if (this.settings.recordFrames && this.domain) this.recorder.capture(this);
     else if (this.settings.recordFrames) this.recorder.capture(this);
   }
@@ -190,8 +218,12 @@ export class World {
   adaptiveSubsteps(q) {
     const ms = this.perf.avgMs;
     let n = this.perf.substeps || q.substeps;
-    if (ms > 13 && n > 1) n -= 1;
-    else if (ms < 7 && n < q.substeps) n += 1;
+    // The thresholds are deliberately loose. Trimming sub-steps aggressively
+    // keeps the frame rate high but stretches a 350 us event over a minute of
+    // wall time, which is worse than running at 40 fps. Prefer a slightly
+    // lower frame rate over a crawling event.
+    if (ms > 22 && n > 1) n -= 1;
+    else if (ms < 12 && n < q.substeps) n += 1;
     this.perf.substeps = clamp(n, 1, q.substeps);
     return this.perf.substeps;
   }

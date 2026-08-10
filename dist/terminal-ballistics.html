@@ -5,6 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230a0d12'/%3E%3Crect x='18' y='4' width='7' height='24' fill='%237d8798'/%3E%3Cpath d='M4 16 L13 12 L13 20 Z' fill='%23d8564a'/%3E%3C/svg%3E">
+<meta name="description" content="Real-time peridynamic terminal-ballistics simulator: deformable armour, dynamic projectiles, penetration, spall and internal damage, all driven by the solver.">
+<meta name="theme-color" content="#0a0d12">
+<link rel="manifest" href="./manifest.webmanifest">
+<!-- iOS home-screen install: black-translucent puts the app under the status
+     bar, which the safe-area padding below already accounts for. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ballistics">
+<link rel="apple-touch-icon" href="./icons/icon-180.png">
 <!-- single-file build: run tools/build.mjs to regenerate -->
 <title>Terminal Ballistics Sandbox — deformable armour / dynamic projectile simulation</title>
 <style>
@@ -18,17 +28,24 @@
   --row:26px;
 }
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
-  font-family:var(--mono);font-size:12px;-webkit-text-size-adjust:100%}
-button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+/* 100dvh tracks mobile Safari's collapsing URL bar; the -webkit-fill-available
+   line is the fallback for older iOS that predates dvh units. */
+html,body{height:100%;height:-webkit-fill-available;height:100dvh;
+  overflow:hidden;overscroll-behavior:none;background:var(--bg);color:var(--ink);
+  font-family:var(--mono);font-size:12px;-webkit-text-size-adjust:100%;
+  -webkit-tap-highlight-color:transparent;
+  -webkit-touch-callout:none;text-size-adjust:100%}
+button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit;
+  touch-action:manipulation}
 
-#app{display:grid;height:100%;
+#app{display:grid;height:100%;height:100dvh;
   grid-template-columns:var(--lw,280px) 1fr var(--rw,320px);
   grid-template-rows:40px 1fr;
   grid-template-areas:"top top top" "left main right";}
 
 /* ---------------------------------------------------------------- topbar */
-#top{grid-area:top;display:flex;align-items:center;gap:8px;padding:0 10px;
+#top{grid-area:top;display:flex;align-items:center;gap:8px;
+  padding:0 max(10px,env(safe-area-inset-right)) 0 max(10px,env(safe-area-inset-left));
   background:linear-gradient(180deg,#161c25,#10151d);border-bottom:1px solid var(--edge);
   overflow-x:auto;overflow-y:hidden;white-space:nowrap;scrollbar-width:none}
 #top::-webkit-scrollbar{display:none}
@@ -56,8 +73,8 @@ aside{background:var(--panel);overflow-y:auto;overflow-x:hidden;
   -webkit-overflow-scrolling:touch;scrollbar-width:thin}
 aside::-webkit-scrollbar{width:8px}
 aside::-webkit-scrollbar-thumb{background:var(--edge2);border-radius:4px}
-#left{grid-area:left;border-right:1px solid var(--edge)}
-#right{grid-area:right;border-left:1px solid var(--edge)}
+#left{grid-area:left;border-right:1px solid var(--edge);padding-bottom:env(safe-area-inset-bottom)}
+#right{grid-area:right;border-left:1px solid var(--edge);padding-bottom:env(safe-area-inset-bottom)}
 
 .panel{border-bottom:1px solid var(--edge)}
 .panel>h3{display:flex;align-items:center;gap:6px;padding:7px 10px;cursor:pointer;
@@ -86,7 +103,11 @@ input:focus,select:focus{outline:1px solid var(--accent);border-color:var(--acce
 /* ------------------------------------------------------------------ main */
 #main{grid-area:main;position:relative;background:var(--bg);display:flex;flex-direction:column;min-width:0}
 #view{flex:1 1 auto;position:relative;min-height:0;touch-action:none}
-canvas#viewport{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:crosshair}
+#view canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+canvas#viewport{cursor:crosshair}
+/* the upper layers are painted over the base but must not steal the pointer:
+   all gestures are handled on the base canvas */
+canvas#viewportField,canvas#viewportFx{pointer-events:none}
 
 #hud{position:absolute;left:10px;top:10px;pointer-events:none;
   display:flex;flex-direction:column;gap:3px}
@@ -105,7 +126,7 @@ canvas#viewport{position:absolute;inset:0;width:100%;height:100%;display:block;c
 
 /* ------------------------------------------------------------- transport */
 #transport{flex:0 0 auto;border-top:1px solid var(--edge);background:#12171f;
-  padding:5px 8px;display:flex;align-items:center;gap:7px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  padding:5px max(8px,env(safe-area-inset-right)) max(5px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left));display:flex;align-items:center;gap:7px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
 #transport::-webkit-scrollbar{display:none}
 #scrub{flex:1 1 220px;min-width:120px;accent-color:var(--accent);height:18px}
 #tlabel{color:var(--dim);font-size:10px;white-space:nowrap;font-variant-numeric:tabular-nums}
@@ -144,17 +165,44 @@ table.kv tr.good td:last-child{color:var(--ok)}
 a{color:var(--accent)}
 
 /* ----------------------------------------------------------- responsive */
-#tabs{display:none;grid-area:top}
+/* assigned to its own row only in the mobile layout below; on desktop it is
+   not rendered at all */
+#tabs{display:none}
+/* Coarse pointers get larger hit targets: 36 px is the smallest control that
+   is comfortably tappable, and it keeps the dense engineering layout usable
+   without changing any of it. */
+@media (pointer: coarse){
+  button{min-height:36px;padding:8px 12px}
+  button.icon{min-width:42px;font-size:15px}
+  button.mini{min-height:30px}
+  input[type=number],input[type=text],select{min-height:34px;font-size:13px}
+  .row input[type=range]{height:30px}
+  #scrub{height:30px}
+  .layer .lh{padding:9px 8px}
+  .panel>h3{padding:11px 10px}
+}
+
 @media (max-width: 980px){
-  #app{grid-template-columns:1fr;grid-template-rows:40px 32px 1fr;
+  #app{grid-template-columns:1fr;grid-template-rows:44px auto 1fr;
     grid-template-areas:"top" "tabs" "main"}
-  #tabs{display:flex;gap:4px;padding:4px 6px;background:#12171f;border-bottom:1px solid var(--edge);
+  #tabs{grid-area:tabs;display:flex;gap:4px;background:#12171f;border-bottom:1px solid var(--edge);
+    padding:4px max(6px,env(safe-area-inset-right)) 4px max(6px,env(safe-area-inset-left));
     overflow-x:auto;scrollbar-width:none}
   #tabs::-webkit-scrollbar{display:none}
-  #tabs button{flex:0 0 auto;font-size:11px}
-  aside{position:fixed;left:0;right:0;bottom:0;top:112px;z-index:30;display:none;
-    background:var(--panel);border:none}
-  aside.show{display:block}
+  #tabs button{flex:0 0 auto;font-size:12px}
+  /* the HUD chips already carry the live readouts, so the top bar gives its
+     width to the controls instead */
+  #top .readout,#top .sep{display:none}
+  .brand{font-size:11px;letter-spacing:0}
+  #legend{max-width:132px;font-size:8.5px;padding:4px 6px;opacity:.92}
+  #legend .ends{font-size:8px}
+  /* the rails share the viewport's grid cell instead of being positioned
+     against a hard-coded header height, so notches and the dynamic URL bar
+     cannot push them off-screen */
+  /* the id selectors in the desktop layout outrank a bare `aside` rule, so the
+     override has to match their specificity */
+  #left,#right{grid-area:main;position:relative;z-index:30;display:none;border:none}
+  #left.show,#right.show{display:block}
   #main{grid-area:main}
   .brand small{display:none}
   /* keep the field legend clear of the readout chips on a narrow screen */
@@ -198,6 +246,8 @@ a{color:var(--accent)}
   <main id="main">
     <div id="view">
       <canvas id="viewport"></canvas>
+      <canvas id="viewportField"></canvas>
+      <canvas id="viewportFx"></canvas>
       <div id="hud"></div>
       <div id="legend"></div>
     </div>
@@ -3192,6 +3242,128 @@ delete __exports.__all;
 
 });
 
+__def("src/render/palette.js", function (__exports, __req) {
+/**
+ * Colour system. Field colour maps are perceptually ordered ramps so that a
+ * reading can be taken off the image, not just admired.
+ */
+
+const { clamp } = __req("src/core/math.js");
+
+const UI = {
+  bg0: '#0a0d12',
+  bg1: '#11151c',
+  grid: 'rgba(120,150,180,0.07)',
+  gridMajor: 'rgba(120,150,180,0.15)',
+  ink: '#d6dde6',
+  dim: '#7d8794',
+  accent: '#4fb0d8',
+  warn: '#e0a23c',
+  danger: '#d8564a',
+  ok: '#5fbf7f',
+  corridor: 'rgba(79,176,216,0.20)',
+};
+
+function ramp(stops) {
+  return (t) => {
+    t = clamp(t, 0, 1);
+    for (let i = 0; i < stops.length - 1; i++) {
+      const [a, ca] = stops[i], [b, cb] = stops[i + 1];
+      if (t >= a && t <= b) {
+        const f = (t - a) / (b - a || 1);
+        return [
+          Math.round(ca[0] + (cb[0] - ca[0]) * f),
+          Math.round(ca[1] + (cb[1] - ca[1]) * f),
+          Math.round(ca[2] + (cb[2] - ca[2]) * f),
+        ];
+      }
+    }
+    return stops[stops.length - 1][1];
+  };
+}
+
+/** Damage: intact steel-grey -> hot orange -> failed black-red. */
+const RAMP_DAMAGE = ramp([
+  [0.00, [125, 135, 152]],
+  [0.25, [150, 138, 120]],
+  [0.55, [196, 122, 62]],
+  [0.80, [176, 66, 46]],
+  [1.00, [72, 30, 30]],
+]);
+
+/** Plastic strain: cold blue -> white-hot worked metal. */
+const RAMP_PLASTIC = ramp([
+  [0.00, [58, 78, 104]],
+  [0.35, [96, 150, 186]],
+  [0.70, [214, 206, 176]],
+  [1.00, [252, 246, 232]],
+]);
+
+/** Temperature: black-body-like. */
+const RAMP_TEMP = ramp([
+  [0.00, [46, 52, 62]],
+  [0.30, [140, 54, 40]],
+  [0.55, [214, 112, 38]],
+  [0.78, [244, 190, 76]],
+  [1.00, [255, 248, 226]],
+]);
+
+/** Velocity magnitude: viridis-like, safe in both light and dark surrounds. */
+const RAMP_VELOCITY = ramp([
+  [0.00, [42, 46, 58]],
+  [0.25, [46, 92, 130]],
+  [0.50, [40, 150, 140]],
+  [0.75, [140, 190, 78]],
+  [1.00, [248, 232, 116]],
+]);
+
+/** Stress: diverging — compression blue, tension red. */
+const RAMP_STRESS = ramp([
+  [0.00, [58, 108, 190]],
+  [0.35, [90, 120, 150]],
+  [0.50, [120, 128, 136]],
+  [0.65, [176, 116, 92]],
+  [1.00, [216, 74, 58]],
+]);
+
+/**
+ * Fixed normalisation constants for the scalar fields. They are shared by the
+ * renderer, the GPU shader and the frame recorder so that a scrubbed frame is
+ * coloured on exactly the same scale as the live one.
+ */
+const FIELD_SCALES = {
+  tempSpan: 1200,     // K above ambient mapped across the ramp
+  velocity: 2000,     // m/s at the top of the ramp
+  stress: 2.5e9,      // Pa at each end of the diverging ramp
+  plasticSpan: 3,     // multiples of the material failure strain
+};
+
+const FIELD_MODES = [
+  { key: 'material', label: 'Material', legend: 'body colour by material, darkened by local damage' },
+  { key: 'damage', label: 'Damage φ', unit: '0–1', legend: 'fraction of a node\'s bonds that have failed' },
+  { key: 'plastic', label: 'Plastic strain', unit: '0–εf', legend: 'accumulated equivalent plastic strain' },
+  { key: 'temp', label: 'Temperature', unit: '°C', legend: 'adiabatic heating from plastic work' },
+  { key: 'velocity', label: 'Velocity', unit: 'm/s', legend: 'node speed' },
+  { key: 'stress', label: 'Stress (virial)', unit: 'Pa', legend: 'nodal virial stress, tension positive' },
+];
+
+function rgb(c) { return `rgb(${c[0]},${c[1]},${c[2]})`; }
+
+function shade(c, f) {
+  return `rgb(${Math.round(c[0] * f)},${Math.round(c[1] * f)},${Math.round(c[2] * f)})`;
+}
+
+function hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+
+__exports.__all = {UI, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, FIELD_SCALES, FIELD_MODES, rgb, shade, hexToRgb};
+Object.assign(__exports, __exports.__all);
+delete __exports.__all;
+
+});
+
 __def("src/core/recorder.js", function (__exports, __req) {
 /**
  * FRAME RECORDER
@@ -3200,7 +3372,7 @@ __def("src/core/recorder.js", function (__exports, __req) {
  * Every rendered frame of an event is captured so the run can be scrubbed,
  * stepped forward and stepped backward after the fact. Two tiers:
  *
- *   display frames  - positions, damage, temperature, liveness, fragments.
+ *   display frames  - positions and every visualised field, quantised.
  *                     Enough to redraw and inspect any frame exactly.
  *   key frames      - full solver state (velocities, bond plastic stretch,
  *                     bond status, counters, energies). Because the solver is
@@ -3208,103 +3380,226 @@ __def("src/core/recorder.js", function (__exports, __req) {
  *                     reproduces the original trajectory bit for bit, so
  *                     "rewind and continue" is exact rather than approximate.
  *
- * Display frames are stored quantised where that costs nothing visually
- * (damage and temperature as bytes) and as Float32 where it does not.
+ * STORAGE
+ * -------
+ * Both tiers are **ring buffers of preallocated typed arrays**. The earlier
+ * implementation allocated five typed arrays per captured frame and, once
+ * full, shifted the whole list — around 5 MB/s of garbage at 60 fps with a
+ * 6000-node mesh, which on a phone shows up directly as dropped frames during
+ * collection. Now the arrays are allocated once when the mesh appears and
+ * overwritten in place; a full recording allocates nothing at all.
+ *
+ * Scalar fields are stored as bytes against fixed normalisation constants
+ * (see FIELD_SCALES) so that a scrubbed frame shows the field as it was at
+ * that instant rather than as it is now.
  */
+
+const { FIELD_SCALES } = __req("src/render/palette.js");
 
 class Recorder {
   constructor(opts = {}) {
     this.maxFrames = opts.maxFrames ?? 420;
     this.keyEvery = opts.keyEvery ?? 20;
-    this.frames = [];
-    this.keys = new Map();
+    this.slots = [];
+    this.keys = new Map();       // absolute frame id -> key slot
+    this.keyPool = [];
+    this.baseId = 0;             // absolute id of logical frame 0
+    this.count = 0;
+    this.head = 0;               // ring index of logical frame 0
+    this.nodeCount = -1;
     this.cursor = -1;
   }
 
-  clear() { this.frames.length = 0; this.keys.clear(); this.cursor = -1; }
+  /** Discard everything and release the pools (mesh geometry has changed). */
+  clear() {
+    this.slots.length = 0;
+    this.keys.clear();
+    this.keyPool.length = 0;
+    this.baseId = 0; this.count = 0; this.head = 0;
+    this.nodeCount = -1;
+    this.cursor = -1;
+  }
 
-  get length() { return this.frames.length; }
+  setCapacity(n) {
+    if (n === this.maxFrames) return;
+    this.maxFrames = Math.max(30, n | 0);
+    this.clear();
+  }
+
+  get length() { return this.count; }
+
+  ensurePool(n) {
+    if (this.nodeCount === n) return;
+    // node count changed: the pooled arrays are the wrong size
+    this.slots.length = 0; this.keys.clear(); this.keyPool.length = 0;
+    this.baseId = 0; this.count = 0; this.head = 0;
+    this.nodeCount = n;
+  }
+
+  allocSlot(n) {
+    return {
+      id: -1, t: 0, state: '', n,
+      px: new Float32Array(n), py: new Float32Array(n),
+      dmg: new Uint8Array(n), tmp: new Uint8Array(n), alv: new Uint8Array(n),
+      pls: new Uint8Array(n), vel: new Uint8Array(n), str: new Uint8Array(n),
+      frags: [], proj: null, diag: null, logLen: 0,
+    };
+  }
 
   capture(world) {
     const d = world.domain;
-    const f = {
-      index: this.frames.length,
-      t: world.simTime,
-      state: world.state,
-      n: d ? d.n : 0,
-      px: null, py: null, dmg: null, tmp: null, alv: null,
-      frags: world.fragments.list.filter((x) => x.alive).map((x) => [x.x, x.y, x.vx, x.vy, x.mass, x.size, x.kind]),
-      proj: world.projectile && world.state === 'flight'
-        ? { x: world.projectile.x, y: world.projectile.y, ang: world.projectile.ang, sabot: world.projectile.sabotAttached }
-        : null,
-      diag: world.snapshotDiagnostics(),
-      logLen: world.log.entries.length,
-    };
-    if (d) {
-      const n = d.n;
-      f.px = new Float32Array(n); f.py = new Float32Array(n);
-      f.dmg = new Uint8Array(n); f.tmp = new Uint8Array(n); f.alv = new Uint8Array(n);
-      for (let i = 0; i < n; i++) {
-        f.px[i] = d.px[i]; f.py[i] = d.py[i];
-        f.dmg[i] = Math.min(255, (d.damage[i] * 255) | 0);
-        f.tmp[i] = Math.min(255, ((d.temp[i] - 293) / 8) | 0);
-        f.alv[i] = d.alive[i] | (d.flags[i] & 8 ? 2 : 0);
-      }
-      if (this.frames.length % this.keyEvery === 0) this.captureKey(world, f.index);
+    if (!d) {
+      // pre-impact frames carry only the rigid-body state
+      const f = {
+        id: this.baseId + this.count, t: world.simTime, state: world.state, n: 0,
+        px: null, py: null, dmg: null, tmp: null, alv: null, pls: null, vel: null, str: null,
+        frags: world.fragments.list.filter((x) => x.alive)
+          .map((x) => [x.x, x.y, x.vx, x.vy, x.mass, x.size, x.kind]),
+        proj: world.projectile
+          ? { x: world.projectile.x, y: world.projectile.y, ang: world.projectile.ang, sabot: world.projectile.sabotAttached }
+          : null,
+        diag: world.snapshotDiagnostics(),
+        logLen: world.log.entries.length,
+      };
+      this.push(f);
+      return f;
     }
-    this.frames.push(f);
-    if (this.frames.length > this.maxFrames) {
-      const drop = this.frames.shift();
-      this.keys.delete(drop.index);
-      for (const fr of this.frames) fr.index--;
-      const remap = new Map();
-      for (const [k, v] of this.keys) remap.set(k - 1, v);
-      this.keys = remap;
+
+    const n = d.n;
+    this.ensurePool(n);
+    const ring = this.count < this.maxFrames
+      ? (this.head + this.count) % this.maxFrames
+      : this.head;
+    while (this.slots.length <= ring) this.slots.push(null);
+    if (!this.slots[ring]) this.slots[ring] = this.allocSlot(n);
+    const f = this.slots[ring];
+
+    f.id = this.baseId + this.count;
+    f.t = world.simTime;
+    f.state = world.state;
+    f.n = n;
+    f.logLen = world.log.entries.length;
+    f.diag = world.snapshotDiagnostics();
+    f.proj = null;
+
+    const px = f.px, py = f.py, dmg = f.dmg, tmp = f.tmp, alv = f.alv;
+    const pls = f.pls, vel = f.vel, str = f.str;
+    const S = FIELD_SCALES;
+    for (let i = 0; i < n; i++) {
+      px[i] = d.px[i]; py[i] = d.py[i];
+      const dv = d.damage[i] * 255;
+      dmg[i] = dv > 255 ? 255 : dv;
+      const tv = (d.temp[i] - 293) / S.tempSpan * 255;
+      tmp[i] = tv > 255 ? 255 : tv < 0 ? 0 : tv;
+      alv[i] = d.alive[i] | (d.flags[i] & 8 ? 2 : 0);
+      const pd = d.matTable[d.matIndex[i]].pd;
+      const pv = d.plStrain[i] / Math.max(pd.epsF * 3, 1e-4) * 255;
+      pls[i] = pv > 255 ? 255 : pv;
+      const sp = Math.sqrt(d.vx[i] * d.vx[i] + d.vy[i] * d.vy[i]) / S.velocity * 255;
+      vel[i] = sp > 255 ? 255 : sp;
+      const sv = (0.5 + d.virial[i] / (2 * S.stress)) * 255;
+      str[i] = sv > 255 ? 255 : sv < 0 ? 0 : sv;
     }
-    this.cursor = this.frames.length - 1;
+
+    // fragments are few; a small array per frame is not worth pooling
+    const list = world.fragments.list;
+    f.frags.length = 0;
+    for (let i = 0; i < list.length; i++) {
+      const x = list[i];
+      if (x.alive) f.frags.push([x.x, x.y, x.vx, x.vy, x.mass, x.size, x.kind]);
+    }
+
+    if (f.id % this.keyEvery === 0) this.captureKey(world, f.id);
+    this.push(f, true);
     return f;
   }
 
-  captureKey(world, index) {
+  push(f, pooled = false) {
+    if (this.count < this.maxFrames) {
+      if (!pooled) {
+        const ring = (this.head + this.count) % this.maxFrames;
+        while (this.slots.length <= ring) this.slots.push(null);
+        this.slots[ring] = f;
+      }
+      this.count++;
+    } else {
+      // overwrite the oldest slot
+      if (!pooled) this.slots[this.head] = f;
+      const droppedId = this.baseId;
+      this.head = (this.head + 1) % this.maxFrames;
+      this.baseId++;
+      const k = this.keys.get(droppedId);
+      if (k) { this.keys.delete(droppedId); this.keyPool.push(k); }
+    }
+    this.cursor = this.count - 1;
+  }
+
+  captureKey(world, id) {
     const d = world.domain, s = world.solver;
-    this.keys.set(index, {
-      px: Float64Array.from(d.px), py: Float64Array.from(d.py),
-      vx: Float32Array.from(d.vx), vy: Float32Array.from(d.vy),
-      temp: Float32Array.from(d.temp), damage: Float32Array.from(d.damage),
-      nBroken: Uint16Array.from(d.nBroken), flags: Uint8Array.from(d.flags),
-      alive: Uint8Array.from(d.alive),
-      bsp: Float32Array.from(d.bsp), bstate: Uint8Array.from(d.bstate),
-      bcrit: Float32Array.from(d.bcrit),
-      solver: { time: s.time, steps: s.steps, energy: { ...s.energy }, totalBroken: s.totalBroken },
-      simTime: world.simTime,
-      fragments: structuredClone(world.fragments.list),
-      modules: world.scene.modules.map((m) => ({ id: m.id, integrity: m.integrity, state: m.state, hits: m.hits.length })),
-      logLen: world.log.entries.length,
-      state: world.state,
-    });
+    let k = this.keyPool.pop();
+    const maxKeys = Math.ceil(this.maxFrames / this.keyEvery) + 1;
+    if (!k && this.keys.size >= maxKeys) {
+      const oldest = Math.min(...this.keys.keys());
+      k = this.keys.get(oldest);
+      this.keys.delete(oldest);
+    }
+    if (!k || k.px.length !== d.n || k.bsp.length !== d.nb) {
+      k = {
+        px: new Float64Array(d.n), py: new Float64Array(d.n),
+        vx: new Float32Array(d.n), vy: new Float32Array(d.n),
+        temp: new Float32Array(d.n), damage: new Float32Array(d.n),
+        plStrain: new Float32Array(d.n),
+        nBroken: new Uint16Array(d.n), flags: new Uint8Array(d.n), alive: new Uint8Array(d.n),
+        bsp: new Float32Array(d.nb), bstate: new Uint8Array(d.nb), bcrit: new Float32Array(d.nb),
+        solver: {}, modules: [],
+      };
+    }
+    k.px.set(d.px); k.py.set(d.py); k.vx.set(d.vx); k.vy.set(d.vy);
+    k.temp.set(d.temp); k.damage.set(d.damage); k.plStrain.set(d.plStrain);
+    k.nBroken.set(d.nBroken); k.flags.set(d.flags); k.alive.set(d.alive);
+    k.bsp.set(d.bsp); k.bstate.set(d.bstate); k.bcrit.set(d.bcrit);
+    k.solver = { time: s.time, steps: s.steps, energy: { ...s.energy }, totalBroken: s.totalBroken, E0: s.E0 };
+    k.simTime = world.simTime;
+    k.state = world.state;
+    k.contactSeen = world.contactSeen;
+    k.trueContactTime = world.trueContactTime;
+    k.stats = JSON.parse(JSON.stringify(world.stats));
+    k.fragments = structuredClone(world.fragments.list);
+    k.modules = world.scene.modules.map((m) => ({ id: m.id, integrity: m.integrity, state: m.state, hits: m.hits.length }));
+    k.logLen = world.log.entries.length;
+    this.keys.set(id, k);
   }
 
-  frame(i) { return this.frames[Math.max(0, Math.min(this.frames.length - 1, i))]; }
+  /** Logical index -> stored frame. */
+  frame(i) {
+    if (this.count === 0) return null;
+    const idx = Math.max(0, Math.min(this.count - 1, i | 0));
+    return this.slots[(this.head + idx) % this.maxFrames];
+  }
 
-  /** Nearest key frame index at or before `i`. */
+  /** Nearest key frame at or before logical index `i`; -1 when none. */
   keyAtOrBefore(i) {
+    const target = this.baseId + i;
     let best = -1;
-    for (const k of this.keys.keys()) if (k <= i && k > best) best = k;
-    return best;
+    for (const id of this.keys.keys()) if (id <= target && id > best) best = id;
+    return best < 0 ? -1 : best - this.baseId;
   }
 
-  restoreKey(world, index) {
-    const k = this.keys.get(index);
+  restoreKey(world, logicalIndex) {
+    const k = this.keys.get(this.baseId + logicalIndex);
     if (!k) return false;
     const d = world.domain, s = world.solver;
     d.px.set(k.px); d.py.set(k.py); d.vx.set(k.vx); d.vy.set(k.vy);
-    d.temp.set(k.temp); d.damage.set(k.damage); d.nBroken.set(k.nBroken);
-    d.flags.set(k.flags); d.alive.set(k.alive);
+    d.temp.set(k.temp); d.damage.set(k.damage); d.plStrain.set(k.plStrain);
+    d.nBroken.set(k.nBroken); d.flags.set(k.flags); d.alive.set(k.alive);
     d.bsp.set(k.bsp); d.bstate.set(k.bstate); d.bcrit.set(k.bcrit);
     s.time = k.solver.time; s.steps = k.solver.steps;
-    s.energy = { ...k.solver.energy }; s.totalBroken = k.solver.totalBroken;
+    s.energy = { ...k.solver.energy }; s.totalBroken = k.solver.totalBroken; s.E0 = k.solver.E0;
     world.simTime = k.simTime;
     world.state = k.state;
+    world.contactSeen = k.contactSeen;
+    world.trueContactTime = k.trueContactTime;
+    Object.assign(world.stats, k.stats);
     world.fragments.list = structuredClone(k.fragments);
     for (const rec of k.modules) {
       const m = world.scene.modules.find((x) => x.id === rec.id);
@@ -3316,10 +3611,26 @@ class Recorder {
     return true;
   }
 
+  /** Drop every frame after `logicalIndex` (used when resuming from a scrub). */
+  truncate(logicalIndex) {
+    if (logicalIndex < -1) return;
+    this.count = Math.min(this.count, logicalIndex + 1);
+    for (const id of [...this.keys.keys()]) {
+      if (id > this.baseId + logicalIndex) { this.keyPool.push(this.keys.get(id)); this.keys.delete(id); }
+    }
+    this.cursor = this.count - 1;
+  }
+
   memoryBytes() {
     let b = 0;
-    for (const f of this.frames) if (f.px) b += f.px.byteLength * 2 + f.dmg.byteLength * 3;
-    for (const k of this.keys.values()) b += k.px.byteLength * 2 + k.vx.byteLength * 2 + k.bsp.byteLength * 2;
+    for (const f of this.slots) {
+      if (!f || !f.px) continue;
+      b += f.px.byteLength * 2 + f.dmg.byteLength * 6;
+    }
+    for (const k of this.keys.values()) {
+      b += k.px.byteLength * 2 + k.vx.byteLength * 4 + k.bsp.byteLength * 2 + k.bstate.byteLength;
+    }
+    for (const k of this.keyPool) b += k.px.byteLength * 2 + k.bsp.byteLength * 2;
     return b;
   }
 }
@@ -3618,7 +3929,10 @@ class World {
     this.paused = false;
     this.pendingSteps = 0;
     this.stats = this.blankStats();
-    this.perf = { stepsLastFrame: 0, msLastFrame: 0, coast: false, substeps: 4, avgMs: 0 };
+    this.perf = {
+      stepsLastFrame: 0, msLastFrame: 0, coast: false, substeps: 4, avgMs: 0,
+      impactMs: 0, impactFrames: 0, impactSubsteps: 0,
+    };
     this.impactStartTime = 0;
     this.setProjectile(makeProjectileConfig('apcbc'));
   }
@@ -3672,6 +3986,26 @@ class World {
   }
 
   fire() {
+    // Re-tier from what the previous run actually cost. The node budget cannot
+    // change mid-impact, so this is the one safe moment to revise it.
+    if (this.governor && this.perf.impactFrames > 40) {
+      const mean = this.perf.impactMs / this.perf.impactFrames;
+      const meanSteps = this.perf.impactSubsteps / this.perf.impactFrames;
+      const moved = this.governor.reviewAfterRun(mean, meanSteps, QUALITY[this.settings.quality].substeps);
+      if (moved) {
+        this.settings.quality = this.governor.spec.quality;
+        this.settings.deviceTier = moved;
+        this.bus.emit('tier-changed', { tier: moved, meanSolverMs: mean });
+      }
+    }
+    this.perf.impactMs = 0; this.perf.impactFrames = 0; this.perf.impactSubsteps = 0;
+    // size the frame recorder by memory rather than a flat frame count: the
+    // per-frame cost is proportional to the node count, which the tier sets
+    if (this.governor) {
+      const budget = { high: 90e6, balanced: 60e6, fallback: 35e6 }[this.governor.spec.key] || 60e6;
+      const perFrame = QUALITY[this.settings.quality].budget * 14;
+      this.recorder.setCapacity(clamp(Math.round(budget / perFrame), 90, 600));
+    }
     this.reset();
     this.state = 'flight';
     this.paused = false;
@@ -3713,6 +4047,11 @@ class World {
 
     this.perf.msLastFrame = performance.now() - t0;
     this.perf.avgMs = this.perf.avgMs * 0.85 + this.perf.msLastFrame * 0.15;
+    if (this.state === 'impact') {
+      this.perf.impactMs += this.perf.msLastFrame;
+      this.perf.impactSubsteps += this.perf.stepsLastFrame;
+      this.perf.impactFrames++;
+    }
     if (this.settings.recordFrames && this.domain) this.recorder.capture(this);
     else if (this.settings.recordFrames) this.recorder.capture(this);
   }
@@ -3725,8 +4064,12 @@ class World {
   adaptiveSubsteps(q) {
     const ms = this.perf.avgMs;
     let n = this.perf.substeps || q.substeps;
-    if (ms > 13 && n > 1) n -= 1;
-    else if (ms < 7 && n < q.substeps) n += 1;
+    // The thresholds are deliberately loose. Trimming sub-steps aggressively
+    // keeps the frame rate high but stretches a 350 us event over a minute of
+    // wall time, which is worse than running at 40 fps. Prefer a slightly
+    // lower frame rate over a crawling event.
+    if (ms > 22 && n > 1) n -= 1;
+    else if (ms < 12 && n < q.substeps) n += 1;
     this.perf.substeps = clamp(n, 1, q.substeps);
     return this.perf.substeps;
   }
@@ -4491,111 +4834,321 @@ delete __exports.__all;
 
 });
 
-__def("src/render/palette.js", function (__exports, __req) {
+__def("src/render/nodegl.js", function (__exports, __req) {
 /**
- * Colour system. Field colour maps are perceptually ordered ramps so that a
- * reading can be taken off the image, not just admired.
+ * GPU NODE-FIELD RENDERER
+ * =======================
+ *
+ * The peridynamic field is the only part of the scene with a large primitive
+ * count: several thousand to twenty thousand nodes, redrawn every frame, twice
+ * (an extruded depth pass and a lit pass). On Canvas 2D that is tens of
+ * thousands of `fillRect` calls plus per-node colour work in JavaScript, and on
+ * a phone at a device pixel ratio of 3 it dominates the frame.
+ *
+ * Here the same field is drawn as GL points:
+ *   - node positions are uploaded once per frame into a preallocated buffer,
+ *   - the scalar being visualised is uploaded as a single float per node,
+ *   - material colour is uploaded *once per mesh*, not per frame,
+ *   - the colour ramp lives in a texture, so switching field mode costs nothing
+ *     and no per-node colour arithmetic happens in JavaScript at all.
+ *
+ * Nothing about the simulation changes: this reads exactly the same state the
+ * Canvas 2D path reads, and the Canvas 2D path is retained as a fallback for
+ * devices with no WebGL and for the moments after a context loss.
+ *
+ * GLSL is written to the ES 1.00 profile so one shader pair serves both a
+ * WebGL 2 and a WebGL 1 context.
  */
 
-const { clamp } = __req("src/core/math.js");
+const { RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, hexToRgb } = __req("src/render/palette.js");
 
-const UI = {
-  bg0: '#0a0d12',
-  bg1: '#11151c',
-  grid: 'rgba(120,150,180,0.07)',
-  gridMajor: 'rgba(120,150,180,0.15)',
-  ink: '#d6dde6',
-  dim: '#7d8794',
-  accent: '#4fb0d8',
-  warn: '#e0a23c',
-  danger: '#d8564a',
-  ok: '#5fbf7f',
-  corridor: 'rgba(79,176,216,0.20)',
+const RAMP_ROWS = ['material', 'damage', 'plastic', 'temp', 'velocity', 'stress'];
+const RAMP_FNS = {
+  material: RAMP_DAMAGE, damage: RAMP_DAMAGE, plastic: RAMP_PLASTIC,
+  temp: RAMP_TEMP, velocity: RAMP_VELOCITY, stress: RAMP_STRESS,
 };
 
-function ramp(stops) {
-  return (t) => {
-    t = clamp(t, 0, 1);
-    for (let i = 0; i < stops.length - 1; i++) {
-      const [a, ca] = stops[i], [b, cb] = stops[i + 1];
-      if (t >= a && t <= b) {
-        const f = (t - a) / (b - a || 1);
-        return [
-          Math.round(ca[0] + (cb[0] - ca[0]) * f),
-          Math.round(ca[1] + (cb[1] - ca[1]) * f),
-          Math.round(ca[2] + (cb[2] - ca[2]) * f),
-        ];
-      }
+const VERT = `
+precision highp float;
+attribute vec2 aPos;
+attribute float aVal;
+attribute vec3 aCol;
+attribute float aFlag;      // 1 = alive, 2 = detached
+
+uniform vec2  uCam;
+uniform float uScale;
+uniform vec2  uViewport;
+uniform vec2  uOffset;
+uniform float uPointSize;
+
+varying float vVal;
+varying vec3  vCol;
+varying float vFree;
+
+void main() {
+  if (aFlag < 0.5) {                 // dead node: park it outside the frustum
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    gl_PointSize = 0.0;
+    vVal = 0.0; vCol = vec3(0.0); vFree = 0.0;
+    return;
+  }
+  vec2 s = vec2((aPos.x - uCam.x) * uScale + uViewport.x * 0.5,
+                uViewport.y * 0.5 - (aPos.y - uCam.y) * uScale);
+  s += uOffset;
+  gl_Position = vec4(s.x / uViewport.x * 2.0 - 1.0,
+                     1.0 - s.y / uViewport.y * 2.0, 0.0, 1.0);
+  gl_PointSize = uPointSize;
+  vVal = clamp(aVal, 0.0, 1.0);
+  vCol = aCol;
+  vFree = aFlag >= 2.5 ? 1.0 : 0.0;
+}
+`;
+
+const FRAG = `
+precision highp float;
+varying float vVal;
+varying vec3  vCol;
+varying float vFree;
+
+uniform sampler2D uRamp;
+uniform float uRow;          // ramp row, already normalised
+uniform float uMaterialMode; // 1 = colour by material tinted by damage
+uniform float uDark;         // extruded depth pass
+uniform float uAlpha;
+
+void main() {
+  vec3 ramp = texture2D(uRamp, vec2(vVal, uRow)).rgb;
+  vec3 mat  = vCol * (1.14 - 0.72 * vVal);
+  vec3 c = mix(ramp, mat, uMaterialMode);
+  // detached material reads warm so spall separates from the parent body
+  c = mix(c, c * vec3(1.30, 1.04, 0.72), vFree * 0.85);
+  c *= (1.0 - uDark);
+  gl_FragColor = vec4(c, uAlpha);
+}
+`;
+
+function compile(gl, type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(s);
+    gl.deleteShader(s);
+    throw new Error(`shader compile failed: ${log}`);
+  }
+  return s;
+}
+
+class NodeGL {
+  /** @returns {NodeGL|null} null when the platform cannot provide a context */
+  static create(canvas) {
+    try {
+      const opts = {
+        alpha: true, antialias: false, depth: false, stencil: false,
+        premultipliedAlpha: true, preserveDrawingBuffer: false,
+        powerPreference: 'high-performance', desynchronized: true,
+      };
+      const gl = canvas.getContext('webgl2', opts) || canvas.getContext('webgl', opts);
+      if (!gl) return null;
+      return new NodeGL(canvas, gl);
+    } catch (e) {
+      console.warn('WebGL unavailable, falling back to Canvas 2D:', e.message);
+      return null;
     }
-    return stops[stops.length - 1][1];
-  };
+  }
+
+  constructor(canvas, gl) {
+    this.canvas = canvas;
+    this.gl = gl;
+    this.isGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+    this.lost = false;
+    this.capacity = 0;
+    this.matCache = new Map();
+
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; }, false);
+    canvas.addEventListener('webglcontextrestored', () => { this.lost = false; this.init(); this.capacity = 0; }, false);
+
+    this.init();
+  }
+
+  init() {
+    const gl = this.gl;
+    const prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VERT));
+    gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FRAG));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      throw new Error(`link failed: ${gl.getProgramInfoLog(prog)}`);
+    }
+    this.prog = prog;
+    this.loc = {
+      aPos: gl.getAttribLocation(prog, 'aPos'),
+      aVal: gl.getAttribLocation(prog, 'aVal'),
+      aCol: gl.getAttribLocation(prog, 'aCol'),
+      aFlag: gl.getAttribLocation(prog, 'aFlag'),
+      uCam: gl.getUniformLocation(prog, 'uCam'),
+      uScale: gl.getUniformLocation(prog, 'uScale'),
+      uViewport: gl.getUniformLocation(prog, 'uViewport'),
+      uOffset: gl.getUniformLocation(prog, 'uOffset'),
+      uPointSize: gl.getUniformLocation(prog, 'uPointSize'),
+      uRamp: gl.getUniformLocation(prog, 'uRamp'),
+      uRow: gl.getUniformLocation(prog, 'uRow'),
+      uMaterialMode: gl.getUniformLocation(prog, 'uMaterialMode'),
+      uDark: gl.getUniformLocation(prog, 'uDark'),
+      uAlpha: gl.getUniformLocation(prog, 'uAlpha'),
+    };
+
+    this.bufPos = gl.createBuffer();
+    this.bufVal = gl.createBuffer();
+    this.bufCol = gl.createBuffer();
+    this.bufFlag = gl.createBuffer();
+    this.ramp = this.buildRamp();
+
+    gl.disable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  }
+
+  /** One 256 x 8 RGBA texture holding every colour ramp, one per row. */
+  buildRamp() {
+    const gl = this.gl;
+    const W = 256, H = 8;
+    const data = new Uint8Array(W * H * 4);
+    RAMP_ROWS.forEach((key, row) => {
+      const fn = RAMP_FNS[key];
+      for (let x = 0; x < W; x++) {
+        const c = fn(x / (W - 1));
+        const o = (row * W + x) * 4;
+        data[o] = c[0]; data[o + 1] = c[1]; data[o + 2] = c[2]; data[o + 3] = 255;
+      }
+    });
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.rampRows = H;
+    return tex;
+  }
+
+  rowFor(mode) {
+    const i = RAMP_ROWS.indexOf(mode);
+    return ((i < 0 ? 1 : i) + 0.5) / this.rampRows;
+  }
+
+  /** Grow the CPU staging arrays and the GPU buffers to hold `n` points. */
+  ensure(n) {
+    if (n <= this.capacity) return;
+    const cap = Math.max(1024, 1 << Math.ceil(Math.log2(n + 1)));
+    const gl = this.gl;
+    this.pos = new Float32Array(cap * 2);
+    this.val = new Float32Array(cap);
+    this.col = new Float32Array(cap * 3);
+    this.flag = new Float32Array(cap);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufPos);
+    gl.bufferData(gl.ARRAY_BUFFER, cap * 2 * 4, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufVal);
+    gl.bufferData(gl.ARRAY_BUFFER, cap * 4, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufCol);
+    gl.bufferData(gl.ARRAY_BUFFER, cap * 3 * 4, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufFlag);
+    gl.bufferData(gl.ARRAY_BUFFER, cap * 4, gl.DYNAMIC_DRAW);
+    this.capacity = cap;
+    this.colourStamp = null;      // force a material-colour re-upload
+  }
+
+  resize(w, h) {
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w; this.canvas.height = h;
+    }
+    this.gl.viewport(0, 0, w, h);
+  }
+
+  clear() {
+    const gl = this.gl;
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+  }
+
+  /**
+   * Upload the per-node material colours. Static for the life of a mesh, so
+   * this runs once per shot rather than once per frame.
+   */
+  uploadColours(domain, hexOf) {
+    const gl = this.gl;
+    const n = domain.n;
+    for (let i = 0; i < n; i++) {
+      const key = domain.matTable[domain.matIndex[i]].mat.color;
+      let c = this.matCache.get(key);
+      if (!c) { const v = hexToRgb(key); c = [v[0] / 255, v[1] / 255, v[2] / 255]; this.matCache.set(key, c); }
+      this.col[i * 3] = c[0]; this.col[i * 3 + 1] = c[1]; this.col[i * 3 + 2] = c[2];
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufCol);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.col.subarray(0, n * 3));
+    this.colourStamp = domain;
+  }
+
+  bindAttribs() {
+    const gl = this.gl, L = this.loc;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufPos);
+    gl.enableVertexAttribArray(L.aPos);
+    gl.vertexAttribPointer(L.aPos, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufVal);
+    gl.enableVertexAttribArray(L.aVal);
+    gl.vertexAttribPointer(L.aVal, 1, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufCol);
+    gl.enableVertexAttribArray(L.aCol);
+    gl.vertexAttribPointer(L.aCol, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufFlag);
+    gl.enableVertexAttribArray(L.aFlag);
+    gl.vertexAttribPointer(L.aFlag, 1, gl.FLOAT, false, 0, 0);
+  }
+
+  /**
+   * @param {object} o {count, cam, mode, pointSize, extrude:[dx,dy], alpha}
+   */
+  drawPoints(o) {
+    if (this.lost) return;
+    const gl = this.gl, L = this.loc;
+    if (o.count <= 0) return;
+
+    gl.useProgram(this.prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufPos);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.pos.subarray(0, o.count * 2));
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufVal);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.val.subarray(0, o.count));
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufFlag);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.flag.subarray(0, o.count));
+    this.bindAttribs();
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.ramp);
+    gl.uniform1i(L.uRamp, 0);
+    gl.uniform2f(L.uCam, o.cam.x, o.cam.y);
+    gl.uniform1f(L.uScale, o.cam.scale);
+    gl.uniform2f(L.uViewport, this.canvas.width, this.canvas.height);
+    gl.uniform1f(L.uRow, this.rowFor(o.mode));
+    gl.uniform1f(L.uMaterialMode, o.mode === 'material' ? 1 : 0);
+
+    // extruded depth pass first, then the lit pass
+    if (o.extrude && (o.extrude[0] || o.extrude[1])) {
+      gl.uniform2f(L.uOffset, o.extrude[0], o.extrude[1]);
+      gl.uniform1f(L.uPointSize, o.pointSize);
+      gl.uniform1f(L.uDark, 0.86);
+      gl.uniform1f(L.uAlpha, 0.6);
+      gl.drawArrays(gl.POINTS, 0, o.count);
+    }
+    gl.uniform2f(L.uOffset, 0, 0);
+    gl.uniform1f(L.uPointSize, o.pointSize);
+    gl.uniform1f(L.uDark, 0);
+    gl.uniform1f(L.uAlpha, o.alpha ?? 1);
+    gl.drawArrays(gl.POINTS, 0, o.count);
+  }
 }
 
-/** Damage: intact steel-grey -> hot orange -> failed black-red. */
-const RAMP_DAMAGE = ramp([
-  [0.00, [125, 135, 152]],
-  [0.25, [150, 138, 120]],
-  [0.55, [196, 122, 62]],
-  [0.80, [176, 66, 46]],
-  [1.00, [72, 30, 30]],
-]);
-
-/** Plastic strain: cold blue -> white-hot worked metal. */
-const RAMP_PLASTIC = ramp([
-  [0.00, [58, 78, 104]],
-  [0.35, [96, 150, 186]],
-  [0.70, [214, 206, 176]],
-  [1.00, [252, 246, 232]],
-]);
-
-/** Temperature: black-body-like. */
-const RAMP_TEMP = ramp([
-  [0.00, [46, 52, 62]],
-  [0.30, [140, 54, 40]],
-  [0.55, [214, 112, 38]],
-  [0.78, [244, 190, 76]],
-  [1.00, [255, 248, 226]],
-]);
-
-/** Velocity magnitude: viridis-like, safe in both light and dark surrounds. */
-const RAMP_VELOCITY = ramp([
-  [0.00, [42, 46, 58]],
-  [0.25, [46, 92, 130]],
-  [0.50, [40, 150, 140]],
-  [0.75, [140, 190, 78]],
-  [1.00, [248, 232, 116]],
-]);
-
-/** Stress: diverging — compression blue, tension red. */
-const RAMP_STRESS = ramp([
-  [0.00, [58, 108, 190]],
-  [0.35, [90, 120, 150]],
-  [0.50, [120, 128, 136]],
-  [0.65, [176, 116, 92]],
-  [1.00, [216, 74, 58]],
-]);
-
-const FIELD_MODES = [
-  { key: 'material', label: 'Material', legend: 'body colour by material, darkened by local damage' },
-  { key: 'damage', label: 'Damage φ', unit: '0–1', legend: 'fraction of a node\'s bonds that have failed' },
-  { key: 'plastic', label: 'Plastic strain', unit: '0–εf', legend: 'accumulated equivalent plastic strain' },
-  { key: 'temp', label: 'Temperature', unit: '°C', legend: 'adiabatic heating from plastic work' },
-  { key: 'velocity', label: 'Velocity', unit: 'm/s', legend: 'node speed' },
-  { key: 'stress', label: 'Stress (virial)', unit: 'Pa', legend: 'nodal virial stress, tension positive' },
-];
-
-function rgb(c) { return `rgb(${c[0]},${c[1]},${c[2]})`; }
-
-function shade(c, f) {
-  return `rgb(${Math.round(c[0] * f)},${Math.round(c[1] * f)},${Math.round(c[2] * f)})`;
-}
-
-function hexToRgb(hex) {
-  const h = hex.replace('#', '');
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
-
-__exports.__all = {UI, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, FIELD_MODES, rgb, shade, hexToRgb};
+__exports.__all = {NodeGL};
 Object.assign(__exports, __exports.__all);
 delete __exports.__all;
 
@@ -4625,15 +5178,39 @@ __def("src/render/renderer.js", function (__exports, __req) {
  *   7  overlays: shot line, corridor bounds, measurements, selection
  */
 
-const { UI, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, rgb, shade, hexToRgb } = __req("src/render/palette.js");
+const { UI, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, FIELD_SCALES, rgb, shade, hexToRgb } = __req("src/render/palette.js");
+const { NodeGL } = __req("src/render/nodegl.js");
 const { clamp, DEG } = __req("src/core/math.js");
 const { modulePoly, MODULE_TYPES } = __req("src/sim/scene.js");
 const { ROLE } = __req("src/sim/pd/domain.js");
 
+/**
+ * THREE STACKED CANVASES
+ * ----------------------
+ * The draw order that the scene needs is: plates, then the node field over
+ * them, then fragments and overlays over that. A single GPU canvas cannot be
+ * interleaved with a 2-D one, so the layers are stacked instead:
+ *
+ *   base (2-D, opaque)      background, grid, plates, components
+ *   field (WebGL, alpha)    the peridynamic node field
+ *   fx   (2-D, alpha)       fragments, trails, in-flight projectile, overlays
+ *
+ * All three share one camera and one pixel ratio, so they stay registered.
+ * If WebGL is unavailable — or the context is lost, which iOS does on
+ * backgrounding — the node field is drawn on the base canvas by the original
+ * Canvas 2-D path and everything still works.
+ */
 class Renderer {
-  constructor(canvas, camera) {
-    this.canvas = canvas;
-    this.ctx = canvas.getContext('2d', { alpha: false });
+  constructor(canvases, camera) {
+    const c = canvases instanceof HTMLCanvasElement ? { base: canvases } : canvases;
+    this.canvas = c.base;
+    this.ctx = c.base.getContext('2d', { alpha: false });
+    this.fxCanvas = c.fx || null;
+    this.fx = this.fxCanvas ? this.fxCanvas.getContext('2d', { alpha: true }) : this.ctx;
+    this.glCanvas = c.field || null;
+    this.field = this.glCanvas ? NodeGL.create(this.glCanvas) : null;
+    if (this.glCanvas && !this.field) this.glCanvas.style.display = 'none';
+    this.pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
     this.cam = camera;
     this.opts = {
       field: 'material',
@@ -4645,8 +5222,8 @@ class Renderer {
       showFarField: true,
       extrude: true,
       nodeGain: 1.0,
-      velScale: 1600,
-      stressScale: 2.5e9,
+      velScale: FIELD_SCALES.velocity,
+      stressScale: FIELD_SCALES.stress,
     };
     this.matColorCache = new Map();
     this.selection = null;
@@ -4654,16 +5231,28 @@ class Renderer {
     this.frameOverride = null;   // a recorded frame to draw instead of live state
   }
 
+  /** Pixel ratio comes from the performance governor, not from the device. */
+  setPixelRatio(r) { this.pixelRatio = Math.max(0.5, r); }
+
   resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = this.pixelRatio;
     const r = this.canvas.getBoundingClientRect();
     const w = Math.max(1, Math.round(r.width * dpr));
     const h = Math.max(1, Math.round(r.height * dpr));
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w; this.canvas.height = h;
     }
+    if (this.fxCanvas && (this.fxCanvas.width !== w || this.fxCanvas.height !== h)) {
+      this.fxCanvas.width = w; this.fxCanvas.height = h;
+    }
+    if (this.field) this.field.resize(w, h);
     this.cam.resize(w, h, dpr);
     this.dpr = dpr;
+  }
+
+  get backend() {
+    if (!this.field || this.field.lost) return 'Canvas 2D';
+    return this.field.isGL2 ? 'WebGL 2' : 'WebGL 1';
   }
 
   matColor(key) {
@@ -4677,19 +5266,107 @@ class Renderer {
     const ctx = this.ctx, cam = this.cam;
     const W = cam.w, H = cam.h;
 
-    const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, UI.bg1); g.addColorStop(1, UI.bg0);
-    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    if (!this.bgGrad || this.bgH !== H) {
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, UI.bg1); g.addColorStop(1, UI.bg0);
+      this.bgGrad = g; this.bgH = H;
+    }
+    ctx.fillStyle = this.bgGrad; ctx.fillRect(0, 0, W, H);
 
     if (this.opts.showGrid) this.drawGrid();
 
     const frame = this.frameOverride;
     this.drawScene(world);
     this.drawModules(world);
-    if (world.domain) this.drawNodes(world, frame);
+
+    const useGL = this.field && !this.field.lost;
+    if (useGL) this.field.clear();
+    if (world.domain) {
+      if (useGL) this.drawNodesGL(world, frame);
+      else this.drawNodes(world, frame);
+    }
+
+    if (this.fx !== ctx) this.fx.clearRect(0, 0, W, H);
+    const save = this.ctx;
+    this.ctx = this.fx;                       // overlay layer
     if (this.opts.showFragments) this.drawFragments(world, frame);
     this.drawProjectile(world, frame);
     this.drawOverlays(world);
+    if (world.domain && this.opts.showVectors) this.drawVectors(world, frame);
+    this.ctx = save;
+  }
+
+  // ------------------------------------------------------- GPU node field
+
+  /**
+   * Normalised field value per node, for the GPU path. Reads the recorded
+   * frame when one is being scrubbed so a replayed frame shows the field as it
+   * was, not as it is now.
+   */
+  fillFieldBuffers(world, frame) {
+    const d = world.domain, f = this.field;
+    const n = frame && frame.px ? frame.n : d.n;
+    f.ensure(n);
+    if (f.colourStamp !== d) f.uploadColours(d, hexToRgb);
+
+    const pos = f.pos, val = f.val, flag = f.flag;
+    const mode = this.opts.field;
+    const S = FIELD_SCALES;
+
+    if (frame && frame.px) {
+      const px = frame.px, py = frame.py, alv = frame.alv;
+      const src = mode === 'material' || mode === 'damage' ? frame.dmg
+        : mode === 'plastic' ? frame.pls
+          : mode === 'temp' ? frame.tmp
+            : mode === 'velocity' ? frame.vel : frame.str;
+      for (let i = 0; i < n; i++) {
+        pos[i * 2] = px[i]; pos[i * 2 + 1] = py[i];
+        val[i] = src[i] * (1 / 255);
+        flag[i] = alv[i] & 1 ? ((alv[i] & 2) ? 3 : 1) : 0;
+      }
+    } else {
+      const px = d.px, py = d.py, alive = d.alive, flags = d.flags;
+      for (let i = 0; i < n; i++) {
+        pos[i * 2] = px[i]; pos[i * 2 + 1] = py[i];
+        flag[i] = alive[i] ? ((flags[i] & 8) ? 3 : 1) : 0;
+      }
+      switch (mode) {
+        case 'plastic':
+          for (let i = 0; i < n; i++) {
+            const pd = d.matTable[d.matIndex[i]].pd;
+            val[i] = d.plStrain[i] / Math.max(pd.epsF * S.plasticSpan, 1e-4);
+          }
+          break;
+        case 'temp':
+          for (let i = 0; i < n; i++) val[i] = (d.temp[i] - 293) / S.tempSpan;
+          break;
+        case 'velocity':
+          for (let i = 0; i < n; i++) {
+            val[i] = Math.sqrt(d.vx[i] * d.vx[i] + d.vy[i] * d.vy[i]) / this.opts.velScale;
+          }
+          break;
+        case 'stress':
+          for (let i = 0; i < n; i++) val[i] = 0.5 + d.virial[i] / (2 * this.opts.stressScale);
+          break;
+        default:
+          for (let i = 0; i < n; i++) val[i] = d.damage[i];
+      }
+    }
+    return n;
+  }
+
+  drawNodesGL(world, frame) {
+    const d = world.domain;
+    const n = this.fillFieldBuffers(world, frame);
+    const size = Math.max(1, d.dx * this.cam.scale * this.opts.nodeGain * 1.42);
+    this.field.drawPoints({
+      count: n,
+      cam: this.cam,
+      mode: this.opts.field,
+      pointSize: Math.min(size, 128),
+      extrude: this.nodeExtrudeVec(size),
+      alpha: 1,
+    });
   }
 
   // ------------------------------------------------------------------ grid
@@ -4989,7 +5666,6 @@ class Renderer {
       ctx.stroke();
     }
 
-    if (this.opts.showVectors) this.drawVectors(world, frame);
   }
 
   drawVectors(world, frame) {
@@ -5468,6 +6144,267 @@ delete __exports.__all;
 
 });
 
+__def("src/core/device.js", function (__exports, __req) {
+/**
+ * DEVICE CAPABILITY DETECTION AND THE PERFORMANCE GOVERNOR
+ * =======================================================
+ *
+ * The simulation cost is set by the node budget and the number of CFL
+ * sub-steps evaluated per frame. Neither may be lowered on capable hardware
+ * just because the hardware is a phone — an iPhone 17 Pro runs this comfortably
+ * at the same discretisation a laptop does.
+ *
+ * WHY A BENCHMARK RATHER THAN USER-AGENT SNIFFING
+ * ----------------------------------------------
+ * Safari does not expose `navigator.deviceMemory`, reports the same
+ * `hardwareConcurrency` on a five-year-old iPhone as on a current one, and
+ * freezes its user-agent string. Every static signal available is either
+ * absent or useless for ranking Apple silicon. So the tier is *measured*: a
+ * short, representative floating-point loop over a typed array — the same
+ * shape of work the solver's bond loop does — is timed at start-up and the
+ * throughput decides the tier. That ranks any device correctly, including
+ * hardware that did not exist when this was written.
+ *
+ * The measurement is then continuously corrected by the governor, which
+ * watches real frame times and moves the pixel ratio and sub-step count within
+ * the tier. The *physics* is never altered by either: the node budget and
+ * discretisation come from the tier, and the tier only ever drops if the
+ * device genuinely cannot sustain the frame.
+ */
+
+const TIERS = {
+  high: {
+    key: 'high',
+    label: 'High — modern flagship',
+    quality: 'high',
+    dprCap: 2.75,
+    minFrameMs: 9,
+    maxFrameMs: 19,
+    note: 'Full discretisation, GPU node field, device pixel ratio up to 2.75.',
+  },
+  balanced: {
+    key: 'balanced',
+    label: 'Balanced',
+    quality: 'normal',
+    dprCap: 2.0,
+    minFrameMs: 10,
+    maxFrameMs: 22,
+    note: 'Default discretisation, GPU node field, pixel ratio capped at 2.',
+  },
+  fallback: {
+    key: 'fallback',
+    label: 'Fallback — older or throttled device',
+    quality: 'low',
+    dprCap: 1.5,
+    minFrameMs: 12,
+    maxFrameMs: 30,
+    note: 'Coarser lattice and fewer sub-steps. Same solver and same model — '
+      + 'the event simply plays out over more frames.',
+  },
+};
+
+const TIER_ORDER = ['high', 'balanced', 'fallback'];
+
+/**
+ * Timed micro-benchmark shaped like the solver's inner loop: strided reads
+ * from typed arrays, a square root, a few multiply-adds, a scattered write.
+ * Returns millions of iterations per second.
+ */
+function benchmark(budgetMs = 12) {
+  const N = 1 << 14;
+  const ax = new Float32Array(N), ay = new Float32Array(N);
+  const bx = new Float32Array(N), out = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    ax[i] = Math.sin(i) * 0.01; ay[i] = Math.cos(i) * 0.01; bx[i] = 1 + (i % 7) * 0.1;
+  }
+  let iters = 0;
+  const t0 = performance.now();
+  let elapsed = 0;
+  do {
+    for (let pass = 0; pass < 8; pass++) {
+      for (let i = 0; i < N; i++) {
+        const dx = ax[i] - ay[i], dy = ay[i] + bx[i];
+        const r = Math.sqrt(dx * dx + dy * dy) || 1e-9;
+        const s = (r - bx[i]) / bx[i];
+        out[i] = out[i] * 0.5 + s * bx[i] * (dx / r) + dy / r;
+      }
+      iters += N;
+    }
+    elapsed = performance.now() - t0;
+  } while (elapsed < budgetMs);
+  return iters / elapsed / 1000;    // M iterations per second
+}
+
+/** Feature probe — what the platform can actually do. */
+function probe() {
+  const ua = navigator.userAgent || '';
+  const touch = (navigator.maxTouchPoints || 0) > 0;
+  const iOS = /iPad|iPhone|iPod/.test(ua)
+    || (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1);
+
+  let webgl = null, webgl2 = false, renderer = 'unknown';
+  try {
+    const c = document.createElement('canvas');
+    let gl = c.getContext('webgl2', { antialias: false });
+    if (gl) { webgl2 = true; } else { gl = c.getContext('webgl', { antialias: false }); }
+    if (gl) {
+      webgl = true;
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      if (dbg) renderer = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || 'unknown';
+      const lose = gl.getExtension('WEBGL_lose_context');
+      if (lose) lose.loseContext();
+    } else webgl = false;
+  } catch (e) { webgl = false; }
+
+  return {
+    ua, iOS, touch, webgl, webgl2, glRenderer: renderer,
+    dpr: window.devicePixelRatio || 1,
+    cores: navigator.hardwareConcurrency || 0,
+    webgpu: typeof navigator !== 'undefined' && 'gpu' in navigator,
+    reducedMotion: window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  };
+}
+
+/**
+ * Pick a starting tier from the measured throughput.
+ *
+ * The benchmark loop is deliberately latency-bound — dependent square roots
+ * and divides — because that is the shape of the solver's bond update, so the
+ * absolute numbers are much lower than a throughput benchmark would give.
+ *
+ * The thresholds lean towards *promoting*: an over-promoted device is
+ * recoverable, because the governor trims pixel ratio and sub-steps within a
+ * frame or two and the between-run review (see Governor.reviewAfterRun) drops
+ * the tier before the next shot. An under-promoted device is not recoverable
+ * by itself — a flagship would quietly run a coarse lattice forever and the
+ * user would have no way of knowing. Given that asymmetry, the starting tier
+ * errs high and lets measurement correct it.
+ */
+function classify(score, cap) {
+  if (!cap.webgl) return 'fallback';           // no GPU path: keep the node count low
+  if (score >= 55) return 'high';
+  if (score >= 22) return 'balanced';
+  return 'fallback';
+}
+
+function detect() {
+  const cap = probe();
+  let score = 0;
+  try { score = benchmark(); } catch (e) { score = 0; }
+  const tier = classify(score, cap);
+  return { ...cap, score, tier, tierSpec: TIERS[tier] };
+}
+
+/**
+ * Runtime governor.
+ *
+ * Watches the real frame interval and trims the two things that can be trimmed
+ * without touching the model: the render pixel ratio and the number of solver
+ * sub-steps per frame. It never changes the lattice, the material model or the
+ * time step, so a governed run and an ungoverned one are the same simulation —
+ * one simply advances less simulated time per frame.
+ */
+class Governor {
+  constructor(device) {
+    this.device = device;
+    this.spec = device.tierSpec;
+    this.dprScale = 1;
+    this.avg = 16.7;
+    this.samples = 0;
+    this.cooldown = 0;
+    this.enabled = true;
+    this.history = [];
+  }
+
+  setTier(key) {
+    this.device.tier = key;
+    this.spec = TIERS[key];
+    this.device.tierSpec = this.spec;
+    this.dprScale = 1;
+    this.cooldown = 60;
+  }
+
+  /** Effective device pixel ratio for the canvases. */
+  pixelRatio() {
+    return Math.max(1, Math.min(window.devicePixelRatio || 1, this.spec.dprCap) * this.dprScale);
+  }
+
+  /**
+   * @param {number} frameMs wall-clock interval of the last frame
+   * @returns {boolean} true if the pixel ratio changed and canvases must resize
+   */
+  update(frameMs) {
+    if (!this.enabled) return false;
+    this.avg = this.avg * 0.9 + Math.min(frameMs, 100) * 0.1;
+    this.samples++;
+    if (this.cooldown > 0) { this.cooldown--; return false; }
+    if (this.samples < 30) return false;
+
+    const before = this.dprScale;
+    if (this.avg > this.spec.maxFrameMs && this.dprScale > 0.6) {
+      this.dprScale = Math.max(0.6, this.dprScale - 0.12);
+      this.cooldown = 45;
+    } else if (this.avg < this.spec.minFrameMs && this.dprScale < 1) {
+      this.dprScale = Math.min(1, this.dprScale + 0.08);
+      this.cooldown = 45;
+    }
+    return this.dprScale !== before;
+  }
+
+  /**
+   * Between-shot tier review.
+   *
+   * The governor can only trim pixel ratio and sub-steps; the node budget is
+   * fixed for the life of a mesh, so it can only be changed between runs. This
+   * is where a device that turned out to be faster or slower than the start-up
+   * benchmark suggested gets moved. Called on FIRE, so the tier never changes
+   * part-way through an impact.
+   *
+   * The decisive signal is not the solver's cost per frame — once the
+   * sub-step governor has clamped down, a struggling device reports a *cheap*
+   * frame because it is barely advancing the solution. What matters is whether
+   * the device could sustain the sub-step count the tier asks for.
+   *
+   * @param {number} solverMs   mean solver cost per frame during the last impact
+   * @param {number} meanSteps  mean sub-steps actually achieved per frame
+   * @param {number} wantSteps  sub-steps the tier asks for
+   * @returns {string|null} the new tier key, or null if unchanged
+   */
+  reviewAfterRun(solverMs, meanSteps, wantSteps) {
+    if (!this.enabled || !(solverMs > 0)) return null;
+    const i = TIER_ORDER.indexOf(this.device.tier);
+    const starved = meanSteps > 0 && meanSteps <= Math.max(1.35, wantSteps * 0.4);
+    if (starved && i < TIER_ORDER.length - 1) {
+      const next = TIER_ORDER[i + 1];
+      this.setTier(next);
+      return next;
+    }
+    const comfortable = solverMs < 5.5 && meanSteps >= wantSteps * 0.95;
+    if (comfortable && i > 0) {
+      const next = TIER_ORDER[i - 1];
+      this.setTier(next);
+      return next;
+    }
+    return null;
+  }
+
+  describe() {
+    return {
+      tier: this.spec.label,
+      score: this.device.score,
+      fps: this.avg > 0 ? 1000 / this.avg : 0,
+      dpr: this.pixelRatio(),
+      backend: this.device.webgl2 ? 'WebGL 2' : this.device.webgl ? 'WebGL 1' : 'Canvas 2D',
+    };
+  }
+}
+
+__exports.__all = {TIERS, TIER_ORDER, benchmark, probe, classify, detect, Governor};
+Object.assign(__exports, __exports.__all);
+delete __exports.__all;
+
+});
+
 __def("src/ui/app.js", function (__exports, __req) {
 /**
  * UI LAYER
@@ -5489,6 +6426,7 @@ const { QUALITY } = __req("src/sim/world.js");
 const { FIELD_MODES, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, rgb } = __req("src/render/palette.js");
 const U = __req("src/core/units.js");
 const { ROLE } = __req("src/sim/pd/domain.js");
+const { TIERS, TIER_ORDER } = __req("src/core/device.js");
 
 const FIELDS = {
   velocity: { label: 'Impact velocity', unit: 'm/s', dp: 0, step: 10 },
@@ -5639,6 +6577,21 @@ class App {
   panelSim() {
     const w = this.world;
     const p = panel('Simulation');
+
+    if (w.device) {
+      p.body.appendChild(row('Device profile', select(
+        TIER_ORDER.map((k) => ({ value: k, label: TIERS[k].label })),
+        w.device.tier,
+        (v) => {
+          w.governor.setTier(v);
+          w.settings.quality = TIERS[v].quality;
+          this.renderer.setPixelRatio(w.governor.pixelRatio());
+          this.refreshLeft();
+        },
+      )));
+      p.body.appendChild(el('div', { class: 'hint' }, TIERS[w.device.tier].note));
+    }
+
     p.body.appendChild(row('Discretisation', select(
       Object.keys(QUALITY).map((k) => ({ value: k, label: QUALITY[k].label })),
       w.settings.quality, (v) => { w.settings.quality = v; this.refreshRight(); },
@@ -5972,12 +6925,25 @@ class App {
         + 'The drift is reported rather than hidden: beyond roughly ±35 % treat the run as qualitative only, '
         + 'and refine the discretisation or lower the bond viscosity.'));
     }
+    p.body.appendChild(el('div', { class: 'hint' }, 'Runtime'));
+    const g = w.governor ? w.governor.describe() : null;
     p.body.appendChild(kv([
       ['Solver ms / frame', w.perf.msLastFrame.toFixed(2)],
       ['Steps / frame', String(w.perf.stepsLastFrame)],
-      ['Recorded frames', String(w.recorder.length)],
+      g ? ['Frame rate', `${g.fps.toFixed(0)} fps`, g.fps < 30 ? 'bad' : 'good'] : null,
+      ['Render backend', this.renderer.backend, this.renderer.backend === 'Canvas 2D' ? 'hi' : 'good'],
+      g ? ['Pixel ratio', g.dpr.toFixed(2)] : null,
+      w.device ? ['Device tier', w.device.tier] : null,
+      w.device ? ['Benchmark', `${w.device.score.toFixed(0)} M it/s`] : null,
+      w.device && w.device.glRenderer !== 'unknown' ? ['GPU', String(w.device.glRenderer).slice(0, 28)] : null,
+      ['Recorded frames', `${w.recorder.length} / ${w.recorder.maxFrames}`],
       ['Recorder memory', `${(w.recorder.memoryBytes() / 1e6).toFixed(1)} MB`],
     ]));
+    p.body.appendChild(el('div', { class: 'note' },
+      'The device tier sets the node budget only. The solver, the constitutive model and '
+      + 'the time step are identical at every tier — a lower tier resolves less detail, it '
+      + 'does not simulate less. The governor trims pixel ratio and sub-steps per frame, '
+      + 'never the physics.'));
     return p;
   }
 
@@ -6007,7 +6973,7 @@ class App {
     $('btnStepF').onclick = () => this.stepFrame(1);
     $('btnStepB').onclick = () => this.stepFrame(-1);
     $('btnStep10').onclick = () => { this.goLive(); w.paused = true; w.requestSteps(10); this.syncPlayBtn(); };
-    $('btnDocs').onclick = () => window.open('./docs/MODEL.md', '_blank');
+    $('btnDocs').onclick = () => window.open('./docs/model.html', '_blank');
 
     $('btnZoomIn').onclick = () => this.cam.setZoom(this.cam.targetScale * 1.4);
     $('btnZoomOut').onclick = () => this.cam.setZoom(this.cam.targetScale / 1.4);
@@ -6049,9 +7015,8 @@ class App {
       // re-run forward. The solver is deterministic, so this is exact.
       const idx = +this.scrub.value;
       const k = w.recorder.keyAtOrBefore(idx);
-      if (k >= 0 && w.domain) {
-        w.recorder.restoreKey(w, k);
-        w.recorder.frames.length = k + 1;
+      if (k >= 0 && w.domain && w.recorder.restoreKey(w, k)) {
+        w.recorder.truncate(k);
       }
       this.renderer.frameOverride = null;
       this.scrubbing = false;
@@ -6105,7 +7070,11 @@ class App {
     let pinchDist = 0;
 
     c.addEventListener('pointerdown', (e) => {
-      c.setPointerCapture(e.pointerId);
+      // Pointer capture is an optimisation, not a requirement: it keeps a drag
+      // alive if the finger leaves the canvas. It can throw (a pointer that is
+      // already gone, or a synthetic event), and if it does the gesture must
+      // still work — so it must never be the first thing that can fail.
+      try { c.setPointerCapture(e.pointerId); } catch (err) { /* non-fatal */ }
       pointers.set(e.pointerId, [e.clientX, e.clientY]);
       dragging = true; moved = 0;
       lastX = e.clientX; lastY = e.clientY;
@@ -6338,25 +7307,59 @@ __def("src/main.js", function (__exports, __req) {
  *     input (already handled by the UI)  ->  simulation  ->  camera  ->  render
  * The renderer is called after the world has advanced and is given either the
  * live state or a recorded frame. It never feeds anything back.
+ *
+ * On top of that this file owns the platform layer: device tiering, the
+ * performance governor, and the handful of iOS Safari behaviours that have to
+ * be suppressed for a full-screen canvas application (page pinch-zoom,
+ * double-tap zoom, rubber-band scroll, and the frame-time spike on returning
+ * from the background).
  */
 
-const { World } = __req("src/sim/world.js");
+const { World, QUALITY } = __req("src/sim/world.js");
 const { Scene } = __req("src/sim/scene.js");
 const { Camera } = __req("src/render/camera.js");
 const { Renderer } = __req("src/render/renderer.js");
 const { App } = __req("src/ui/app.js");
 const { PRESETS } = __req("src/ui/presets.js");
 const { makeProjectileConfig } = __req("src/sim/projectileTypes.js");
+const { detect, Governor, TIERS } = __req("src/core/device.js");
+
+// ---------------------------------------------------------------- platform
+
+const device = detect();
+const governor = new Governor(device);
 
 const world = new World();
 const camera = new Camera();
-const renderer = new Renderer(document.getElementById('viewport'), camera);
+const renderer = new Renderer({
+  base: document.getElementById('viewport'),
+  field: document.getElementById('viewportField'),
+  fx: document.getElementById('viewportFx'),
+}, camera);
 
-// open on the reference case
+// The measured tier sets the discretisation. This is the *only* place the
+// device influences the model: it chooses the node budget, exactly as the
+// Discretisation control does. Nothing about the physics differs between
+// tiers - a coarser lattice resolves less detail, it does not simulate less.
+world.settings.quality = device.tierSpec.quality;
+world.settings.deviceTier = device.tier;
+world.recorder.setCapacity(device.tier === 'high' ? 480 : device.tier === 'balanced' ? 360 : 240);
+renderer.setPixelRatio(governor.pixelRatio());
+world.device = device;
+world.governor = governor;
+
+// ------------------------------------------------------------------ scene
+
 const p0 = PRESETS['single-plate'];
 world.setScene(Scene.fromJSON(p0.scene));
 world.scene.name = p0.name;
 world.setProjectile(makeProjectileConfig(p0.projectile.type, p0.projectile));
+
+// a tier change between shots also changes the recorder's memory footprint
+world.bus.on('tier-changed', ({ tier }) => {
+  renderer.setPixelRatio(governor.pixelRatio());
+  world.recorder.setCapacity(tier === 'high' ? 480 : tier === 'balanced' ? 360 : 240);
+});
 
 const app = new App(world, renderer, camera);
 renderer.resize();          // the camera needs the real viewport before framing
@@ -6364,11 +7367,46 @@ app.frameScene();           // frame the target but leave the camera following
 app.updateLegend();
 app.syncPlayBtn();
 
+// -------------------------------------------------- iOS Safari suppression
+
+const view = document.getElementById('view');
+
+// Safari's own pinch-zoom would fight the camera on a full-screen canvas.
+// `touch-action: none` covers the pointer events, but Safari also emits the
+// legacy gesture events, which have to be refused explicitly.
+for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) {
+  view.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+}
+// double-tap-to-zoom on the viewport
+view.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
+// rubber-band scrolling of the page behind the canvas
+document.addEventListener('touchmove', (e) => {
+  if (e.target.closest && e.target.closest('#view')) e.preventDefault();
+}, { passive: false });
+
+// Returning from the background hands back one enormous frame interval and,
+// on iOS, sometimes a lost WebGL context. Skip a frame rather than integrate
+// the gap or draw into a dead context.
+let skipNext = false;
+document.addEventListener('visibilitychange', () => { if (!document.hidden) skipNext = true; });
+window.addEventListener('pageshow', () => { skipNext = true; });
+window.addEventListener('orientationchange', () => {
+  skipNext = true;
+  setTimeout(() => { renderer.resize(); app.frameScene(); }, 250);
+});
+
+// ------------------------------------------------------------------- loop
+
 let last = performance.now();
 let acc = 0;
+
 function frame(now) {
-  const dt = Math.min((now - last) / 1000, 0.1);
+  const raw = now - last;
   last = now;
+  if (skipNext) { skipNext = false; requestAnimationFrame(frame); return; }
+  const dt = Math.min(raw / 1000, 0.1);
+
+  if (governor.update(raw)) renderer.setPixelRatio(governor.pixelRatio());
 
   // carry any user overrides of the model knobs onto a freshly built solver
   if (world.solver) {
@@ -6387,10 +7425,14 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
-window.addEventListener('resize', () => renderer.resize());
+let resizeTimer = 0;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => renderer.resize(), 60);
+});
 
 // expose for console-level inspection; this is a research tool, not a kiosk
-window.TBS = { world, camera, renderer, app };
+window.TBS = { world, camera, renderer, app, device, governor, TIERS, QUALITY };
 
 });
 

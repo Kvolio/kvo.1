@@ -1,0 +1,56 @@
+name: Deploy to GitHub Pages
+
+# The site is static: index.html plus the src/ module tree, which GitHub Pages
+# can serve as-is over HTTPS. The build step exists to regenerate the
+# single-file bundle and the rendered model document, and the check step runs
+# the solver headlessly so a physics regression cannot reach the published URL.
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deployments race; always finish the newest one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify the solver still behaves
+        run: node tools/checks.mjs
+
+      - name: Build single-file bundle and rendered docs
+        run: node tools/build.mjs
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
