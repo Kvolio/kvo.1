@@ -336,8 +336,14 @@ export const TYPE_ORDER = ['ap', 'apc', 'apcbc', 'aphe', 'apcr', 'apds', 'apfsds
 export function makeProjectileConfig(typeKey, overrides = {}) {
   const t = PROJECTILE_TYPES[typeKey];
   if (!t) throw new Error(`unknown projectile type ${typeKey}`);
+  // aimY and attack were read by Projectile.reset() but never present in the
+  // config, so they were pinned at 0 and never reachable from the UI. They are
+  // part of the default set so that aiming is adjustable like any other
+  // parameter: aimY moves the impact point up or down the plate, attack turns
+  // the velocity vector, and yaw turns the body independently of it (the
+  // difference between the two is the angle of attack at impact).
   return Object.assign({ type: typeKey }, structuredClone(t.defaults), {
-    yaw: 0, spin: 0, standoff: 1.8,
+    yaw: 0, spin: 0, standoff: 1.8, attack: 0, aimY: 0,
   }, overrides);
 }
 

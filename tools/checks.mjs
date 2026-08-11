@@ -68,6 +68,66 @@ for (const key of PRESET_ORDER) {
   }
 }
 
+console.log('\n== aiming ==');
+{
+  // aimY moves the launch line up or down; the impact point must follow it
+  const lo = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.8, aimY: -0.20 },
+    layers: [{ material: 'rha', thickness: 0.08, height: 1.4 }] });
+  const mid = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.8, aimY: 0 },
+    layers: [{ material: 'rha', thickness: 0.08, height: 1.4 }] });
+  const hi = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.8, aimY: 0.20 },
+    layers: [{ material: 'rha', thickness: 0.08, height: 1.4 }] });
+  check(lo.stats.impactY < mid.stats.impactY - 0.10 && hi.stats.impactY > mid.stats.impactY + 0.10,
+    `aim height moves the impact point (${(lo.stats.impactY * 1000).toFixed(0)}, `
+    + `${(mid.stats.impactY * 1000).toFixed(0)}, ${(hi.stats.impactY * 1000).toFixed(0)} mm)`);
+
+  // a round aimed clean off the top of a short plate must not report a hit
+  const miss = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.8, aimY: 1.2 },
+    layers: [{ material: 'rha', thickness: 0.08, height: 0.4 }] });
+  check(!miss.stats.perforated && miss.stats.armourDefeated < 1e-6,
+    `a round aimed past the edge of the plate defeats no armour (${miss.verdict.headline})`);
+
+  // elevating the aim off-axis must change where it lands
+  const up = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.8, attack: 10 },
+    layers: [{ material: 'rha', thickness: 0.08, height: 1.6 }] });
+  check(Math.abs(up.stats.impactY - mid.stats.impactY) > 0.03,
+    `aim elevation moves the impact point (${(up.stats.impactY * 1000).toFixed(0)} mm vs `
+    + `${(mid.stats.impactY * 1000).toFixed(0)} mm on axis)`);
+}
+
+console.log('\n== back-face bulge is measured on the plate being deformed ==');
+{
+  // the round stops in the front plate; the rear plate is never touched.
+  // Measuring the bulge on the last layer in the array reported 0 for a
+  // plate that is visibly dished.
+  const r = run({ type: 'apcbc', proj: { velocity: 650, standoff: 0.8 }, quality: 'normal',
+    layers: [
+      { material: 'rha', thickness: 0.105, height: 1.2 },
+      { material: 'rha', thickness: 0.020, gap: 0.5, height: 1.2 },
+    ] });
+  check(!r.stats.perforated, `round is stopped by the front plate (${r.verdict.headline})`);
+  check(r.stats.backfaceBulge > 1e-4,
+    `a stopped round still reports a bulge on the plate it deformed `
+    + `(${(r.stats.backfaceBulge * 1000).toFixed(1)} mm)`);
+}
+
+console.log('\n== recorded-frame capacity ==');
+{
+  const w = new World();
+  w.settings.quality = 'normal';
+  w.settings.recordedFrames = 1500;
+  const asked = w.frameCapacity();
+  w.settings.recordedFrames = 200;
+  const fewer = w.frameCapacity();
+  check(asked > fewer, `the frame count setting is honoured (${fewer} -> ${asked})`);
+  w.settings.recordedFrames = 3000;
+  w.settings.quality = 'ultra';
+  const coarse = w.frameCapacity();
+  check(coarse * w.bytesPerFrame() < 400e6,
+    `capacity stays under the memory ceiling at the finest mesh `
+    + `(${coarse} frames, ${((coarse * w.bytesPerFrame()) / 1e6).toFixed(0)} MB)`);
+}
+
 console.log('\n== the model discriminates ==');
 
 const thin = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 }, layers: [{ material: 'rha', thickness: 0.06 }] });

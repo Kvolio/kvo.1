@@ -82,8 +82,9 @@ export class World {
       autoSlow: true,
       recordFrames: true,
       seed: 20260810,
-      maxEventTime: 3.5e-4,     // hard bound on the resolved continuum window
+      maxEventTime: 6e-4,       // hard bound on the resolved continuum window
       corridorScale: 1.0,       // width multiplier for the deformable corridor
+      recordedFrames: 600,      // frames kept for scrubbing; see fire()
     };
 
     this.state = 'idle';
@@ -147,6 +148,21 @@ export class World {
     return this;
   }
 
+  /** Bytes of frame buffer per recorded frame at the current discretisation. */
+  bytesPerFrame() { return QUALITY[this.settings.quality].budget * 14; }
+
+  /**
+   * Frames the recorder will actually keep: what was asked for, clipped to a
+   * memory ceiling that follows the device tier. The UI reads this so the
+   * number on screen is the number in use.
+   */
+  frameCapacity() {
+    const cap = { high: 340e6, balanced: 220e6, fallback: 110e6 }[
+      this.governor ? this.governor.spec.key : 'balanced'] || 220e6;
+    const want = this.settings.recordedFrames ?? 600;
+    return clamp(Math.round(want), 60, Math.max(60, Math.floor(cap / this.bytesPerFrame())));
+  }
+
   fire() {
     // Re-tier from what the previous run actually cost. The node budget cannot
     // change mid-impact, so this is the one safe moment to revise it.
@@ -161,13 +177,15 @@ export class World {
       }
     }
     this.perf.impactMs = 0; this.perf.impactFrames = 0; this.perf.impactSubsteps = 0;
-    // size the frame recorder by memory rather than a flat frame count: the
-    // per-frame cost is proportional to the node count, which the tier sets
-    if (this.governor) {
-      const budget = { high: 90e6, balanced: 60e6, fallback: 35e6 }[this.governor.spec.key] || 60e6;
-      const perFrame = QUALITY[this.settings.quality].budget * 14;
-      this.recorder.setCapacity(clamp(Math.round(budget / perFrame), 90, 600));
-    }
+    // FRAME RECORDER CAPACITY
+    // The user asks for a frame count; memory sets the ceiling. Each frame
+    // costs 14 bytes per node (two float32 positions plus six byte fields), so
+    // the affordable count falls as the discretisation rises. Rather than
+    // silently pick a number, the requested count is honoured up to a hard
+    // memory ceiling and the resulting figure is reported in the Simulation
+    // panel next to the estimate, so a phone that cannot hold 2000 frames of
+    // an ultra mesh says so instead of quietly recording 600.
+    this.recorder.setCapacity(this.frameCapacity());
     this.reset();
     this.state = 'flight';
     this.paused = false;
@@ -758,7 +776,6 @@ export class World {
     const last = layers[layers.length - 1];
     const nL = last.normal, fxL = last.frontX;
     const tL = last.thickness;              // NORMAL thickness of the last layer
-    const lastIdx = layers.length - 1;
     const ix = st.impactX ?? fx, iy = st.impactY ?? 0;
     const ax = d.ax, ay = d.ay;             // shot direction
     const channelHalfWidth = this.projectile.geom.penDiameter * 0.9;
@@ -791,6 +808,23 @@ export class World {
     const aLo = -0.03, aHi = this.scene.normalTotal + 0.20;
     const bLo = -0.05, bHi = tL + 0.20;
     const aStep = (aHi - aLo) / NB, bStep = (bHi - bLo) / NB;
+
+    // WHICH LAYER IS THE BULGE MEASURED ON
+    // The last layer in the array is not necessarily the one being deformed.
+    // A round that stops in the front plate of a two-plate array leaves that
+    // plate visibly dished while the rear plate is untouched, and measuring
+    // the bulge on the rear plate reported 0 um for an obvious bulge. The
+    // bulge belongs to the deepest layer the penetrator has actually entered.
+    let bulgeIdx = 0;
+    for (let i = 0; i < d.n; i++) {
+      if (!d.alive[i] || d.role[i] !== ROLE.PENETRATOR) continue;
+      for (let k = layers.length - 1; k > bulgeIdx; k--) {
+        const Lk = layers[k];
+        if ((d.px[i] - Lk.frontX) * Lk.normal[0] + d.py[i] * Lk.normal[1] > 0) { bulgeIdx = k; break; }
+      }
+    }
+    const Lb = layers[bulgeIdx];
+    const nB = Lb.normal, fxB = Lb.frontX, tB = Lb.thickness;
 
     let deepest = -Infinity, deepestLast = -Infinity, deepestLos = -Infinity;
     let penMass = 0;
@@ -856,17 +890,17 @@ export class World {
         // is still attached. Detached material is spall, not bulge, so it is
         // excluded - otherwise a scab flying off would be reported as an
         // enormous bulge.
-        // Measured in the LAST layer's own frame against its NORMAL thickness,
+        // Measured in that layer's own frame against its NORMAL thickness,
         // and only outside the channel: material being pushed out through the
         // hole is petalling, not bulging, and would otherwise dominate the
         // figure once the plate is perforated. A bulge is the dishing of the
         // rear face *around* the impact.
-        if (d.damage[i] < 0.45 && d.layer[i] === lastIdx) {
+        if (d.damage[i] < 0.45 && d.layer[i] === bulgeIdx) {
           const lat = Math.abs((d.rx[i] - d.ox) * d.bx + (d.ry[i] - d.oy) * d.by);
           if (lat > channelHalfWidth) {
-            const dep = (d.px[i] - fxL) * nL[0] + d.py[i] * nL[1];
-            const ref = (d.rx[i] - fxL) * nL[0] + d.ry[i] * nL[1];
-            if (ref > tL * 0.82) {
+            const dep = (d.px[i] - fxB) * nB[0] + d.py[i] * nB[1];
+            const ref = (d.rx[i] - fxB) * nB[0] + d.ry[i] * nB[1];
+            if (ref > tB * 0.82) {
               const move = dep - ref;
               if (move > bulge) bulge = move;
             }

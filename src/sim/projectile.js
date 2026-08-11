@@ -106,10 +106,16 @@ export class Projectile {
     const c = this.cfg;
     this.x = -(c.standoff ?? 1.8);
     this.y = c.aimY ?? 0;
-    this.ang = (c.yaw ?? 0) * DEG;      // orientation of the +x body axis
+    // `attack` turns the flight path; `yaw` turns the body RELATIVE to it, so
+    // yaw is the angle of attack at impact and zero means nose-on however the
+    // shot is aimed. Making yaw absolute instead would mean that elevating the
+    // aim quietly introduced a yawed impact, which cuts penetration sharply -
+    // a large physical effect arriving as a side effect of an aiming control.
+    const att = (c.attack ?? 0) * DEG;
+    this.ang = att + (c.yaw ?? 0) * DEG;   // orientation of the +x body axis
     this.omega = (c.spin ?? 0);
-    this.vx = Math.cos((c.attack ?? 0) * DEG) * c.velocity;
-    this.vy = Math.sin((c.attack ?? 0) * DEG) * c.velocity;
+    this.vx = Math.cos(att) * c.velocity;
+    this.vy = Math.sin(att) * c.velocity;
     this.mass = this.mass0;
     this.inertia = this.inertia0;
     this.distance = 0;

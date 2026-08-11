@@ -1257,7 +1257,6 @@ class PDDomain {
     this.srate = F(n);         // smoothed local strain rate (1/s)
     this.theta = F(n);         // local dilatation (mean bond stretch)
     this.thetaAcc = F(n);      // accumulator for the next step's dilatation
-    this.thetaCnt = new Uint16Array(n);
     this.plStrain = F(n);      // accumulated equivalent plastic strain
     this.flowMul = F(n);       // cached Johnson-Cook flow-stress multiplier
     this.flowMul.fill(1);
@@ -1720,7 +1719,7 @@ class PDSolver {
     const fx = d.fx, fy = d.fy;
     const bi = d.bi, bj = d.bj, bk = d.bk, bref = d.bref, bsp = d.bsp;
     const bsy = d.bsy, bsf = d.bsf, bsten = d.bsten, bstate = d.bstate;
-    const theta = d.theta, thetaAcc = d.thetaAcc, thetaCnt = d.thetaCnt;
+    const theta = d.theta, thetaAcc = d.thetaAcc;
     const bstretch = this.bstretch, bse = this.bse;
     const plStrain = d.plStrain;
     const bdamp = d.bdamp, bdampQ = d.bdampQ, bcrit = d.bcrit;
@@ -1731,13 +1730,14 @@ class PDSolver {
     fx.fill(0); fy.fill(0); virial.fill(0);
 
     // ---- pass 1: local dilatation ---------------------------------------
-    // theta_i is the mean stretch of the bonds still attached to node i. For
-    // uniform dilatation every bond stretches equally and theta recovers the
-    // volumetric strain; for pure shear the bond stretches average to zero.
+    // theta_i sums the stretch of the bonds still attached to node i and
+    // divides by the node's ORIGINAL bond count (see below). For uniform
+    // dilatation of undamaged material every bond stretches equally and theta
+    // recovers the volumetric strain; for pure shear the stretches cancel.
     // It must be evaluated at the *current* configuration: lagging it by even
     // one step couples the stiffest (hydrostatic) mode to a delayed force and
     // drives an explicit instability that no realistic time step survives.
-    thetaAcc.fill(0); thetaCnt.fill(0);
+    thetaAcc.fill(0);
     for (let b = 0; b < nb; b++) {
       if (bstate[b] !== BOND.INTACT) continue;
       const i = bi[b], j = bj[b];
@@ -1747,7 +1747,6 @@ class PDSolver {
       const st = (Math.sqrt(dx * dx + dy * dy) - r0) / r0;
       bstretch[b] = st;
       thetaAcc[i] += st; thetaAcc[j] += st;
-      thetaCnt[i]++; thetaCnt[j]++;
     }
     // Normalised by the node's ORIGINAL bond count, not by the number still
     // intact. Re-averaging over the surviving bonds makes theta jump every
@@ -2630,8 +2629,14 @@ const TYPE_ORDER = ['ap', 'apc', 'apcbc', 'aphe', 'apcr', 'apds', 'apfsds', 'he'
 function makeProjectileConfig(typeKey, overrides = {}) {
   const t = PROJECTILE_TYPES[typeKey];
   if (!t) throw new Error(`unknown projectile type ${typeKey}`);
+  // aimY and attack were read by Projectile.reset() but never present in the
+  // config, so they were pinned at 0 and never reachable from the UI. They are
+  // part of the default set so that aiming is adjustable like any other
+  // parameter: aimY moves the impact point up or down the plate, attack turns
+  // the velocity vector, and yaw turns the body independently of it (the
+  // difference between the two is the angle of attack at impact).
   return Object.assign({ type: typeKey }, structuredClone(t.defaults), {
-    yaw: 0, spin: 0, standoff: 1.8,
+    yaw: 0, spin: 0, standoff: 1.8, attack: 0, aimY: 0,
   }, overrides);
 }
 
@@ -2768,10 +2773,16 @@ class Projectile {
     const c = this.cfg;
     this.x = -(c.standoff ?? 1.8);
     this.y = c.aimY ?? 0;
-    this.ang = (c.yaw ?? 0) * DEG;      // orientation of the +x body axis
+    // `attack` turns the flight path; `yaw` turns the body RELATIVE to it, so
+    // yaw is the angle of attack at impact and zero means nose-on however the
+    // shot is aimed. Making yaw absolute instead would mean that elevating the
+    // aim quietly introduced a yawed impact, which cuts penetration sharply -
+    // a large physical effect arriving as a side effect of an aiming control.
+    const att = (c.attack ?? 0) * DEG;
+    this.ang = att + (c.yaw ?? 0) * DEG;   // orientation of the +x body axis
     this.omega = (c.spin ?? 0);
-    this.vx = Math.cos((c.attack ?? 0) * DEG) * c.velocity;
-    this.vy = Math.sin((c.attack ?? 0) * DEG) * c.velocity;
+    this.vx = Math.cos(att) * c.velocity;
+    this.vy = Math.sin(att) * c.velocity;
     this.mass = this.mass0;
     this.inertia = this.inertia0;
     this.distance = 0;
@@ -4057,8 +4068,9 @@ class World {
       autoSlow: true,
       recordFrames: true,
       seed: 20260810,
-      maxEventTime: 3.5e-4,     // hard bound on the resolved continuum window
+      maxEventTime: 6e-4,       // hard bound on the resolved continuum window
       corridorScale: 1.0,       // width multiplier for the deformable corridor
+      recordedFrames: 600,      // frames kept for scrubbing; see fire()
     };
 
     this.state = 'idle';
@@ -4122,6 +4134,21 @@ class World {
     return this;
   }
 
+  /** Bytes of frame buffer per recorded frame at the current discretisation. */
+  bytesPerFrame() { return QUALITY[this.settings.quality].budget * 14; }
+
+  /**
+   * Frames the recorder will actually keep: what was asked for, clipped to a
+   * memory ceiling that follows the device tier. The UI reads this so the
+   * number on screen is the number in use.
+   */
+  frameCapacity() {
+    const cap = { high: 340e6, balanced: 220e6, fallback: 110e6 }[
+      this.governor ? this.governor.spec.key : 'balanced'] || 220e6;
+    const want = this.settings.recordedFrames ?? 600;
+    return clamp(Math.round(want), 60, Math.max(60, Math.floor(cap / this.bytesPerFrame())));
+  }
+
   fire() {
     // Re-tier from what the previous run actually cost. The node budget cannot
     // change mid-impact, so this is the one safe moment to revise it.
@@ -4136,13 +4163,15 @@ class World {
       }
     }
     this.perf.impactMs = 0; this.perf.impactFrames = 0; this.perf.impactSubsteps = 0;
-    // size the frame recorder by memory rather than a flat frame count: the
-    // per-frame cost is proportional to the node count, which the tier sets
-    if (this.governor) {
-      const budget = { high: 90e6, balanced: 60e6, fallback: 35e6 }[this.governor.spec.key] || 60e6;
-      const perFrame = QUALITY[this.settings.quality].budget * 14;
-      this.recorder.setCapacity(clamp(Math.round(budget / perFrame), 90, 600));
-    }
+    // FRAME RECORDER CAPACITY
+    // The user asks for a frame count; memory sets the ceiling. Each frame
+    // costs 14 bytes per node (two float32 positions plus six byte fields), so
+    // the affordable count falls as the discretisation rises. Rather than
+    // silently pick a number, the requested count is honoured up to a hard
+    // memory ceiling and the resulting figure is reported in the Simulation
+    // panel next to the estimate, so a phone that cannot hold 2000 frames of
+    // an ultra mesh says so instead of quietly recording 600.
+    this.recorder.setCapacity(this.frameCapacity());
     this.reset();
     this.state = 'flight';
     this.paused = false;
@@ -4733,7 +4762,6 @@ class World {
     const last = layers[layers.length - 1];
     const nL = last.normal, fxL = last.frontX;
     const tL = last.thickness;              // NORMAL thickness of the last layer
-    const lastIdx = layers.length - 1;
     const ix = st.impactX ?? fx, iy = st.impactY ?? 0;
     const ax = d.ax, ay = d.ay;             // shot direction
     const channelHalfWidth = this.projectile.geom.penDiameter * 0.9;
@@ -4766,6 +4794,23 @@ class World {
     const aLo = -0.03, aHi = this.scene.normalTotal + 0.20;
     const bLo = -0.05, bHi = tL + 0.20;
     const aStep = (aHi - aLo) / NB, bStep = (bHi - bLo) / NB;
+
+    // WHICH LAYER IS THE BULGE MEASURED ON
+    // The last layer in the array is not necessarily the one being deformed.
+    // A round that stops in the front plate of a two-plate array leaves that
+    // plate visibly dished while the rear plate is untouched, and measuring
+    // the bulge on the rear plate reported 0 um for an obvious bulge. The
+    // bulge belongs to the deepest layer the penetrator has actually entered.
+    let bulgeIdx = 0;
+    for (let i = 0; i < d.n; i++) {
+      if (!d.alive[i] || d.role[i] !== ROLE.PENETRATOR) continue;
+      for (let k = layers.length - 1; k > bulgeIdx; k--) {
+        const Lk = layers[k];
+        if ((d.px[i] - Lk.frontX) * Lk.normal[0] + d.py[i] * Lk.normal[1] > 0) { bulgeIdx = k; break; }
+      }
+    }
+    const Lb = layers[bulgeIdx];
+    const nB = Lb.normal, fxB = Lb.frontX, tB = Lb.thickness;
 
     let deepest = -Infinity, deepestLast = -Infinity, deepestLos = -Infinity;
     let penMass = 0;
@@ -4831,17 +4876,17 @@ class World {
         // is still attached. Detached material is spall, not bulge, so it is
         // excluded - otherwise a scab flying off would be reported as an
         // enormous bulge.
-        // Measured in the LAST layer's own frame against its NORMAL thickness,
+        // Measured in that layer's own frame against its NORMAL thickness,
         // and only outside the channel: material being pushed out through the
         // hole is petalling, not bulging, and would otherwise dominate the
         // figure once the plate is perforated. A bulge is the dishing of the
         // rear face *around* the impact.
-        if (d.damage[i] < 0.45 && d.layer[i] === lastIdx) {
+        if (d.damage[i] < 0.45 && d.layer[i] === bulgeIdx) {
           const lat = Math.abs((d.rx[i] - d.ox) * d.bx + (d.ry[i] - d.oy) * d.by);
           if (lat > channelHalfWidth) {
-            const dep = (d.px[i] - fxL) * nL[0] + d.py[i] * nL[1];
-            const ref = (d.rx[i] - fxL) * nL[0] + d.ry[i] * nL[1];
-            if (ref > tL * 0.82) {
+            const dep = (d.px[i] - fxB) * nB[0] + d.py[i] * nB[1];
+            const ref = (d.rx[i] - fxB) * nB[0] + d.ry[i] * nB[1];
+            if (ref > tB * 0.82) {
               const move = dep - ref;
               if (move > bulge) bulge = move;
             }
@@ -6414,11 +6459,122 @@ const PRESETS = {
       modules: [],
     },
   },
+
+  // ---------------------------------------------------------------------
+  // HISTORICAL PLATES
+  //
+  // Nominal design figures from published armour layouts, not measurements of
+  // any particular vehicle. Real plate varied with manufacturer, production
+  // batch and late-war material quality, and the hardness of a given plate is
+  // not recorded in a thickness table - the material chosen here is the usual
+  // classification for that plate, which is itself a judgement.
+  //
+  // ANGLE CONVENTION: slope is measured from the vertical, i.e. from the plane
+  // perpendicular to the shot line. 0 deg is a flat face square to the round.
+  // Sources that quote "60 degrees" for a Tiger II glacis are measuring from
+  // the horizontal instead; that plate is 50 deg here. Line-of-sight thickness
+  // is thickness / cos(slope) and is shown in the Setup panel.
+  // ---------------------------------------------------------------------
+  'tiger1-ufp': {
+    name: 'Tiger I — upper front plate, 100 mm at 9°',
+    note: 'The driver\u2019s plate. Thick but almost unsloped, which is the whole argument against the Tiger I\u2019s frontal layout: 100 mm of plate does 101 mm of work. Fired on here by a 17-pounder APCBC.',
+    projectile: { type: 'apcbc', caliber: 0.0765, mass: 7.65, velocity: 884, standoff: 1.4 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.100, slope: 9, height: 1.0, label: 'upper front plate' }],
+      modules: [
+        { type: 'crew', x: 0.55, y: 0.10, w: 0.32, h: 0.55, label: 'driver' },
+        { type: 'ammo', x: 0.80, y: -0.28, w: 0.30, h: 0.24, label: 'hull stowage' },
+      ],
+    },
+  },
+  'tiger1-nose': {
+    name: 'Tiger I — nose plate, 100 mm at 25°',
+    note: 'Same thickness as the driver\u2019s plate but angled, so it is the harder of the two despite being the lower target. Worth running against the same round as the upper plate.',
+    projectile: { type: 'apcbc', caliber: 0.0765, mass: 7.65, velocity: 884, standoff: 1.4 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.100, slope: 25, height: 0.9, label: 'nose plate' }],
+      modules: [{ type: 'crew', x: 0.60, y: 0.08, w: 0.32, h: 0.50, label: 'driver' }],
+    },
+  },
+  'tiger2-ufp': {
+    name: 'Tiger II — glacis, 150 mm at 50°',
+    note: '233 mm line of sight. Effectively immune to wartime tank guns from the front; the interesting question is what happens to the round, not to the plate.',
+    projectile: { type: 'apcbc', caliber: 0.122, mass: 25.0, velocity: 795, standoff: 1.8 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.150, slope: 50, height: 1.5, label: 'glacis' }],
+      modules: [{ type: 'crew', x: 0.85, y: 0.05, w: 0.34, h: 0.55, label: 'driver' }],
+    },
+  },
+  'panther-glacis': {
+    name: 'Panther — glacis, 80 mm at 55°',
+    note: 'The counter-example to the Tiger I: less than half the plate, angled hard, and 139 mm of line of sight for it. Late-war plate quality is the usual caveat and is not modelled.',
+    projectile: { type: 'apcbc', caliber: 0.076, mass: 7.0, velocity: 792, standoff: 1.4 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.080, slope: 55, height: 1.4, label: 'glacis' }],
+      modules: [{ type: 'crew', x: 0.70, y: 0.06, w: 0.32, h: 0.52, label: 'driver' }],
+    },
+  },
+  't34-glacis': {
+    name: 'T-34-85 — glacis, 45 mm at 60°',
+    note: 'Thin plate carried at extreme obliquity: 90 mm of line of sight from 45 mm of steel, and a strong tendency to deflect. Try lowering the aim height onto the nose plate for the contrast.',
+    projectile: { type: 'apcbc', caliber: 0.075, mass: 6.8, velocity: 790, standoff: 1.4 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.045, slope: 60, height: 1.2, label: 'glacis' }],
+      modules: [{ type: 'ammo', x: 0.62, y: -0.26, w: 0.32, h: 0.24, label: 'hull ammunition' }],
+    },
+  },
+  'is2-ufp': {
+    name: 'IS-2 (1944) — upper front plate, 120 mm at 60°',
+    note: '240 mm line of sight from cast and rolled plate. The stepped nose of the earlier hull is not modelled; this is the later straight glacis.',
+    projectile: { type: 'apcbc', caliber: 0.088, mass: 10.2, velocity: 1000, standoff: 1.6 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.120, slope: 60, height: 1.4, label: 'upper front plate' }],
+      modules: [{ type: 'crew', x: 0.80, y: 0.05, w: 0.32, h: 0.52, label: 'driver' }],
+    },
+  },
+  'sherman-glacis': {
+    name: 'M4A3 Sherman — glacis, 63.5 mm at 47°',
+    note: 'The late one-piece glacis. Thin by 1944 standards and relying on angle; the modules behind it are placed for the wet-stowage hull.',
+    projectile: { type: 'apcbc', caliber: 0.075, mass: 6.8, velocity: 790, standoff: 1.4 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.0635, slope: 47, height: 1.3, label: 'glacis' }],
+      modules: [
+        { type: 'crew', x: 0.62, y: 0.10, w: 0.30, h: 0.50, label: 'driver' },
+        { type: 'ammo', x: 0.88, y: -0.30, w: 0.30, h: 0.22, label: 'wet stowage' },
+      ],
+    },
+  },
+  'panzer4-front': {
+    name: 'Panzer IV Ausf. H — front plate, 80 mm at 0°',
+    note: 'A flat 80 mm slab, the simplest possible target and a useful control: no obliquity, no spacing, nothing to argue about except the plate itself.',
+    projectile: { type: 'apcbc', caliber: 0.075, mass: 6.8, velocity: 790, standoff: 1.2 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.080, slope: 0, height: 1.0, label: 'front plate' }],
+      modules: [{ type: 'crew', x: 0.50, y: 0.08, w: 0.30, h: 0.50, label: 'driver' }],
+    },
+  },
+  'tiger1-side-skirt': {
+    name: 'Tiger I — hull side with schürzen',
+    note: 'Thin spaced screen ahead of the 80 mm hull side. Against a full-calibre AP shot the screen does very little; the reason it was fitted was Soviet anti-tank rifles and shaped charges. Try it with HEAT.',
+    projectile: { type: 'apcbc', caliber: 0.076, mass: 7.0, velocity: 792, standoff: 1.4 },
+    scene: {
+      layers: [
+        { material: 'mild', thickness: 0.005, slope: 0, height: 0.8, label: 'sch\u00fcrzen' },
+        { material: 'rha', thickness: 0.080, slope: 0, gap: 0.42, height: 1.0, label: 'hull side' },
+      ],
+      modules: [
+        { type: 'ammo', x: 1.00, y: -0.05, w: 0.34, h: 0.40, label: 'side stowage' },
+        { type: 'engine', x: 1.45, y: -0.05, w: 0.45, h: 0.55 },
+      ],
+    },
+  },
 };
 
 const PRESET_ORDER = [
   'single-plate', 'sloped-glacis', 'spaced-array', 'shatter-gap',
   'ceramic-composite', 'mbt-frontal', 'nera-sandwich', 'hesh-scab', 'aphe-interior',
+  'tiger1-ufp', 'tiger1-nose', 'tiger1-side-skirt', 'tiger2-ufp', 'panther-glacis',
+  't34-glacis', 'is2-ufp', 'sherman-glacis', 'panzer4-front',
 ];
 
 __exports.__all = {PRESETS, PRESET_ORDER};
@@ -6793,9 +6949,9 @@ const FIELDS = {
   jetTail: { label: 'Jet tail velocity', unit: 'm/s', dp: 0, step: 100 },
   standoff: { label: 'Launch standoff', unit: 'm', dp: 2, step: 0.1 },
   sabotRange: { label: 'Sabot discard range', unit: 'm', dp: 2, step: 0.1 },
-  yaw: { label: 'Yaw at impact', unit: '°', dp: 1, step: 1 },
-  attack: { label: 'Attack angle', unit: '°', dp: 1, step: 1 },
-  aimY: { label: 'Aim offset', unit: 'mm', scale: 1000, dp: 0, step: 10 },
+  yaw: { label: 'Body yaw', unit: '°', dp: 1, step: 1 },
+  attack: { label: 'Aim elevation', unit: '°', dp: 1, step: 0.5 },
+  aimY: { label: 'Aim height', unit: 'mm', scale: 1000, dp: 0, step: 10 },
 };
 
 const MAT_FIELDS = {
@@ -6957,9 +7113,35 @@ class App {
       el('label', {}, 'Auto slow-motion at contact'),
       toggle(w.settings.autoSlow ? 'ON' : 'AUTO', w.settings.autoSlow, (v) => { w.settings.autoSlow = v; })));
 
-    const ev = slider(50, 800, w.settings.maxEventTime * 1e6, 10,
+    const ev = slider(50, 3000, w.settings.maxEventTime * 1e6, 25,
       (v) => { w.settings.maxEventTime = v * 1e-6; }, (v) => `${v} µs`);
     p.body.appendChild(el('div', { class: 'row' }, el('label', {}, 'Resolved window'), ev.out, ev.range));
+    p.body.appendChild(el('div', { class: 'hint' },
+      'How long the impact is simulated as deformable continuum before the run is allowed to '
+      + 'settle. Raise it to watch a penetration finish, a plug finally separate or spall keep '
+      + 'developing; the run still ends early once the plate goes quiet, so a longer window '
+      + 'costs nothing on impacts that are already over.'));
+
+    // The hint is rewritten in place rather than by rebuilding the panel: the
+    // slider fires on every drag tick, and a rebuild would tear the control
+    // out from under the finger mid-drag.
+    const frHint = el('div', { class: 'hint' });
+    const frText = () => {
+      const cap = w.frameCapacity();
+      const want = w.settings.recordedFrames ?? 600;
+      frHint.textContent =
+        `Frames kept for stepping back through the impact — ${(w.bytesPerFrame() / 1e3).toFixed(0)} kB `
+        + `each at this discretisation, so the next run will keep ${cap} of them `
+        + `(about ${((cap * w.bytesPerFrame()) / 1e6).toFixed(0)} MB)`
+        + (cap < want ? ', fewer than asked for because this device profile\u2019s memory ceiling was reached.' : '.')
+        + ' The recorder keeps the most recent frames, so if a run outlasts the buffer it is the '
+        + 'earliest part of the impact that is dropped.';
+    };
+    const fr = slider(120, 3000, w.settings.recordedFrames ?? 600, 20,
+      (v) => { w.settings.recordedFrames = v; frText(); }, (v) => `${v}`);
+    p.body.appendChild(el('div', { class: 'row' }, el('label', {}, 'Recorded frames'), fr.out, fr.range));
+    frText();
+    p.body.appendChild(frHint);
 
     const cw = slider(0.6, 4, w.settings.corridorScale ?? 1, 0.1,
       (v) => { w.settings.corridorScale = v; w.reset(); }, (v) => `${v.toFixed(1)}×`);

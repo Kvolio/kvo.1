@@ -39,9 +39,9 @@ const FIELDS = {
   jetTail: { label: 'Jet tail velocity', unit: 'm/s', dp: 0, step: 100 },
   standoff: { label: 'Launch standoff', unit: 'm', dp: 2, step: 0.1 },
   sabotRange: { label: 'Sabot discard range', unit: 'm', dp: 2, step: 0.1 },
-  yaw: { label: 'Yaw at impact', unit: '°', dp: 1, step: 1 },
-  attack: { label: 'Attack angle', unit: '°', dp: 1, step: 1 },
-  aimY: { label: 'Aim offset', unit: 'mm', scale: 1000, dp: 0, step: 10 },
+  yaw: { label: 'Body yaw', unit: '°', dp: 1, step: 1 },
+  attack: { label: 'Aim elevation', unit: '°', dp: 1, step: 0.5 },
+  aimY: { label: 'Aim height', unit: 'mm', scale: 1000, dp: 0, step: 10 },
 };
 
 const MAT_FIELDS = {
@@ -203,9 +203,35 @@ export class App {
       el('label', {}, 'Auto slow-motion at contact'),
       toggle(w.settings.autoSlow ? 'ON' : 'AUTO', w.settings.autoSlow, (v) => { w.settings.autoSlow = v; })));
 
-    const ev = slider(50, 800, w.settings.maxEventTime * 1e6, 10,
+    const ev = slider(50, 3000, w.settings.maxEventTime * 1e6, 25,
       (v) => { w.settings.maxEventTime = v * 1e-6; }, (v) => `${v} µs`);
     p.body.appendChild(el('div', { class: 'row' }, el('label', {}, 'Resolved window'), ev.out, ev.range));
+    p.body.appendChild(el('div', { class: 'hint' },
+      'How long the impact is simulated as deformable continuum before the run is allowed to '
+      + 'settle. Raise it to watch a penetration finish, a plug finally separate or spall keep '
+      + 'developing; the run still ends early once the plate goes quiet, so a longer window '
+      + 'costs nothing on impacts that are already over.'));
+
+    // The hint is rewritten in place rather than by rebuilding the panel: the
+    // slider fires on every drag tick, and a rebuild would tear the control
+    // out from under the finger mid-drag.
+    const frHint = el('div', { class: 'hint' });
+    const frText = () => {
+      const cap = w.frameCapacity();
+      const want = w.settings.recordedFrames ?? 600;
+      frHint.textContent =
+        `Frames kept for stepping back through the impact — ${(w.bytesPerFrame() / 1e3).toFixed(0)} kB `
+        + `each at this discretisation, so the next run will keep ${cap} of them `
+        + `(about ${((cap * w.bytesPerFrame()) / 1e6).toFixed(0)} MB)`
+        + (cap < want ? ', fewer than asked for because this device profile\u2019s memory ceiling was reached.' : '.')
+        + ' The recorder keeps the most recent frames, so if a run outlasts the buffer it is the '
+        + 'earliest part of the impact that is dropped.';
+    };
+    const fr = slider(120, 3000, w.settings.recordedFrames ?? 600, 20,
+      (v) => { w.settings.recordedFrames = v; frText(); }, (v) => `${v}`);
+    p.body.appendChild(el('div', { class: 'row' }, el('label', {}, 'Recorded frames'), fr.out, fr.range));
+    frText();
+    p.body.appendChild(frHint);
 
     const cw = slider(0.6, 4, w.settings.corridorScale ?? 1, 0.1,
       (v) => { w.settings.corridorScale = v; w.reset(); }, (v) => `${v.toFixed(1)}×`);

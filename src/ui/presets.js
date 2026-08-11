@@ -112,9 +112,120 @@ export const PRESETS = {
       modules: [],
     },
   },
+
+  // ---------------------------------------------------------------------
+  // HISTORICAL PLATES
+  //
+  // Nominal design figures from published armour layouts, not measurements of
+  // any particular vehicle. Real plate varied with manufacturer, production
+  // batch and late-war material quality, and the hardness of a given plate is
+  // not recorded in a thickness table - the material chosen here is the usual
+  // classification for that plate, which is itself a judgement.
+  //
+  // ANGLE CONVENTION: slope is measured from the vertical, i.e. from the plane
+  // perpendicular to the shot line. 0 deg is a flat face square to the round.
+  // Sources that quote "60 degrees" for a Tiger II glacis are measuring from
+  // the horizontal instead; that plate is 50 deg here. Line-of-sight thickness
+  // is thickness / cos(slope) and is shown in the Setup panel.
+  // ---------------------------------------------------------------------
+  'tiger1-ufp': {
+    name: 'Tiger I — upper front plate, 100 mm at 9°',
+    note: 'The driver\u2019s plate. Thick but almost unsloped, which is the whole argument against the Tiger I\u2019s frontal layout: 100 mm of plate does 101 mm of work. Fired on here by a 17-pounder APCBC.',
+    projectile: { type: 'apcbc', caliber: 0.0765, mass: 7.65, velocity: 884, standoff: 1.4 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.100, slope: 9, height: 1.0, label: 'upper front plate' }],
+      modules: [
+        { type: 'crew', x: 0.55, y: 0.10, w: 0.32, h: 0.55, label: 'driver' },
+        { type: 'ammo', x: 0.80, y: -0.28, w: 0.30, h: 0.24, label: 'hull stowage' },
+      ],
+    },
+  },
+  'tiger1-nose': {
+    name: 'Tiger I — nose plate, 100 mm at 25°',
+    note: 'Same thickness as the driver\u2019s plate but angled, so it is the harder of the two despite being the lower target. Worth running against the same round as the upper plate.',
+    projectile: { type: 'apcbc', caliber: 0.0765, mass: 7.65, velocity: 884, standoff: 1.4 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.100, slope: 25, height: 0.9, label: 'nose plate' }],
+      modules: [{ type: 'crew', x: 0.60, y: 0.08, w: 0.32, h: 0.50, label: 'driver' }],
+    },
+  },
+  'tiger2-ufp': {
+    name: 'Tiger II — glacis, 150 mm at 50°',
+    note: '233 mm line of sight. Effectively immune to wartime tank guns from the front; the interesting question is what happens to the round, not to the plate.',
+    projectile: { type: 'apcbc', caliber: 0.122, mass: 25.0, velocity: 795, standoff: 1.8 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.150, slope: 50, height: 1.5, label: 'glacis' }],
+      modules: [{ type: 'crew', x: 0.85, y: 0.05, w: 0.34, h: 0.55, label: 'driver' }],
+    },
+  },
+  'panther-glacis': {
+    name: 'Panther — glacis, 80 mm at 55°',
+    note: 'The counter-example to the Tiger I: less than half the plate, angled hard, and 139 mm of line of sight for it. Late-war plate quality is the usual caveat and is not modelled.',
+    projectile: { type: 'apcbc', caliber: 0.076, mass: 7.0, velocity: 792, standoff: 1.4 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.080, slope: 55, height: 1.4, label: 'glacis' }],
+      modules: [{ type: 'crew', x: 0.70, y: 0.06, w: 0.32, h: 0.52, label: 'driver' }],
+    },
+  },
+  't34-glacis': {
+    name: 'T-34-85 — glacis, 45 mm at 60°',
+    note: 'Thin plate carried at extreme obliquity: 90 mm of line of sight from 45 mm of steel, and a strong tendency to deflect. Try lowering the aim height onto the nose plate for the contrast.',
+    projectile: { type: 'apcbc', caliber: 0.075, mass: 6.8, velocity: 790, standoff: 1.4 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.045, slope: 60, height: 1.2, label: 'glacis' }],
+      modules: [{ type: 'ammo', x: 0.62, y: -0.26, w: 0.32, h: 0.24, label: 'hull ammunition' }],
+    },
+  },
+  'is2-ufp': {
+    name: 'IS-2 (1944) — upper front plate, 120 mm at 60°',
+    note: '240 mm line of sight from cast and rolled plate. The stepped nose of the earlier hull is not modelled; this is the later straight glacis.',
+    projectile: { type: 'apcbc', caliber: 0.088, mass: 10.2, velocity: 1000, standoff: 1.6 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.120, slope: 60, height: 1.4, label: 'upper front plate' }],
+      modules: [{ type: 'crew', x: 0.80, y: 0.05, w: 0.32, h: 0.52, label: 'driver' }],
+    },
+  },
+  'sherman-glacis': {
+    name: 'M4A3 Sherman — glacis, 63.5 mm at 47°',
+    note: 'The late one-piece glacis. Thin by 1944 standards and relying on angle; the modules behind it are placed for the wet-stowage hull.',
+    projectile: { type: 'apcbc', caliber: 0.075, mass: 6.8, velocity: 790, standoff: 1.4 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.0635, slope: 47, height: 1.3, label: 'glacis' }],
+      modules: [
+        { type: 'crew', x: 0.62, y: 0.10, w: 0.30, h: 0.50, label: 'driver' },
+        { type: 'ammo', x: 0.88, y: -0.30, w: 0.30, h: 0.22, label: 'wet stowage' },
+      ],
+    },
+  },
+  'panzer4-front': {
+    name: 'Panzer IV Ausf. H — front plate, 80 mm at 0°',
+    note: 'A flat 80 mm slab, the simplest possible target and a useful control: no obliquity, no spacing, nothing to argue about except the plate itself.',
+    projectile: { type: 'apcbc', caliber: 0.075, mass: 6.8, velocity: 790, standoff: 1.2 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.080, slope: 0, height: 1.0, label: 'front plate' }],
+      modules: [{ type: 'crew', x: 0.50, y: 0.08, w: 0.30, h: 0.50, label: 'driver' }],
+    },
+  },
+  'tiger1-side-skirt': {
+    name: 'Tiger I — hull side with schürzen',
+    note: 'Thin spaced screen ahead of the 80 mm hull side. Against a full-calibre AP shot the screen does very little; the reason it was fitted was Soviet anti-tank rifles and shaped charges. Try it with HEAT.',
+    projectile: { type: 'apcbc', caliber: 0.076, mass: 7.0, velocity: 792, standoff: 1.4 },
+    scene: {
+      layers: [
+        { material: 'mild', thickness: 0.005, slope: 0, height: 0.8, label: 'sch\u00fcrzen' },
+        { material: 'rha', thickness: 0.080, slope: 0, gap: 0.42, height: 1.0, label: 'hull side' },
+      ],
+      modules: [
+        { type: 'ammo', x: 1.00, y: -0.05, w: 0.34, h: 0.40, label: 'side stowage' },
+        { type: 'engine', x: 1.45, y: -0.05, w: 0.45, h: 0.55 },
+      ],
+    },
+  },
 };
 
 export const PRESET_ORDER = [
   'single-plate', 'sloped-glacis', 'spaced-array', 'shatter-gap',
   'ceramic-composite', 'mbt-frontal', 'nera-sandwich', 'hesh-scab', 'aphe-interior',
+  'tiger1-ufp', 'tiger1-nose', 'tiger1-side-skirt', 'tiger2-ufp', 'panther-glacis',
+  't34-glacis', 'is2-ufp', 'sherman-glacis', 'panzer4-front',
 ];
