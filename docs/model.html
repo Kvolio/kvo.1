@@ -315,10 +315,38 @@ shear/compression  |s_p| ≥ 4 ε_f       (accumulated plastic stretch)</code></
 <p>so it cannot cross that clearance. As soon as the gap closes to a few lattice</p>
 <p>spacings, every step is resolved again.</p>
 <h3 id="4-7-resolved-window">4.7 Resolved window</h3>
-<p>The continuum phase is hard-bounded (default 350 µs after first contact). The</p>
-<p>mechanics that decide the outcome are over well within that; afterwards the</p>
-<p>solver would only be tracking debris that the ballistic fragment layer handles</p>
-<p>better and more cheaply.</p>
+<p>The continuum phase used to be hard-bounded by a fixed clock after first</p>
+<p>contact, on the reasoning that the mechanics deciding the outcome are over</p>
+<p>within a few hundred microseconds. That reasoning is right for a full-calibre</p>
+<p>shot against a single plate and wrong for everything deep, and measurement</p>
+<p>showed the cap was ending <strong>essentially every run</strong>: a 120 mm long rod fired</p>
+<p>at 600 mm of RHA was cut off 400 mm in, still travelling at about 1000 m/s,</p>
+<p>and reported as "did not perforate, residual 1000 m/s".</p>
+<p>That is not a result. It is a stopwatch expiring mid-event, and it reads</p>
+<p>exactly like a round that never slows down.</p>
+<p>Penetration time scales with depth — a rod eating through half a metre of</p>
+<p>steel at a penetration velocity of order 1 km/s genuinely needs milliseconds —</p>
+<p>so the window now closes on the physics instead:</p>
+<ul>
+<li><strong>progress stalls.</strong> Progress is <code>armourDefeated</code>, which is bounded by the</li>
+</ul>
+<p>  plate, so it stops growing the moment the round is through, stopped, or</p>
+<p>  consumed. Depth is <em>not</em> used for this, because depth keeps growing as</p>
+<p>  debris flies on. When no progress has been made for <code>stallTime</code> (80 µs) and</p>
+<p>  the minimum window has elapsed, the event is over.</p>
+<ul>
+<li><strong>backstop.</strong> A much larger absolute bound (<code>maxEventTimeHard</code>, 6 ms)</li>
+</ul>
+<p>  catches pathological runs. When it fires the result is flagged</p>
+<p>  <code>stats.truncated</code> and a WARN entry is written saying the reported depth and</p>
+<p>  residual velocity are a <strong>lower bound, not a final state</strong> — rather than</p>
+<p>  silently reporting a moving round as a stopped one.</p>
+<p><code>maxEventTime</code> survives as the <em>minimum</em> window, so short events still get</p>
+<p>their full resolved period.</p>
+<p>Runs are correspondingly longer now, which is the cost of not truncating them.</p>
+<p>The same rod against 600 mm now resolves over 1.1–1.3 ms and perforates, with</p>
+<p>residual velocity falling to 264–665 m/s depending on discretisation, instead</p>
+<p>of stopping the clock at 998 m/s.</p>
 <hr>
 <h2 id="5-projectile-behaviours">5. Projectile behaviours</h2>
 <h3 id="5-1-what-differs-between-types">5.1 What differs between types</h3>
@@ -400,11 +428,37 @@ shear/compression  |s_p| ≥ 4 ε_f       (accumulated plastic stretch)</code></
 <li><em>Initiation keyed on intensity alone</em>, so a full-calibre AP shot — slow but</li>
 </ol>
 <p>   wide — never set the cassette off. See the initiation note above.</p>
-<p><strong>Read residual velocity carefully.</strong> A functioning cassette can <em>raise</em> it.</p>
-<p>The plates chew up the slow tail of a jet and leave the fast tip, so less</p>
-<p>material arrives but what does arrive is faster. Penetration depth and</p>
-<p>surviving penetrator mass are the meaningful measures; residual velocity on its</p>
-<p>own will mislead.</p>
+<p><strong>Live-versus-inert is the wrong control, and the table above uses it.</strong></p>
+<p>Detonation deletes the charge nodes, so a live cassette does not merely throw</p>
+<p>its plates — it also removes ~10 mm of material from the threat's path that the</p>
+<p>inert cassette still has to be chewed through. The comparison therefore</p>
+<p>confounds "the explosive worked" with "the explosive got out of the way", and</p>
+<p>the thinner the plates are relative to the charge the more the second effect</p>
+<p>dominates. That is consistent with the sign flipping between light cassettes</p>
+<p>(3 mm plates, 10 mm charge) and heavy ones (15 mm plates).</p>
+<p>The defensible control is an <strong>empty cassette</strong> — the same two plates at the</p>
+<p>same spacing with no charge between them. Measured that way, the charge is</p>
+<p>worth between −72 and +984 m/s of residual velocity depending on threat and</p>
+<p>obliquity. That spread is not a result either; it is a statement that the net</p>
+<p>effect is not currently reproducible, which is the same conclusion by a better</p>
+<p>route. The CI check deliberately asserts only that the comparison produces</p>
+<p>finite numbers, and <strong>not</strong> its direction.</p>
+<p><strong>Read residual velocity carefully, and read depth carefully too.</strong> The two</p>
+<p>measures fail in opposite regimes:</p>
+<ul>
+<li><em>If the shot does not perforate</em>, depth is the meaningful figure.</li>
+<li><em>If it does perforate</em>, depth is clipped at the back of the array (§6.1) and</li>
+</ul>
+<p>  therefore cannot discriminate at all — every perforating variant reports the</p>
+<p>  array total. Use residual velocity and surviving penetrator mass instead.</p>
+<ul>
+<li><em>But</em> a functioning cassette can legitimately <strong>raise</strong> residual velocity:</li>
+</ul>
+<p>  the plates chew up the slow tail of a jet and leave the fast tip, so less</p>
+<p>  material arrives and what does arrive is faster. Against jets, surviving mass</p>
+<p>  is the more honest measure of the two.</p>
+<p>There is no single number here that answers "did the ERA help". That is a real</p>
+<p>property of the problem, not a reporting shortcut.</p>
 <p><strong>Heavy cassettes are not currently a win against shaped charges</strong> in this</p>
 <p>model, though they are marginally better than inert against long rods. A</p>
 <p>Kontakt-5 style cassette carries a thick front plate against a thin back plate,</p>
@@ -551,6 +605,19 @@ v_r    = m/(m + m_plug) · √(v² - v_bl²)    (Recht &amp; Ipson 1963)</code><
 <p>of the shot axis, and not moving backwards out of the crater. Material thrown</p>
 <p>sideways along the struck face is ejecta; letting it set the depth would report</p>
 <p>a penetration that never happened.</p>
+<p><strong>Both depths are clipped at the back of the array.</strong> Once the remnant is</p>
+<p>through, the raw measure keeps growing — but what it is then describing is how</p>
+<p>far debris has <em>flown</em>, not how far it has penetrated. Left unbounded it</p>
+<p>reported 466 mm of "depth" on a 266 mm array, and, far worse, it converged to</p>
+<p>the same value for every variant of a perforating shot, because the quantity it</p>
+<p>was really measuring was remnant velocity times whatever remained of the</p>
+<p>resolved window. Two cassettes, one live and one inert, were measured reporting</p>
+<p>depth <strong>identical to the millimetre</strong> for exactly this reason — which presents</p>
+<p>to the user as "nothing I change makes any difference".</p>
+<p>Past the back face the figure that still carries information is the residual</p>
+<p>velocity, which is reported beside it. When a shot perforates, compare residual</p>
+<p>velocities, not depths: depth is saturated by construction and cannot</p>
+<p>discriminate.</p>
 <p>The back-face bulge is measured in the last layer's own frame, and only for</p>
 <p>material more than about one penetrator diameter off the shot axis. Material</p>
 <p>pushed out through the hole is petalling, not bulging, and would otherwise</p>

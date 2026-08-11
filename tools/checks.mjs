@@ -178,10 +178,12 @@ console.log('\n== the historic ammunition catalogue ==');
     layers: [{ material: 'rha', thickness: 0.10 }] });
   const modern = run({ type: AMMO['m829a3'].type, proj: AMMO['m829a3'].cfg,
     layers: [{ material: 'rha', thickness: 0.10 }] });
-  check(modern.stats.maxDepth > old.stats.maxDepth,
-    `1939 vs 2003 against the same 100 mm plate: `
-    + `2-pdr ${(old.stats.maxDepth * 1000).toFixed(0)} mm, `
-    + `M829A3 ${(modern.stats.maxDepth * 1000).toFixed(0)} mm`);
+  // Both perforate 100 mm, so depth is clipped to 100 mm for both and cannot
+  // separate them. Residual velocity is what still carries the difference.
+  check(modern.stats.residualVelocity > old.stats.residualVelocity * 3,
+    `1939 vs 2003 through the same 100 mm plate: `
+    + `2-pdr exits at ${old.stats.residualVelocity.toFixed(0)} m/s, `
+    + `M829A3 at ${modern.stats.residualVelocity.toFixed(0)} m/s`);
 }
 
 console.log('\n== explosive reactive armour ==');
@@ -479,8 +481,17 @@ console.log('\n== the model discriminates ==');
 
 const thin = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 }, layers: [{ material: 'rha', thickness: 0.06 }] });
 const thick = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 }, layers: [{ material: 'rha', thickness: 0.20 }] });
-check(thin.stats.maxDepth > thick.stats.maxDepth,
-  `thicker plate is harder: 60 mm -> ${(thin.stats.maxDepth * 1000).toFixed(0)} mm, 200 mm -> ${(thick.stats.maxDepth * 1000).toFixed(0)} mm`);
+// Compare the FRACTION of each plate defeated, not raw depth. Depth is clipped
+// at the back of the array (world.js), so a perforated plate always reports its
+// own full thickness and a raw-depth comparison between a thin plate and a
+// thick one is comparing 60 against 200 and calling the thick one deeper.
+const frac = (r, t) => r.stats.armourDefeated / t;
+check(frac(thin, 0.06) > frac(thick, 0.20),
+  `thicker plate is harder: 60 mm -> ${(frac(thin, 0.06) * 100).toFixed(0)}% defeated, `
+  + `200 mm -> ${(frac(thick, 0.20) * 100).toFixed(0)}% defeated`);
+check(thin.stats.residualVelocity > thick.stats.residualVelocity,
+  `and the round comes out of the thin plate faster `
+  + `(${thin.stats.residualVelocity.toFixed(0)} vs ${thick.stats.residualVelocity.toFixed(0)} m/s)`);
 check(!thick.stats.perforated, '200 mm RHA defeats an 88 mm APCBC at 800 m/s');
 
 const fast = run({ type: 'apfsds', proj: { velocity: 1650, standoff: 2.2 }, layers: [{ material: 'rha', thickness: 0.20 }] });
@@ -512,6 +523,56 @@ check(slopeThrough.stats.maxDepthLOS >= slopeThrough.stats.maxDepth * 0.999,
 check(slopeThrough.stats.backfaceBulge > 0,
   `back-face bulge is measured on sloped plate (${(slopeThrough.stats.backfaceBulge * 1000).toFixed(1)} mm)`);
 
+console.log('\n== a run may not end while the round is still going ==');
+{
+  // THE BUG THIS GUARDS
+  // The resolved window used to be a fixed clock after first contact. It was
+  // ending essentially every run: a 120 mm long rod at 600 mm of RHA was cut
+  // off 400 mm in, still doing ~1000 m/s, and reported as "did not perforate,
+  // residual 1000 m/s" - which reads exactly like a round that never slows
+  // down. A finished run must therefore be in one of three honest states:
+  // through the array, actually stopped, or explicitly flagged as truncated.
+  const deep = [
+    ['M829A3 vs 600 mm RHA', AMMO['m829a3'], 0.60],
+    ['3BM46 vs 500 mm RHA', AMMO['3bm46-svinets'], 0.50],
+    ['M111 vs 300 mm RHA', AMMO['m111-hetz'], 0.30],
+  ];
+  for (const [name, a, t] of deep) {
+    const r = run({ type: a.type, proj: a.cfg, layers: [{ material: 'rha', thickness: t }] });
+    const st = r.stats;
+    const resolved = st.perforated || st.residualVelocity < 150 || st.truncated;
+    check(resolved,
+      `${name}: ended honestly — perforated=${st.perforated} `
+      + `residual=${st.residualVelocity.toFixed(0)} m/s truncated=${!!st.truncated}`);
+  }
+  // and the window must actually be able to exceed the old fixed cap
+  const long = run({ type: AMMO['m829a3'].type, proj: AMMO['m829a3'].cfg,
+    layers: [{ material: 'rha', thickness: 0.60 }] });
+  check(long.w.stats.contactTime > 6e-4,
+    `a deep penetration resolves past the old 600 us cap `
+    + `(${(long.w.stats.contactTime * 1e6).toFixed(0)} us of contact)`);
+}
+
+console.log('\n== depth is bounded by the armour ==');
+{
+  // Depth used to keep growing after break-out, so it reported 466 mm of
+  // "depth" on a 266 mm array and converged to the same value for every
+  // variant of a perforating shot - the reason two cassettes, live and inert,
+  // measured identical to the millimetre.
+  for (const [name, r, t] of [
+    ['60 mm plate', thin, 0.06], ['200 mm plate', thick, 0.20],
+  ]) {
+    check(r.stats.maxDepth <= t * 1.001,
+      `${name}: reported depth ${(r.stats.maxDepth * 1000).toFixed(0)} mm never exceeds `
+      + `the ${(t * 1000).toFixed(0)} mm of armour in front of it`);
+  }
+  const through = run({ type: 'apfsds', proj: { velocity: 1650, standoff: 2.2 },
+    layers: [{ material: 'rha', thickness: 0.05 }] });
+  check(through.stats.perforated && through.stats.maxDepth <= 0.05 * 1.001,
+    `a round that goes clean through a 50 mm plate reports 50 mm, not the distance it flew `
+    + `(${(through.stats.maxDepth * 1000).toFixed(0)} mm)`);
+}
+
 console.log('\n== conservation and sanity ==');
 check(thin.w.solver && Number.isFinite(thin.w.solver.energyAudit().drift),
   `energy audit produces a finite drift (${(thin.w.solver.energyAudit().drift * 100).toFixed(0)} %)`);
@@ -542,7 +603,9 @@ for (const [name, r, thickness] of [
   ['70 mm flat', flat, 0.07], ['70 mm at 60 deg', sloped, 0.07],
   ['40 mm at 60 deg', slopeThrough, 0.04],
 ]) {
-  const past = r.stats.maxDepth > thickness;
+  // depth is clipped at the back of the array (see world.js), so "through"
+  // is depth REACHING the back face, not exceeding it
+  const past = r.stats.maxDepth >= thickness * 0.999;
   check(past === r.stats.perforated,
     `${name}: depth ${(r.stats.maxDepth * 1000).toFixed(0)} mm vs ${(thickness * 1000).toFixed(0)} mm `
     + `-> past=${past}, perforated=${r.stats.perforated}`);

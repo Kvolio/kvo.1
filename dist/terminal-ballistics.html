@@ -4603,7 +4603,7 @@ class World {
       erodedMass: 0, spallMass: 0, fragmentCount: 0,
       perforated: false, ricochet: false, embedded: false,
       backfaceBulge: 0, craterDiameter: 0, craterDepth: 0,
-      brokenBonds: 0, contactTime: 0,
+      brokenBonds: 0, contactTime: 0, truncated: false,
     };
   }
 
@@ -4911,6 +4911,9 @@ class World {
     this.projectile.state = 'meshed';
     this.coastMode = false;
     this.contactSeen = false;
+    this.progressMark = 0;
+    this.lastProgressTime = null;
+    this.truncationLogged = false;
 
     // record what was actually meshed so the user can audit the discretisation
     this.meshInfo = {
@@ -5051,11 +5054,52 @@ class World {
     const armourKE = s.kineticOf(ROLE.ARMOUR);
     const quiet = this.contactSeen && s.maxContactForce === 0 && s.brokenThisStep === 0
       && (this.simTime - (this.lastActivity ?? 0)) > 4e-6;
-    // Hard bound on the resolved window. The mechanics that decide the outcome
-    // are over within a few hundred microseconds; after that the continuum
-    // solver is only tracking debris that the ballistic layer handles better.
+    // WHEN THE RESOLVED WINDOW CLOSES
+    //
+    // This used to be a fixed clock: `elapsed > maxEventTime` and the run was
+    // over. Measurement showed that cap was ending essentially EVERY run - a
+    // 120 mm long rod fired at 600 mm of RHA was cut off 400 mm in, still
+    // travelling at about 1000 m/s, and reported as "did not perforate,
+    // residual 1000 m/s". That is not a result, it is a stopwatch expiring
+    // mid-event, and it reads exactly like a round that never slows down.
+    //
+    // Penetration time scales with depth: a rod eating through half a metre
+    // of steel at a penetration velocity of order 1 km/s genuinely needs
+    // milliseconds. So the window now closes when the PHYSICS is finished:
+    //
+    //   - the penetrator has stopped making progress into the array for a
+    //     sustained period (it is stopped, deflected, or fully consumed), or
+    //   - it has left the back of the array and is no longer in contact.
+    //
+    // `maxEventTime` is kept only as the minimum window, so short events still
+    // get their full resolved period. A separate, much larger backstop bounds
+    // pathological runs - and when THAT one fires the result is explicitly
+    // flagged as truncated rather than reported as though the round stopped.
     const elapsed = this.simTime - (this.trueContactTime ?? this.simTime);
-    const overrun = this.contactSeen && elapsed > (this.settings.maxEventTime ?? 3.5e-4);
+    const minWindow = this.settings.maxEventTime ?? 3.5e-4;
+
+    // "Progress" is penetration into the armour, not flight: armourDefeated is
+    // bounded by the plate, so it stops growing the moment the round is
+    // through or stalled, whereas depth keeps counting as debris flies on.
+    const prog = this.stats.armourDefeated || 0;
+    if (prog > (this.progressMark ?? 0) + d.dx * 0.5) {
+      this.progressMark = prog;
+      this.lastProgressTime = this.simTime;
+    }
+    const sinceProgress = this.simTime - (this.lastProgressTime ?? this.trueContactTime ?? this.simTime);
+    const stalled = this.contactSeen && sinceProgress > (this.settings.stallTime ?? 8e-5);
+
+    const hardCap = this.settings.maxEventTimeHard ?? 6e-3;
+    const truncated = this.contactSeen && elapsed > hardCap;
+    if (truncated && !this.truncationLogged) {
+      this.truncationLogged = true;
+      this.stats.truncated = true;
+      this.log.add(this.simTime, 'truncated',
+        `Resolved window hit its ${(hardCap * 1e3).toFixed(1)} ms backstop with the round still `
+        + `making progress — the reported depth and residual velocity are a LOWER BOUND, `
+        + `not a final state`, SEV.WARN);
+    }
+    const overrun = this.contactSeen && ((stalled && elapsed > minWindow) || truncated);
     // A meshed shot that never touches anything - it missed inside the
     // corridor, or the remnant left without contacting a later layer - would
     // otherwise sit in the impact regime forever with nothing to resolve.
@@ -5554,8 +5598,32 @@ class World {
     }
     st.armourDefeated = Math.max(st.armourDefeated || 0, defeated);
 
-    st.maxDepth = Math.max(st.maxDepth, isFinite(deepest) ? deepest : 0);
-    st.maxDepthLOS = Math.max(st.maxDepthLOS || 0, isFinite(deepestLos) ? deepestLos : 0);
+    // DEPTH IS BOUNDED BY THE ARMOUR
+    //
+    // `deepest` is measured from the struck face along the shot line, and once
+    // the remnant is through the back of the array it keeps growing - the
+    // number then describes how far debris has FLOWN, not how far it has
+    // penetrated. Unbounded, it reports 466 mm of "depth" on a 266 mm array
+    // and, worse, it converges to the same value for every variant of a
+    // perforating shot, because what it is really measuring is remnant
+    // velocity times whatever is left of the resolved window. Two cassettes,
+    // live and inert, were measured reporting depth identical to the
+    // millimetre for exactly this reason - which reads as "nothing I change
+    // makes any difference".
+    //
+    // So the reported depth is clipped at the back of the array. Past that
+    // point the round is through and the figure that still carries
+    // information is the residual velocity, which is reported beside it.
+    const totalNormal = layers.reduce((s2, L2) => s2 + L2.thickness, 0);
+    st.arrayThickness = totalNormal;
+    st.maxDepth = Math.min(totalNormal,
+      Math.max(st.maxDepth, isFinite(deepest) ? deepest : 0));
+    // same bound along the shot line, against the array's line-of-sight total
+    const totalLos = layers.reduce(
+      (s2, L2) => s2 + L2.thickness / Math.max(0.2, Math.cos((L2.slope || 0) * Math.PI / 180)), 0);
+    st.arrayThicknessLOS = totalLos;
+    st.maxDepthLOS = Math.min(totalLos,
+      Math.max(st.maxDepthLOS || 0, isFinite(deepestLos) ? deepestLos : 0));
     st.residualMass = penMass;          // penetrator material still in the domain
     st.attachedMass = attached;         // of that, still bonded into one body
     st.coherentMass = coherent;         // of that, still largely undamaged
