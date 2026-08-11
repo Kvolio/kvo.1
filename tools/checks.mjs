@@ -195,7 +195,14 @@ console.log('\n== explosive reactive armour ==');
   const inertL = run({ type: 'heat', proj: { standoff: 0.6 }, quality: 'normal',
     layers: [cassette(60, 'rubber'), { material: 'rha', thickness: 0.15, gap: 0.09, slope: 60, height: 1.2 }] });
   const ml = survivors(liveL), mi = survivors(inertL);
-  check(ml < mi * 0.95,
+  // Direction only, deliberately. The effect is real and consistently signed
+  // but its MAGNITUDE is parameter-sensitive - measured between 10 % and 22 %
+  // more jet destroyed depending on the time step, and it inverted outright
+  // when the step was raised without a velocity limit. Asserting a size would
+  // be pinning a number the model does not yet support; asserting the sign
+  // catches the case that actually matters, which is the cassette helping the
+  // attacker. See MODEL.md 5.1a.
+  check(ml < mi,
     `a live cassette destroys more jet than an inert one of the same mass at 60 deg `
     + `(${(ml * 1000).toFixed(0)} g surviving vs ${(mi * 1000).toFixed(0)} g)`);
 

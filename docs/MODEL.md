@@ -395,10 +395,18 @@ is modelled, tabulated or asserted anywhere.
 **What works.** The cassette initiates from the simulated insult, the
 detonation propagates, the charge is consumed, the plates leave at Gurney
 velocities with their momenta balanced, and — with the spanning bonds cut, see
-below — a live cassette measurably beats an inert one of identical geometry and
-mass. Against a shaped charge with a light cassette at 60°, the live cassette
-leaves 90 g of jet where the inert one leaves 153 g, and drops the residual
-from 1092 to 774 m/s.
+below — a live cassette destroys more of a shaped-charge jet than an inert one
+of identical geometry and mass.
+
+**The size of that benefit is not trustworthy.** Measured between 10 % and 22 %
+more jet destroyed depending on the time step, and it *inverted* when the step
+was raised without a velocity limit. A jet at 8 km/s crosses half a lattice
+spacing in a 200 ns step, and the interaction between it and a plate sweeping
+across it is then smeared over too few steps to come out right; the solver now
+limits the fastest node to an eighth of a lattice spacing per step (§4.1) so
+that case stays resolved. The regression suite therefore pins only the *sign*
+of the effect, not its magnitude. Treat "ERA helps" as reproduced and "ERA
+helps by X %" as not.
 
 **Two defects had to be fixed before any of that was true**, and both are worth
 recording because each looked like "ERA just doesn't do much":

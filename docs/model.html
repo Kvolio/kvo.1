@@ -357,10 +357,17 @@ shear/compression  |s_p| ≥ 4 ε_f       (accumulated plastic stretch)</code></
 <p><strong>What works.</strong> The cassette initiates from the simulated insult, the</p>
 <p>detonation propagates, the charge is consumed, the plates leave at Gurney</p>
 <p>velocities with their momenta balanced, and — with the spanning bonds cut, see</p>
-<p>below — a live cassette measurably beats an inert one of identical geometry and</p>
-<p>mass. Against a shaped charge with a light cassette at 60°, the live cassette</p>
-<p>leaves 90 g of jet where the inert one leaves 153 g, and drops the residual</p>
-<p>from 1092 to 774 m/s.</p>
+<p>below — a live cassette destroys more of a shaped-charge jet than an inert one</p>
+<p>of identical geometry and mass.</p>
+<p><strong>The size of that benefit is not trustworthy.</strong> Measured between 10 % and 22 %</p>
+<p>more jet destroyed depending on the time step, and it <em>inverted</em> when the step</p>
+<p>was raised without a velocity limit. A jet at 8 km/s crosses half a lattice</p>
+<p>spacing in a 200 ns step, and the interaction between it and a plate sweeping</p>
+<p>across it is then smeared over too few steps to come out right; the solver now</p>
+<p>limits the fastest node to an eighth of a lattice spacing per step (§4.1) so</p>
+<p>that case stays resolved. The regression suite therefore pins only the <em>sign</em></p>
+<p>of the effect, not its magnitude. Treat "ERA helps" as reproduced and "ERA</p>
+<p>helps by X %" as not.</p>
 <p><strong>Two defects had to be fixed before any of that was true</strong>, and both are worth</p>
 <p>recording because each looked like "ERA just doesn't do much":</p>
 <ol>

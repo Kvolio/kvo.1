@@ -1612,6 +1612,8 @@ const COMP_DUCTILITY = 4.0;   // shear/compressive plastic allowance / tensile
  */
 const RAMP = (pen, dC) => (pen >= 0.25 * dC ? 1 : pen / (0.25 * dC));
 const MU_FRICTION = 0.15;     // dry sliding, high-pressure metal-on-metal
+/** Fraction of a lattice spacing the fastest node may cross in one step. */
+const CFL_TRAVEL = 0.125;
 
 class PDSolver {
   constructor(domain, opts = {}) {
@@ -1689,6 +1691,7 @@ class PDSolver {
     const dtC = 0.22 * 2 * Math.sqrt(ratio);
     this.dt = Math.min(this.dt, dtC);
     this.dtBase = this.dt;
+    this.dt = Math.min(this.dt, this.velocityLimitedDt());
 
     // Per-bond contact distance for pairs that have already failed. A bond
     // that breaks under compression is sitting at r < dcContact, so switching
@@ -1728,6 +1731,29 @@ class PDSolver {
     this.contactCount = k;
   }
 
+  /**
+   * Velocity CFL. The stiffness bounds keep the scheme STABLE; they say
+   * nothing about whether a fast event is RESOLVED. A shaped-charge jet at
+   * 8 km/s crosses half a lattice spacing in a 196 ns step, and its interaction
+   * with a plate sweeping across it is then smeared over too few steps to come
+   * out right - measured by an ERA cassette flipping from beating an inert one
+   * to losing to it purely on the step size. Limiting how far the fastest node
+   * may travel per step fixes that where it matters and costs nothing
+   * elsewhere: at 800 m/s the limit is far above the stiffness bound and never
+   * binds, so ordinary shot keeps the larger step.
+   */
+  velocityLimitedDt() {
+    const d = this.d;
+    let v2 = 0;
+    for (let i = 0; i < d.n; i++) {
+      if (!d.alive[i]) continue;
+      const q = d.vx[i] * d.vx[i] + d.vy[i] * d.vy[i];
+      if (q > v2) v2 = q;
+    }
+    const v = Math.sqrt(v2);
+    return v > 1 ? (CFL_TRAVEL * d.dx) / v : Infinity;
+  }
+
   /** One explicit step. Returns the time advanced. */
   step(dt = this.dt) {
     const d = this.d;
@@ -1760,6 +1786,9 @@ class PDSolver {
     this.time += dt;
     this.steps++;
     if (this.steps % this.contactRefresh === 0) this.refreshContactSet();
+    // re-evaluated periodically: the fastest thing in the domain changes as a
+    // jet forms, a plate is thrown, or the event decays
+    if (this.steps % 8 === 0) this.dt = Math.min(this.dtBase, this.velocityLimitedDt());
     if (this.steps % 4 === 0) this.updateFlowFactors();
     return dt;
   }
