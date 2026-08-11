@@ -740,6 +740,40 @@ v_r    = m/(m + m_plug) · √(v² - v_bl²)    (Recht &amp; Ipson 1963)</code><
 <p>are from the standard explosives-handbook range for each composition.</p>
 <p>These are handbook figures for a class of material. Real armour plate varies</p>
 <p>substantially with heat treatment, thickness and lot.</p>
+<h3 id="8-0-two-tiers-basic-and-advanced">8.0 Two tiers: basic and advanced</h3>
+<p>The 81 armour materials are split into two groups in the UI. The split is</p>
+<p>about what a material <strong>is</strong>, not how well it performs:</p>
+<ul>
+<li><strong>Basic</strong> (40) — ordinary armour and structural stock: the homogeneous and</li>
+</ul>
+<p>  hardened steels, wrought light alloys, commodity laminates, soft interlayers</p>
+<p>  and crushable cores.</p>
+<ul>
+<li><strong>Advanced</strong> (41) — anything needing a controlled process or an engineered</li>
+</ul>
+<p>  microstructure: sintered ceramics, high-performance fibre laminates,</p>
+<p>  specified armour grades, superalloys, heavy and refractory alloys.</p>
+<p><strong>Advanced does not mean better.</strong> Rolled homogeneous armour beats most of the</p>
+<p>advanced list per millimetre, and several advanced entries are in the database</p>
+<p>because a fragment may have to pass through them, not because anyone would</p>
+<p>armour a vehicle with them — the superalloys are engine and turbine materials,</p>
+<p>and diamond is there to bound what hardness alone can do rather than as a</p>
+<p>proposal.</p>
+<p>Measured ordering at equal thickness (60 mm, 88 mm APCBC at 800 m/s, by exit</p>
+<p>velocity) comes out as: tungsten heavy alloys and depleted uranium, then</p>
+<p>tantalum and maraging steel, then the hardened steels in hardness order</p>
+<p>(600 BHN → 430 BHN), then RHA and the soft steels, then ceramics, then</p>
+<p>aluminium, then the fibre laminates, then polymers, and finally the honeycomb</p>
+<p>cores, which stop essentially nothing. Per unit <strong>mass</strong> the order is very</p>
+<p>different — boron carbide at 151 kg/m² is beaten only by materials several</p>
+<p>times its areal density.</p>
+<p><strong>A cost that is easy to miss:</strong> very stiff materials integrate more slowly.</p>
+<p>The stable time step scales with the lattice wave speed, so boron carbide</p>
+<p>(13 500 m/s) runs at an 18 ns step against RHA's 47 ns, and diamond</p>
+<p>(17 300 m/s) is worse. A diamond or B₄C plate needs roughly twice the frames</p>
+<p>of a steel one to reach the same simulated time. Nothing is wrong when that</p>
+<p>happens — it is the CFL condition doing its job — but it is why those runs</p>
+<p>feel slow.</p>
 <h3 id="8-1-textolite-and-the-soviet-laminate-glacis">8.1 Textolite and the Soviet laminate glacis</h3>
 <p><code>textolite</code> is a phenolic–cotton laminate of the PTK class, the filler used</p>
 <p>between steel plates in Soviet combination glacis armour from the T-64 onward.</p>

@@ -63,10 +63,19 @@ const fmt = (v, dp) => (dp === undefined ? String(+(+v).toPrecision(6)) : (+v).t
 
 export function select(options, value, onchange) {
   const s = el('select', { onchange: (e) => onchange(e.target.value) });
+  // An option may carry a `group` label. Consecutive options sharing one are
+  // wrapped in an <optgroup>, which is how the armour list separates the basic
+  // materials from the advanced ones without needing two controls.
+  let group = null, holder = s;
   for (const o of options) {
+    if (o.group !== group) {
+      group = o.group;
+      holder = group ? el('optgroup', { label: group }) : s;
+      if (group) s.appendChild(holder);
+    }
     const opt = el('option', { value: o.value }, o.label);
     if (o.value === value) opt.selected = true;
-    s.appendChild(opt);
+    holder.appendChild(opt);
   }
   return s;
 }

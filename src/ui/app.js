@@ -12,7 +12,14 @@
 import { el, panel, row, num, select, slider, toggle, kv, clear, panelState } from './dom.js';
 import { PRESETS, PRESET_ORDER } from './presets.js';
 import { AMMO, AMMO_ORDER, ammoLabel } from './ammo.js';
-import { MATERIALS, ARMOUR_KEYS, PENETRATOR_KEYS, getMaterial, registerMaterial } from '../materials/database.js';
+import { MATERIALS, ARMOUR_KEYS, armourTier, PENETRATOR_KEYS, getMaterial, registerMaterial } from '../materials/database.js';
+
+/** Headings for the two armour tiers in the material dropdown. */
+const MATERIAL_GROUP = {
+  basic: 'Basic — steels, light alloys, commodity laminates, interlayers',
+  advanced: 'Advanced — ceramics, high-performance fibres, specified grades, heavy alloys',
+  custom: 'Custom / edited',
+};
 import { PROJECTILE_TYPES, TYPE_ORDER, makeProjectileConfig } from '../sim/projectileTypes.js';
 import { Scene, makeLayer, makeModule, expandEra, MODULE_TYPES } from '../sim/scene.js';
 import { QUALITY } from '../sim/world.js';
@@ -347,7 +354,9 @@ export class App {
         el('span', { class: 'th' }, `${(Lr.thickness * 1000).toFixed(0)}mm ${Lr.slope ? `@${Lr.slope}°` : ''}`));
       const b = el('div', { class: 'lb' });
       b.appendChild(row('Material', select(
-        ARMOUR_KEYS.map((k) => ({ value: k, label: MATERIALS[k].name })), Lr.material,
+        ARMOUR_KEYS.map((k) => ({
+          value: k, label: MATERIALS[k].name, group: MATERIAL_GROUP[armourTier(k)],
+        })), Lr.material,
         (v) => { Lr.material = v; changed(); })));
       b.appendChild(row('Thickness (mm)', num(Lr.thickness * 1000, { dp: 1, step: 1, onchange: (v) => { Lr.thickness = Math.max(0.0005, v / 1000); changed(); } })));
       b.appendChild(row('Slope (°)', num(Lr.slope, { dp: 1, step: 5, onchange: (v) => {

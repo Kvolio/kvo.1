@@ -816,6 +816,42 @@ are from the standard explosives-handbook range for each composition.
 These are handbook figures for a class of material. Real armour plate varies
 substantially with heat treatment, thickness and lot.
 
+### 8.0 Two tiers: basic and advanced
+
+The 81 armour materials are split into two groups in the UI. The split is
+about what a material **is**, not how well it performs:
+
+- **Basic** (40) — ordinary armour and structural stock: the homogeneous and
+  hardened steels, wrought light alloys, commodity laminates, soft interlayers
+  and crushable cores.
+- **Advanced** (41) — anything needing a controlled process or an engineered
+  microstructure: sintered ceramics, high-performance fibre laminates,
+  specified armour grades, superalloys, heavy and refractory alloys.
+
+**Advanced does not mean better.** Rolled homogeneous armour beats most of the
+advanced list per millimetre, and several advanced entries are in the database
+because a fragment may have to pass through them, not because anyone would
+armour a vehicle with them — the superalloys are engine and turbine materials,
+and diamond is there to bound what hardness alone can do rather than as a
+proposal.
+
+Measured ordering at equal thickness (60 mm, 88 mm APCBC at 800 m/s, by exit
+velocity) comes out as: tungsten heavy alloys and depleted uranium, then
+tantalum and maraging steel, then the hardened steels in hardness order
+(600 BHN → 430 BHN), then RHA and the soft steels, then ceramics, then
+aluminium, then the fibre laminates, then polymers, and finally the honeycomb
+cores, which stop essentially nothing. Per unit **mass** the order is very
+different — boron carbide at 151 kg/m² is beaten only by materials several
+times its areal density.
+
+**A cost that is easy to miss:** very stiff materials integrate more slowly.
+The stable time step scales with the lattice wave speed, so boron carbide
+(13 500 m/s) runs at an 18 ns step against RHA's 47 ns, and diamond
+(17 300 m/s) is worse. A diamond or B₄C plate needs roughly twice the frames
+of a steel one to reach the same simulated time. Nothing is wrong when that
+happens — it is the CFL condition doing its job — but it is why those runs
+feel slow.
+
 ### 8.1 Textolite and the Soviet laminate glacis
 
 `textolite` is a phenolic–cotton laminate of the PTK class, the filler used

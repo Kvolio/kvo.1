@@ -19,7 +19,8 @@ import { PROJECTILE_TYPES, TYPE_ORDER } from '../src/sim/projectileTypes.js';
 import { PRESETS, PRESET_ORDER } from '../src/ui/presets.js';
 import { AMMO, AMMO_ORDER, ammoLabel } from '../src/ui/ammo.js';
 import { sandwichFlyerVelocity } from '../src/sim/era.js';
-import { MATERIALS, ARMOUR_KEYS } from '../src/materials/database.js';
+import { MATERIALS, ARMOUR_KEYS, BASIC_ARMOUR_KEYS, ADVANCED_ARMOUR_KEYS, armourTier,
+  PENETRATOR_KEYS, sampleGradient } from '../src/materials/database.js';
 import { BOND } from '../src/sim/pd/domain.js';
 
 let failures = 0;
@@ -477,6 +478,89 @@ for (const k of ARMOUR_KEYS) {
     layers: [{ material: 'rha', thickness: 0.20, height: 1.0 }] });
   check(txThick.stats.perforated && !rhaThick.stats.perforated,
     '200 mm of textolite is perforated by the shot that 200 mm of steel stops');
+}
+
+console.log('\n== the material library ==');
+{
+  check(ARMOUR_KEYS.length === BASIC_ARMOUR_KEYS.length + ADVANCED_ARMOUR_KEYS.length,
+    `every armour key is in exactly one tier (${BASIC_ARMOUR_KEYS.length} basic `
+    + `+ ${ADVANCED_ARMOUR_KEYS.length} advanced = ${ARMOUR_KEYS.length})`);
+  const dupes = ARMOUR_KEYS.filter((k, i) => ARMOUR_KEYS.indexOf(k) !== i);
+  check(dupes.length === 0, `no key appears twice${dupes.length ? ` (${dupes})` : ''}`);
+  check(ARMOUR_KEYS.every((k) => MATERIALS[k]), 'every key resolves to a material');
+  check(ARMOUR_KEYS.every((k) => armourTier(k) !== 'custom'), 'every key reports its tier');
+
+  // Property sanity across the whole library. The bar wave speed floor is
+  // class-dependent on purpose: an unfilled silicone at E = 2 MPa really does
+  // give ~43 m/s, so a single universal floor would flag correct data.
+  let sane = 0;
+  for (const k of ARMOUR_KEYS) {
+    const m = MATERIALS[k];
+    const probs = [];
+    for (const f of ['rho', 'E', 'nu', 'Y', 'UTS', 'epsF', 'G0', 'BHN', 'Tm', 'cp', 'jcM']) {
+      if (!Number.isFinite(m[f]) || m[f] <= 0) probs.push(f);
+    }
+    if (!(m.nu > 0 && m.nu < 0.5)) probs.push('nu');
+    if (!(m.brittle >= 0 && m.brittle <= 1)) probs.push('brittle');
+    if (!(m.weibull > 0) || !(m.erosionResist > 0)) probs.push('scatter/erosion');
+    const c = Math.sqrt(m.E / m.rho);
+    if (!(c > (m.class === 'polymer' ? 20 : 300) && c < 25000)) probs.push(`wave speed ${c.toFixed(0)}`);
+    if (m.class === 'metal' && m.UTS < m.Y) probs.push('UTS below yield');
+    if (!m.source || !m.notes) probs.push('undocumented');
+    if (probs.length) fail(`${k}: ${probs.join(', ')}`); else sane++;
+  }
+  check(sane === ARMOUR_KEYS.length, `all ${sane} materials have sane, documented properties`);
+
+  // A live shot through one material of every class, so a class-wide breakage
+  // is caught without paying for all 81 on every CI run.
+  for (const k of ['uhh600', 'armox600', 'al7075', 'ti64eli', 'tungsten', 'diamond',
+    'si3n4', 'zta', 'pbo', 'carbonepoxy', 'inconel718', 'wha93', 'silicone',
+    'polycarbonate', 'alhoneycomb', 'viscoelastic']) {
+    const r = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 },
+      layers: [{ material: k, thickness: 0.060, height: 1.0 }], maxFrames: 14000 });
+    const st = r.stats;
+    check(r.w.domain && r.w.domain.n > 200 && Number.isFinite(st.armourDefeated)
+      && Number.isFinite(st.residualVelocity) && st.residualVelocity >= 0
+      && st.residualVelocity < 20000 && st.maxDepth <= 0.0601,
+      `${k}: ${(st.armourDefeated * 1000).toFixed(0)} mm defeated, exit `
+      + `${st.residualVelocity.toFixed(0)} m/s`);
+  }
+
+  // Ordering the library has to reproduce, or the numbers mean nothing.
+  const exit = (k, t = 0.060) => run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 },
+    layers: [{ material: k, thickness: t, height: 1.0 }], maxFrames: 14000 }).stats.residualVelocity;
+  const vUhh = exit('uhh600'), vRha = exit('rha'), vMild = exit('mild'), vWha = exit('wha');
+  check(vUhh < vRha && vRha < vMild,
+    `harder steel resists more at equal thickness: 600 BHN ${vUhh.toFixed(0)} < `
+    + `RHA ${vRha.toFixed(0)} < mild ${vMild.toFixed(0)} m/s`);
+  check(vWha < vUhh,
+    `and a tungsten heavy alloy plate beats any steel (${vWha.toFixed(0)} m/s)`);
+  const vAl = exit('al5083'), vFoam = exit('alhoneycomb');
+  check(vRha < vAl && vAl < vFoam,
+    `steel beats aluminium beats a crushable core: ${vRha.toFixed(0)} / `
+    + `${vAl.toFixed(0)} / ${vFoam.toFixed(0)} m/s`);
+
+  // Graded plates must genuinely vary through the thickness.
+  for (const k of ['dhs', 'ths', 'fha']) {
+    const m = MATERIALS[k];
+    if (!check(!!m.gradient, `${k}: carries a through-thickness gradient`)) continue;
+    const face = sampleGradient(m, 0.02), back = sampleGradient(m, 0.98);
+    check(face.Y > back.Y * 1.15 && back.epsF > face.epsF * 1.3
+      && ['Y', 'UTS', 'epsF', 'G0', 'brittle'].every((f) => Number.isFinite(face[f]) && Number.isFinite(back[f])),
+      `${k}: hard face (${(face.Y / 1e9).toFixed(2)} GPa, epsF ${face.epsF.toFixed(3)}) over a `
+      + `tough back (${(back.Y / 1e9).toFixed(2)} GPa, epsF ${back.epsF.toFixed(3)})`);
+  }
+}
+
+console.log('\n== every penetrator core fires ==');
+for (const k of PENETRATOR_KEYS) {
+  try {
+    const r = run({ type: 'apcr', proj: { velocity: 1100, standoff: 0.8, core: k },
+      layers: [{ material: 'rha', thickness: 0.080, height: 1.0 }], maxFrames: 14000 });
+    check(Number.isFinite(r.stats.residualVelocity) && r.stats.residualVelocity >= 0
+      && r.w.domain && r.w.domain.n > 200,
+      `${k}: exit ${r.stats.residualVelocity.toFixed(0)} m/s`);
+  } catch (e) { fail(`${k}: threw — ${e.message}`); }
 }
 
 console.log('\n== aiming ==');
