@@ -236,6 +236,16 @@ shear/compression  |s_p| ≥ 4 ε_f       (accumulated plastic stretch)</code></
 <p>evaluated per node in the reference configuration, with a safety factor of</p>
 <p>0.32, further limited by the contact stiffness. Typical resulting step:</p>
 <p>100–200 ns.</p>
+<h3 id="4-1a-reproducibility">4.1a Reproducibility</h3>
+<p>The number of solver sub-steps per rendered frame is chosen from measured</p>
+<p>wall-clock time, so that a phone keeps a usable frame rate. That makes a run</p>
+<p>depend on the machine it ran on: identical scenarios were measured ending at</p>
+<p>2501, 2505 and 2504 µs with different surviving masses, and a comparison</p>
+<p>between two configurations could come out either way. For anything that has to</p>
+<p>reproduce — a regression check, a replay, a like-for-like comparison — set</p>
+<p><code>deterministic</code> in the simulation settings. It fixes the sub-step count and</p>
+<p>disables the performance re-tiering, so the result depends only on the inputs.</p>
+<p>The headless check suite sets it; the interactive app does not.</p>
 <h3 id="4-2-contact">4.2 Contact</h3>
 <p>Two disjoint mechanisms, so no pair is ever counted twice:</p>
 <ol>
@@ -356,18 +366,25 @@ shear/compression  |s_p| ≥ 4 ε_f       (accumulated plastic stretch)</code></
 <p>is modelled, tabulated or asserted anywhere.</p>
 <p><strong>What works.</strong> The cassette initiates from the simulated insult, the</p>
 <p>detonation propagates, the charge is consumed, the plates leave at Gurney</p>
-<p>velocities with their momenta balanced, and — with the spanning bonds cut, see</p>
-<p>below — a live cassette destroys more of a shaped-charge jet than an inert one</p>
-<p>of identical geometry and mass.</p>
-<p><strong>The size of that benefit is not trustworthy.</strong> Measured between 10 % and 22 %</p>
-<p>more jet destroyed depending on the time step, and it <em>inverted</em> when the step</p>
-<p>was raised without a velocity limit. A jet at 8 km/s crosses half a lattice</p>
-<p>spacing in a 200 ns step, and the interaction between it and a plate sweeping</p>
-<p>across it is then smeared over too few steps to come out right; the solver now</p>
-<p>limits the fastest node to an eighth of a lattice spacing per step (§4.1) so</p>
-<p>that case stays resolved. The regression suite therefore pins only the <em>sign</em></p>
-<p>of the effect, not its magnitude. Treat "ERA helps" as reproduced and "ERA</p>
-<p>helps by X %" as not.</p>
+<p>velocities with their momenta balanced, and nothing joins the two plates across</p>
+<p>the charge once it has gone. Every step of the mechanism is checked.</p>
+<p><strong>Whether it helps the armour is NOT reproduced.</strong> Once runs were made</p>
+<p>reproducible (§4.1a) the live-versus-inert comparison came out mixed, and the</p>
+<p>sign depends on geometry rather than on anything defensible:</p>
+<div class="tw"><table><thead><tr><th>cassette</th><th>obliquity</th><th>jet surviving, live</th><th>inert</th><th>live better?</th></tr></thead><tbody>
+<tr><td>light</td><td>60°</td><td>44.7 g</td><td>35.7 g</td><td>no</td></tr>
+<tr><td>light</td><td>30°</td><td>15.7 g</td><td>25.0 g</td><td>yes</td></tr>
+<tr><td>heavy</td><td>60°</td><td>28.3 g</td><td>56.5 g</td><td>yes</td></tr>
+<tr><td>heavy</td><td>30°</td><td>29.7 g</td><td>29.7 g</td><td>no difference</td></tr>
+</tbody></table></div>
+<p>Earlier revisions of this document claimed the benefit <em>was</em> reproduced, on the</p>
+<p>strength of a measurement that turned out not to be repeatable: the sub-step</p>
+<p>count was chosen from wall-clock timing, so the same scenario advanced</p>
+<p>different amounts of simulated time on different runs and the comparison could</p>
+<p>come out either way. That is fixed, and the corrected answer is the table</p>
+<p>above. **Do not use this model to argue that ERA does or does not defeat a</p>
+<p>given threat.** The mechanism is simulated honestly; the net outcome is not</p>
+<p>yet trustworthy.</p>
 <p><strong>Two defects had to be fixed before any of that was true</strong>, and both are worth</p>
 <p>recording because each looked like "ERA just doesn't do much":</p>
 <ol>

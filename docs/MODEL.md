@@ -265,6 +265,18 @@ evaluated per node in the reference configuration, with a safety factor of
 0.32, further limited by the contact stiffness. Typical resulting step:
 100–200 ns.
 
+### 4.1a Reproducibility
+
+The number of solver sub-steps per rendered frame is chosen from measured
+wall-clock time, so that a phone keeps a usable frame rate. That makes a run
+depend on the machine it ran on: identical scenarios were measured ending at
+2501, 2505 and 2504 µs with different surviving masses, and a comparison
+between two configurations could come out either way. For anything that has to
+reproduce — a regression check, a replay, a like-for-like comparison — set
+`deterministic` in the simulation settings. It fixes the sub-step count and
+disables the performance re-tiering, so the result depends only on the inputs.
+The headless check suite sets it; the interactive app does not.
+
 ### 4.2 Contact
 
 Two disjoint mechanisms, so no pair is ever counted twice:
@@ -394,19 +406,28 @@ is modelled, tabulated or asserted anywhere.
 
 **What works.** The cassette initiates from the simulated insult, the
 detonation propagates, the charge is consumed, the plates leave at Gurney
-velocities with their momenta balanced, and — with the spanning bonds cut, see
-below — a live cassette destroys more of a shaped-charge jet than an inert one
-of identical geometry and mass.
+velocities with their momenta balanced, and nothing joins the two plates across
+the charge once it has gone. Every step of the mechanism is checked.
 
-**The size of that benefit is not trustworthy.** Measured between 10 % and 22 %
-more jet destroyed depending on the time step, and it *inverted* when the step
-was raised without a velocity limit. A jet at 8 km/s crosses half a lattice
-spacing in a 200 ns step, and the interaction between it and a plate sweeping
-across it is then smeared over too few steps to come out right; the solver now
-limits the fastest node to an eighth of a lattice spacing per step (§4.1) so
-that case stays resolved. The regression suite therefore pins only the *sign*
-of the effect, not its magnitude. Treat "ERA helps" as reproduced and "ERA
-helps by X %" as not.
+**Whether it helps the armour is NOT reproduced.** Once runs were made
+reproducible (§4.1a) the live-versus-inert comparison came out mixed, and the
+sign depends on geometry rather than on anything defensible:
+
+| cassette | obliquity | jet surviving, live | inert | live better? |
+|---|---|---|---|---|
+| light | 60° | 44.7 g | 35.7 g | no |
+| light | 30° | 15.7 g | 25.0 g | yes |
+| heavy | 60° | 28.3 g | 56.5 g | yes |
+| heavy | 30° | 29.7 g | 29.7 g | no difference |
+
+Earlier revisions of this document claimed the benefit *was* reproduced, on the
+strength of a measurement that turned out not to be repeatable: the sub-step
+count was chosen from wall-clock timing, so the same scenario advanced
+different amounts of simulated time on different runs and the comparison could
+come out either way. That is fixed, and the corrected answer is the table
+above. **Do not use this model to argue that ERA does or does not defeat a
+given threat.** The mechanism is simulated honestly; the net outcome is not
+yet trustworthy.
 
 **Two defects had to be fixed before any of that was true**, and both are worth
 recording because each looked like "ERA just doesn't do much":

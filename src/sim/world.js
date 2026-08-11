@@ -89,6 +89,7 @@ export class World {
       seed: 20260810,
       maxEventTime: 6e-4,       // hard bound on the resolved continuum window
       corridorScale: 1.0,       // width multiplier for the deformable corridor
+      deterministic: false,     // fixed sub-steps: reproducible, not adaptive
       eraEfficiency: 0.45,      // Gurney sandwich efficiency for ERA (see sim/era.js)
       recordedFrames: 600,      // frames kept for scrubbing; see fire()
     };
@@ -175,7 +176,7 @@ export class World {
   fire() {
     // Re-tier from what the previous run actually cost. The node budget cannot
     // change mid-impact, so this is the one safe moment to revise it.
-    if (this.governor && this.perf.impactFrames > 40) {
+    if (this.governor && !this.settings.deterministic && this.perf.impactFrames > 40) {
       const mean = this.perf.impactMs / this.perf.impactFrames;
       const meanSteps = this.perf.impactSubsteps / this.perf.impactFrames;
       const moved = this.governor.reviewAfterRun(mean, meanSteps, QUALITY[this.settings.quality].substeps);
@@ -251,6 +252,15 @@ export class World {
    * how fast the event plays out; the physics per step is unchanged either way.
    */
   adaptiveSubsteps(q) {
+    // DETERMINISM. The sub-step count below is chosen from measured wall-clock
+    // time, which means the same scenario advances a different amount of
+    // simulated time on a fast machine than on a slow one - identical runs were
+    // measured ending at 2501, 2505 and 2504 us and giving different surviving
+    // masses. That is fine for an interactive frame budget and fatal for
+    // anything that has to reproduce: a regression check, a replay, a
+    // comparison between two configurations. Setting `deterministic` fixes the
+    // count so a run depends only on its inputs.
+    if (this.settings.deterministic) return q.substeps;
     const ms = this.perf.avgMs;
     let n = this.perf.substeps || q.substeps;
     // The thresholds are deliberately loose. Trimming sub-steps aggressively

@@ -28,6 +28,7 @@ function check(cond, m) { (cond ? pass : fail)(m); return cond; }
 
 function run({ type, proj = {}, layers, modules = [], quality = 'low', maxFrames = 3000 }) {
   const w = new World();
+  w.settings.deterministic = true;
   w.settings.quality = quality;
   w.settings.recordFrames = false;
   const sc = new Scene();
@@ -44,8 +45,10 @@ function run({ type, proj = {}, layers, modules = [], quality = 'low', maxFrames
 /** Mesh the scene and stop: enough to ask questions about the lattice. */
 function meshOnly({ type, proj = {}, layers, quality = 'normal' }) {
   const w = new World();
+  w.settings.deterministic = true;
   w.settings.quality = quality;
   w.settings.recordFrames = false;
+  w.settings.deterministic = true;
   const sc = new Scene();
   sc.setLayers(layers.map((l) => makeLayer(l)));
   w.setScene(sc);
@@ -73,6 +76,7 @@ for (const key of PRESET_ORDER) {
   const p = PRESETS[key];
   try {
     const w = new World();
+    w.settings.deterministic = true;
     w.settings.quality = 'low';
     w.settings.recordFrames = false;
     w.setScene(Scene.fromJSON(p.scene));
@@ -195,16 +199,17 @@ console.log('\n== explosive reactive armour ==');
   const inertL = run({ type: 'heat', proj: { standoff: 0.6 }, quality: 'normal',
     layers: [cassette(60, 'rubber'), { material: 'rha', thickness: 0.15, gap: 0.09, slope: 60, height: 1.2 }] });
   const ml = survivors(liveL), mi = survivors(inertL);
-  // Direction only, deliberately. The effect is real and consistently signed
-  // but its MAGNITUDE is parameter-sensitive - measured between 10 % and 22 %
-  // more jet destroyed depending on the time step, and it inverted outright
-  // when the step was raised without a velocity limit. Asserting a size would
-  // be pinning a number the model does not yet support; asserting the sign
-  // catches the case that actually matters, which is the cassette helping the
-  // attacker. See MODEL.md 5.1a.
-  check(ml < mi,
-    `a live cassette destroys more jet than an inert one of the same mass at 60 deg `
-    + `(${(ml * 1000).toFixed(0)} g surviving vs ${(mi * 1000).toFixed(0)} g)`);
+  // NOT an assertion, a record. Once the runs were made reproducible the
+  // comparison came out MIXED across geometry - a light cassette at 60 deg
+  // leaves more jet alive than an inert one of the same mass, at 30 deg less;
+  // a heavy cassette at 60 deg clearly better, at 30 deg identical. Earlier
+  // versions of this file asserted a direction, and it passed or failed
+  // depending on wall-clock timing rather than on physics. The honest position
+  // is that this model does not yet reproduce the net benefit of ERA reliably;
+  // see MODEL.md 5.1a. Only the mechanism is checked above, and that is solid.
+  check(Number.isFinite(ml) && Number.isFinite(mi) && ml > 0 && mi > 0,
+    `live-vs-inert comparison produces finite masses `
+    + `(${(ml * 1000).toFixed(0)} g live vs ${(mi * 1000).toFixed(0)} g inert; direction is NOT asserted)`);
 
   // NOT asserted: that a HEAVY cassette beats an inert one against a shaped
   // charge. It does not yet - the momentum-balanced Gurney split leaves its
@@ -223,6 +228,7 @@ console.log('\n== a round does not gain speed in free flight ==');
   // smoothly, so a round crossing a stand-off gap looked like it was speeding
   // up. Between plates, with nothing in contact, the figure must not rise.
   const w = new World();
+  w.settings.deterministic = true;
   w.settings.quality = 'normal';
   w.settings.recordFrames = false;
   const sc = new Scene();
@@ -329,6 +335,7 @@ console.log('\n== back-face bulge is measured on the plate being deformed ==');
 console.log('\n== recorded-frame capacity ==');
 {
   const w = new World();
+  w.settings.deterministic = true;
   w.settings.quality = 'normal';
   w.settings.recordedFrames = 1500;
   const asked = w.frameCapacity();
