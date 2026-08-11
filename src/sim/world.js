@@ -36,6 +36,7 @@ import { makeProjectileConfig, PROJECTILE_TYPES } from './projectileTypes.js';
 import { FragmentSystem } from './fragments.js';
 import { InternalDamage } from './internals.js';
 import { detonate, logDetonation } from './explosive.js';
+import { buildCassettes, stepCassettes, logCassetteEvents } from './era.js';
 import { Bus, EventLog, SEV } from '../core/events.js';
 import { Recorder } from '../core/recorder.js';
 import { getMaterial } from '../materials/database.js';
@@ -54,6 +55,10 @@ import { analyticPanel } from './analytics.js';
  * the perforation test so the two cannot contradict each other.
  */
 const PEN_FRACTION = 0.01;
+// Nodes a layer needs through its thickness before it behaves as a layer rather
+// than as a line of loosely connected points. Three is the minimum at which a
+// plate has an inside.
+const MIN_NODES_THROUGH_LAYER = 3;
 
 export const QUALITY = {
   low: { budget: 3200, across: 8, mRatio: 2.415, substeps: 3, label: 'Low — fastest' },
@@ -84,6 +89,7 @@ export class World {
       seed: 20260810,
       maxEventTime: 6e-4,       // hard bound on the resolved continuum window
       corridorScale: 1.0,       // width multiplier for the deformable corridor
+      eraEfficiency: 0.45,      // Gurney sandwich efficiency for ERA (see sim/era.js)
       recordedFrames: 600,      // frames kept for scrubbing; see fire()
     };
 
@@ -142,6 +148,8 @@ export class World {
     this.residual = null;
     this.impactStartTime = 0;
     this.settleTime = 0;
+    this.cassettes = [];
+    this.eraLastT = 0;
     if (this.projectile) this.projectile.reset();
     for (const L of this.scene.layers) { L.fragHits = 0; }
     this.bus.emit('reset');
@@ -343,14 +351,32 @@ export class World {
     // for whatever the nominal spacing gives.
     const target = plan.budget * 0.82;
     const dxMin = Math.max(0.0004, plan.dx0 * 0.28);
+    // THIN LAYERS SET THE COARSE BOUND TOO
+    // The lattice used to be sized from the penetrator and the node budget
+    // alone. An array containing a thin layer - an ERA cassette's 3 mm plates,
+    // a stand-off screen - was then meshed at a spacing coarser than the layer
+    // itself: measured at 0.7 nodes through an ERA plate, which is not a plate
+    // at all. It cannot erode a jet, it can only be pushed aside, and a live
+    // cassette came out WORSE than an inert one because detonation cleared the
+    // charge from the jet's path without the plates ever doing any work.
+    // A layer needs a few nodes through it before it behaves like one.
+    let thinnest = Infinity;
+    for (const L of this.scene.activeLayers()) if (L.thickness < thinnest) thinnest = L.thickness;
+    const dxThin = isFinite(thinnest) ? thinnest / MIN_NODES_THROUGH_LAYER : Infinity;
     // the coarse bound follows the mesh reference diameter, not the nominal
     // penetrator: for a shaped charge the "penetrator" is the jet, which is far
     // too fine to be the thing that limits how coarse the lattice may go
-    const dxMax = Math.min(0.030, Math.max(plan.refD / 3, plan.dx0 * 2.5));
+    const dxMax = Math.min(0.030, dxThin, Math.max(plan.refD / 3, plan.dx0 * 2.5));
     let dx = clamp(plan.dx0, dxMin, dxMax);
+    let width = plan.width;
+    // Below this the corridor stops being a corridor: it has to hold the
+    // channel, the crater lip and enough plate either side of them to react.
+    // Trading width for resolution is bounded - narrowing without limit would
+    // clip the array rather than resolve it.
+    const widthFloor = Math.max(0.55 * plan.width, 4 * plan.refD, 0.05);
     let dom = null, count = 0;
     for (let attempt = 0; attempt < 7; attempt++) {
-      dom = this.assembleDomain({ dx, width: plan.width, length, originX, originY, dirx, diry, mRatio: plan.mRatio });
+      dom = this.assembleDomain({ dx, width, length, originX, originY, dirx, diry, mRatio: plan.mRatio });
       count = dom.countSites();
       const ratio = count / target;
       if (ratio > 1.0) {
@@ -359,18 +385,26 @@ export class World {
         dx = clamp(dx * Math.sqrt(Math.max(ratio, 0.2)), dxMin, dxMax);
       } else break;
     }
-    // hard enforcement: the budget is what keeps the frame inside its time box
+    // Hard enforcement: the budget is what keeps the frame inside its time box.
+    // Narrow the corridor before coarsening the lattice. Meshing 300 mm of
+    // plate that mostly sits still is worth less than resolving the few
+    // millimetres that are actually doing the work, and coarsening first is
+    // what produced the sub-lattice ERA plates described above.
     let guard = 0;
-    while (count > plan.budget && guard++ < 12) {
-      dx = Math.min(0.030, dx * 1.14);
-      dom = this.assembleDomain({ dx, width: plan.width, length, originX, originY, dirx, diry, mRatio: plan.mRatio });
+    while (count > plan.budget && guard++ < 16) {
+      if (width > widthFloor * 1.02) width = Math.max(widthFloor, width * 0.88);
+      else dx = Math.min(0.030, dx * 1.14);
+      dom = this.assembleDomain({ dx, width, length, originX, originY, dirx, diry, mRatio: plan.mRatio });
       count = dom.countSites();
     }
+    plan.width = width;
     dom.build();
     dom.applyLateralBC((x, y) => !!this.scene.isSolid(x, y));
 
     this.domain = dom;
     this.solver = new PDSolver(dom);
+    this.cassettes = buildCassettes(this.scene, dom);
+    this.eraLastT = this.simTime;
     this.state = 'impact';
     this.impactStartTime = this.simTime;
     this.impactKE0 = this.solver.kinetic();
@@ -388,6 +422,22 @@ export class World {
     this.log.add(this.simTime, 'mesh',
       `Continuum domain built — ${dom.n} nodes, ${dom.nb} bonds, dx = ${(dx * 1000).toFixed(2)} mm, ` +
       `dt = ${(this.solver.dt * 1e9).toFixed(0)} ns`, SEV.INFO, this.meshInfo);
+    // A layer thinner than a couple of lattice spacings is not being simulated
+    // as a layer, and anything that depends on it behaving like one - an ERA
+    // cassette's plates above all - will be wrong. Say so rather than quietly
+    // producing a number.
+    const through = this.meshInfo.throughThickness;
+    let worst = Infinity, worstIdx = -1;
+    through.forEach((t, i) => { if (t < worst) { worst = t; worstIdx = i; } });
+    this.meshInfo.minNodesThroughLayer = worst;
+    if (worstIdx >= 0 && worst < 2) {
+      const L = this.scene.activeLayers()[worstIdx];
+      this.log.add(this.simTime, 'under-resolved',
+        `${L.label || L.mat.name} is ${(L.thickness * 1000).toFixed(1)} mm against a `
+        + `${(dx * 1000).toFixed(2)} mm lattice — ${worst.toFixed(1)} nodes through it. `
+        + `A layer this thin cannot behave as a plate: raise Discretisation or narrow the `
+        + `deformable zone before trusting anything that depends on it.`, SEV.WARN);
+    }
     this.log.add(this.simTime, 'contact', 'Continuum phase armed — projectile within a few lattice spacings', SEV.NOTE);
     this.bus.emit('impact-begin', {
       // a sensible viewing scale: about a dozen calibres across the frame
@@ -464,10 +514,15 @@ export class World {
         this.simTime += s.dt;
       }
       steps++;
+      // ERA initiation is an integral over the shock, and a shock transit
+      // through a 6 mm charge lasts under a microsecond, so it is sampled
+      // twice as often as the fuze check to avoid stepping over the peak.
+      if (steps % 2 === 0) this.stepEra();
       if (steps % 4 === 0) this.checkFuze();
     }
     this.perf.stepsLastFrame = steps;
     this.checkFuze();
+    this.stepEra();
     this.checkModuleStrikes();
     this.promoteEscapees();
     this.fragments.step(advanced, this.scene, this.simTime, this.internals);
@@ -607,6 +662,25 @@ export class World {
     const delay = this.projectile.cfg.fuzeDelay ?? fz.delay;
     if (this.simTime - p.fuzeTimer < delay) return;
     this.detonateShell();
+  }
+
+  /**
+   * Advance every ERA cassette. Called on the same cadence as the fuze check:
+   * initiation is a P^2*tau integral, so it only needs to see the stress state
+   * a few times per shock transit, not every step.
+   */
+  stepEra() {
+    if (!this.cassettes || !this.cassettes.length || !this.domain) return;
+    const dt = this.simTime - this.eraLastT;
+    if (dt <= 0) return;
+    this.eraLastT = this.simTime;
+    const ev = stepCassettes(this.cassettes, this.domain, this.simTime, dt,
+      this.settings.eraEfficiency ?? 0.45);
+    if (!ev.length) return;
+    logCassetteEvents(this.log, this.simTime, ev);
+    for (const e of ev) {
+      if (e.kind === 'era-initiate') this.bus.emit('era-initiate', e.cassette);
+    }
   }
 
   detonateShell() {

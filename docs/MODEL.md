@@ -370,6 +370,117 @@ the type; they are outcomes the solver produces. Specifically:
 - **HE / HESH** — casing plus explosive fill (§5.2).
 - **HEAT** — shaped charge (§5.3).
 
+### 5.1a Explosive reactive armour
+
+A cassette is authored as one entry and meshed as **three ordinary bonded
+layers** — steel front plate, insensitive explosive, steel back plate. The
+plates are ordinary deformable armour and the charge is ordinary deformable
+material; `sim/era.js` only decides *whether and when* the charge functions and
+applies the resulting impulse. Everything that makes ERA work — the plates
+sweeping across the jet, cutting it, and the residue arriving at the main
+array disturbed — is left entirely to the contact solver. No defeat mechanism
+is modelled, tabulated or asserted anywhere.
+
+**What works, and what does not.** The cassette functions: it initiates from
+the simulated shock, the detonation propagates, the charge is consumed, and the
+plates leave at Gurney velocities with their momenta balanced. Initiation
+discriminates threats correctly (table below). All of that is verified.
+
+**The net armour benefit is not reproduced.** Measured against an inert
+cassette of identical geometry and mass — the only control worth having — a
+live cassette currently leaves the residual jet slightly *faster*, not slower:
+1382 m/s against 1126 m/s for a heavy cassette at 60° over 150 mm of RHA.
+Three things contribute, and they are worth stating plainly rather than
+tuning away:
+
+1. Detonation removes the charge from the jet's path. That is correct — it has
+   become gas — but it is a real reduction in the material the jet must cross,
+   and in the model it is not paid for by anything.
+2. The back plate accelerates *away* from the jet, so the closing velocity
+   falls and it erodes less than a stationary plate would.
+3. The mechanism that should dominate — the plates sweeping laterally across
+   the jet for as long as the jet keeps arriving, continuously feeding fresh
+   steel into it — needs a jet that arrives over tens of microseconds. The
+   shaped-charge model here spawns a compact collapsed slug (§5.3, already
+   flagged as the largest single approximation in the model), and its arrival
+   window is short enough that a plate moving at ~600 m/s sweeps less than one
+   jet diameter while the jet is passing. Without that, only effects 1 and 2
+   remain, and both favour the attacker.
+
+So: ERA cassettes are simulated, not faked, and every intermediate quantity is
+inspectable and checked — but this model should **not** be used to argue that
+ERA does or does not defeat a given threat. Fixing it means giving the shaped
+charge a physically extended jet, not adjusting anything in `era.js`.
+
+Light cassettes carry a further problem of their own: see the resolution note
+below.
+
+**Initiation.** The criterion is a critical shock pressure evaluated on the
+filler's linear shock Hugoniot, `Us = c₀ + s·u_p`, `P = ρ₀·Us·u_p`, with the
+particle velocity taken as half the local material speed of the charge.
+
+The obvious implementation — integrating the solver's own nodal stress,
+Walker–Wasley `P²τ` style — was written first, measured, and **discarded
+because it does not discriminate**. Every threat from a 12.7 mm AP bullet to a
+shaped-charge jet produced 3.4–4.1 GPa of nodal stress in the charge, and the
+jet scored *lowest* on the integral, because the integral is dominated by how
+long a soft filler stays crushed rather than by how hard it was hit. The cause
+is limitation 6 below: the volumetric response is linear elastic with no
+equation of state, so the bulk model cannot generate the tens of GPa that
+impedance matching says a jet drives into a low-impedance filler. Particle
+velocity, by contrast, the solver resolves well and monotonically. Measured
+peak charge speeds:
+
+| threat | peak charge speed | shock on the Hugoniot | functions |
+|---|---|---|---|
+| 20 mm AP at 200 m/s | 361 m/s | 0.7 GPa | no |
+| 76 mm APCBC at 800 m/s | 1146 m/s | 3.1 GPa | no |
+| 12.7 mm AP at 900 m/s | 1400 m/s | 4.1 GPa | no |
+| 14.5 mm AP at 1000 m/s | 1544 m/s | 4.8 GPa | no |
+| 30 mm AP at 1100 m/s | 1694 m/s | 5.5 GPa | no |
+| APDS at 1200 m/s | 2235 m/s | 7.1 GPa | yes |
+| APFSDS at 1650 m/s | 3245 m/s | 7.5 GPa | yes |
+| shaped-charge jet | 8293 m/s | 9.8 GPa | yes |
+
+The 7 GPa threshold is where insensitive plastic-bonded compositions sit, and
+it lands in the gap: the cassette functions against the threats ERA exists for
+and stays inert under machine-gun and autocannon fire, which is its design
+spec. It is a material property, editable, and stated with its provenance.
+
+**Propagation.** The charge does not go off at once. Detonation spreads from
+wherever it initiated at the filler's detonation velocity, so a cassette struck
+near one edge throws that end of its plates first; across a 300 mm cassette at
+7000 m/s that is ~43 µs of skew, the same order as the whole event.
+
+**Flyer velocity.** Gurney sandwich, `V = √(2E)·(M̄/C + 1/3)^(-1/2)`, with the
+pair split so that `M₁V₁ = M₂V₂` exactly — heavy ERA is asymmetric, and giving
+both plates the same speed would create net momentum and push the cassette
+bodily downrange. A single efficiency factor (default 0.45, exposed in the UI)
+covers the gap between the plane-wave fully-confined Gurney result and a real
+cassette, where the detonation runs *along* the sandwich and the products
+escape sideways from a thin unconfined slab. It is a calibration constant, not
+a derivation; the resulting flyer velocity is logged so it can be checked
+against the 500–900 m/s that light ERA plates are usually quoted at.
+
+**Resolution.** A layer needs a few nodes through its thickness before it
+behaves as a plate rather than as a line of loosely connected points. The
+mesher now takes the thinnest layer in the array into account when choosing the
+lattice spacing, and narrows the deformable corridor before coarsening the
+lattice — meshing 300 mm of plate that mostly sits still is worth less than
+resolving the few millimetres doing the work. Even so, a **light cassette's
+3 mm plates reach only 1.6 nodes through thickness at the finest
+discretisation**, so they are not resolved and cannot be expected to behave as
+plates at all. The run log says so explicitly whenever any layer falls below
+two nodes. Heavy cassettes (15 mm front plate) resolve at about four nodes and
+are the only ERA geometry this model represents honestly.
+
+**What is not modelled.** The products are removed rather than expanded as gas,
+so there is no blast loading on the surrounding structure and no drive on
+anything but the two plates. Sympathetic initiation of neighbouring cassettes
+is absent. Side confinement, cassette walls and mounting are absent — the
+cassette is a flat sandwich, so edge effects on a real bolted box are not
+represented.
+
 ### 5.2 Detonation
 
 Filler nodes are removed (they have become gas) and the surrounding metal is

@@ -17,6 +17,7 @@ import { Scene, makeLayer, makeModule } from '../src/sim/scene.js';
 import { makeProjectileConfig } from '../src/sim/projectileTypes.js';
 import { PROJECTILE_TYPES, TYPE_ORDER } from '../src/sim/projectileTypes.js';
 import { PRESETS, PRESET_ORDER } from '../src/ui/presets.js';
+import { sandwichFlyerVelocity } from '../src/sim/era.js';
 
 let failures = 0;
 const pass = (m) => console.log(`  ok    ${m}`);
@@ -36,6 +37,21 @@ function run({ type, proj = {}, layers, modules = [], quality = 'low', maxFrames
   let f = 0;
   while (w.state !== 'done' && f < maxFrames) { w.update(1 / 60); f++; }
   return { w, stats: w.stats, verdict: w.verdict(), frames: f };
+}
+
+/** Mesh the scene and stop: enough to ask questions about the lattice. */
+function meshOnly({ type, proj = {}, layers, quality = 'normal' }) {
+  const w = new World();
+  w.settings.quality = quality;
+  w.settings.recordFrames = false;
+  const sc = new Scene();
+  sc.setLayers(layers.map((l) => makeLayer(l)));
+  w.setScene(sc);
+  w.setProjectile(makeProjectileConfig(type, proj));
+  w.fire();
+  let f = 0;
+  while (!w.domain && f < 900) { w.update(1 / 60); f++; }
+  return w;
 }
 
 console.log('\n== every projectile type meshes and runs ==');
@@ -66,6 +82,77 @@ for (const key of PRESET_ORDER) {
   } catch (e) {
     fail(`${key}: threw — ${e.message}`);
   }
+}
+
+console.log('\n== explosive reactive armour ==');
+{
+  const cassette = (slope, explosive) => ({
+    kind: 'era', label: 'ERA', plate: 'hha', slope, height: 0.7,
+    frontThickness: 0.003, chargeThickness: 0.006, backThickness: 0.003, explosive,
+  });
+  const main = (slope) => ({ material: 'rha', thickness: 0.09, gap: 0.10, slope, height: 1.0 });
+
+  // the Gurney split must balance momentum for an asymmetric cassette,
+  // otherwise the detonation pushes the whole cassette downrange
+  const sym = sandwichFlyerVelocity(15.6, 15.6, 10.2, 2400, 0.45);
+  const asym = sandwichFlyerVelocity(78, 15.6, 10.2, 2400, 0.45);
+  check(Math.abs(sym.front - sym.back) < 1e-9, `symmetric cassette throws both plates alike (${sym.front.toFixed(0)} m/s)`);
+  check(Math.abs(78 * asym.front - 15.6 * asym.back) < 1e-6 && asym.front < asym.back,
+    `asymmetric cassette conserves momentum and the heavy plate is slower `
+    + `(${asym.front.toFixed(0)} vs ${asym.back.toFixed(0)} m/s)`);
+  check(sym.front > 300 && sym.front < 1200,
+    `light-ERA flyer velocity is in the published band (${sym.front.toFixed(0)} m/s)`);
+
+  // a shaped charge must set it off, and the charge must be wholly consumed
+  const hot = run({ type: 'heat', proj: { standoff: 0.6 },
+    layers: [cassette(60), main(60)] });
+  const c = hot.w.cassettes[0];
+  check(hot.w.cassettes.length === 1, `cassette is found in the meshed domain (${c.columns.length} charge slices)`);
+  check(c.initiated, 'a shaped-charge jet initiates the cassette');
+  let live = 0;
+  for (const col of c.columns) for (const i of col.charge) if (hot.w.domain.alive[i]) live++;
+  check(live === 0, `the charge is entirely consumed once it functions (${live} explosive nodes left)`);
+  check(c.vFront > 0 && c.drivenMass > 0,
+    `plate is actually driven (${(c.drivenMass * 1000).toFixed(0)} g at ${c.vFront.toFixed(0)} m/s)`);
+
+  // insensitivity: a small, low-energy strike must NOT function it
+  const cold = run({ type: 'ap', proj: { caliber: 0.0076, mass: 0.012, velocity: 700, standoff: 0.4 },
+    layers: [cassette(0), main(0)] });
+  check(!cold.w.cassettes[0].initiated,
+    `a rifle-calibre strike does not initiate an insensitive filler (${cold.verdict.headline})`);
+
+  // an inert filler must not produce a functioning cassette at all, or the
+  // control below is worthless
+  const inertOnly = run({ type: 'heat', proj: { standoff: 0.6 },
+    layers: [cassette(0, 'rubber'), main(0)] });
+  check(inertOnly.w.cassettes.length === 0,
+    `an inert filler registers no cassette and cannot detonate (${inertOnly.w.cassettes.length})`);
+
+  // A thin layer must get enough nodes through it to behave as a plate, and
+  // the run must SAY SO when it cannot. This is the defect that made a live
+  // cassette come out worse than an inert one: 3 mm plates were being meshed
+  // at 0.7 nodes through thickness and could only be pushed aside.
+  const heavy = {
+    kind: 'era', label: 'Heavy ERA', plate: 'hha', slope: 60, height: 0.9,
+    frontThickness: 0.015, chargeThickness: 0.010, backThickness: 0.005,
+  };
+  const hv = meshOnly({ type: 'heat', proj: { standoff: 0.6 },
+    layers: [heavy, { material: 'rha', thickness: 0.15, gap: 0.08, slope: 60, height: 1.2 }] });
+  check(hv.meshInfo.throughThickness[0] >= 3,
+    `a heavy cassette's front plate is resolved as a plate `
+    + `(${hv.meshInfo.throughThickness[0].toFixed(1)} nodes through 15 mm)`);
+  const lightRes = meshOnly({ type: 'heat', proj: { standoff: 0.6 },
+    layers: [cassette(60), main(60)] });
+  check(lightRes.meshInfo.minNodesThroughLayer >= 2 || lightRes.log.has('under-resolved'),
+    `an under-resolved layer is reported rather than quietly simulated `
+    + `(${lightRes.meshInfo.minNodesThroughLayer.toFixed(1)} nodes through the thinnest layer)`);
+
+  // NOT asserted: that a live cassette defeats more than an inert one. It does
+  // not in this model - see MODEL.md 5.1a. Measured heavy cassette at 60 deg
+  // over 150 mm RHA: 1382 m/s residual live against 1126 m/s inert for a
+  // shaped charge, 1069 against 1046 for a long rod. The cassette functions
+  // correctly; the jet model is too compact in time for the plates to sweep
+  // it. Pinning a false expectation here would be worse than pinning none.
 }
 
 console.log('\n== aiming ==');

@@ -13,7 +13,7 @@ import { el, panel, row, num, select, slider, toggle, kv, clear, panelState } fr
 import { PRESETS, PRESET_ORDER } from './presets.js';
 import { MATERIALS, ARMOUR_KEYS, PENETRATOR_KEYS, getMaterial, registerMaterial } from '../materials/database.js';
 import { PROJECTILE_TYPES, TYPE_ORDER, makeProjectileConfig } from '../sim/projectileTypes.js';
-import { Scene, makeLayer, makeModule, MODULE_TYPES } from '../sim/scene.js';
+import { Scene, makeLayer, makeModule, expandEra, MODULE_TYPES } from '../sim/scene.js';
 import { QUALITY } from '../sim/world.js';
 import { FIELD_MODES, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, rgb } from '../render/palette.js';
 import * as U from '../core/units.js';
@@ -318,14 +318,42 @@ export class App {
         ARMOUR_KEYS.map((k) => ({ value: k, label: MATERIALS[k].name })), Lr.material,
         (v) => { Lr.material = v; changed(); })));
       b.appendChild(row('Thickness (mm)', num(Lr.thickness * 1000, { dp: 1, step: 1, onchange: (v) => { Lr.thickness = Math.max(0.0005, v / 1000); changed(); } })));
-      b.appendChild(row('Slope (°)', num(Lr.slope, { dp: 1, step: 5, onchange: (v) => { Lr.slope = v; changed(); } })));
+      b.appendChild(row('Slope (°)', num(Lr.slope, { dp: 1, step: 5, onchange: (v) => {
+        if (Lr.eraId !== undefined) sc.layers.forEach((q) => { if (q.eraId === Lr.eraId) q.slope = v; });
+        else Lr.slope = v;
+        changed();
+      } })));
       b.appendChild(row('Air gap in front (mm)', num(Lr.gap * 1000, { dp: 0, step: 10, onchange: (v) => { Lr.gap = Math.max(0, v / 1000); changed(); } })));
-      b.appendChild(row('Height (mm)', num(Lr.height * 1000, { dp: 0, step: 50, onchange: (v) => { Lr.height = Math.max(0.05, v / 1000); changed(); } })));
+      b.appendChild(row('Height (mm)', num(Lr.height * 1000, { dp: 0, step: 50, onchange: (v) => {
+        const h = Math.max(0.05, v / 1000);
+        if (Lr.eraId !== undefined) sc.layers.forEach((q) => { if (q.eraId === Lr.eraId) q.height = h; });
+        else Lr.height = h;
+        changed();
+      } })));
       b.appendChild(row('Label', el('input', { type: 'text', value: Lr.label || '', onchange: (e) => { Lr.label = e.target.value; changed(); } })));
-      b.appendChild(el('div', { class: 'grid3' },
-        toggle('Bonded', Lr.bonded, (v) => { Lr.bonded = v; changed(); }),
-        toggle('Enabled', Lr.enabled, (v) => { Lr.enabled = v; changed(); }),
-        el('button', { class: 'mini', onclick: () => { sc.layers.splice(idx, 1); changed(); } }, 'Delete')));
+      // An ERA cassette is three layers that only make sense together, so its
+      // geometry edits and its delete act on all three. Deleting one plate and
+      // leaving a bare charge behind would be a cassette that cannot function.
+      const eraSibs = Lr.eraId === undefined ? null
+        : sc.layers.filter((q) => q.eraId === Lr.eraId);
+      if (eraSibs) {
+        const applyAll = (fn) => { eraSibs.forEach(fn); changed(); };
+        b.appendChild(el('div', { class: 'note' },
+          'Part of an ERA cassette. Slope, height and enable apply to the whole '
+          + 'cassette; thickness is per plate. The charge functions only when the '
+          + 'simulated shock passes its initiation threshold.'));
+        b.appendChild(el('div', { class: 'grid3' },
+          toggle('Enabled', Lr.enabled, (v) => applyAll((q) => { q.enabled = v; })),
+          el('button', { class: 'mini', onclick: () => {
+            const keep = sc.layers.filter((q) => q.eraId !== Lr.eraId);
+            sc.layers = keep; changed();
+          } }, 'Delete cassette')));
+      } else {
+        b.appendChild(el('div', { class: 'grid3' },
+          toggle('Bonded', Lr.bonded, (v) => { Lr.bonded = v; changed(); }),
+          toggle('Enabled', Lr.enabled, (v) => { Lr.enabled = v; changed(); }),
+          el('button', { class: 'mini', onclick: () => { sc.layers.splice(idx, 1); changed(); } }, 'Delete')));
+      }
       b.appendChild(kv([
         ['Density', `${m.rho} kg/m³`],
         ['Yield', U.pressure(m.Y)],
@@ -339,9 +367,28 @@ export class App {
       p.body.appendChild(box);
     });
 
+    const addEra = (spec) => {
+      const slope = sc.layers.length ? sc.layers[sc.layers.length - 1].slope : 0;
+      const height = sc.layers.length ? sc.layers[sc.layers.length - 1].height : 0.6;
+      sc.layers.unshift(...expandEra({ ...spec, slope, height, gap: 0 }));
+      changed();
+    };
     p.body.appendChild(el('div', { class: 'grid2' },
       el('button', { class: 'mini', onclick: () => { sc.layers.push(makeLayer({ material: 'rha', thickness: 0.02, gap: 0.05 })); changed(); } }, '+ Layer'),
       el('button', { class: 'mini', onclick: () => this.customMaterial() }, '+ Material')));
+    p.body.appendChild(el('div', { class: 'grid2' },
+      el('button', { class: 'mini', onclick: () => addEra({
+        label: 'Light ERA', plate: 'hha', frontThickness: 0.003, chargeThickness: 0.006, backThickness: 0.003,
+      }) }, '+ Light ERA'),
+      el('button', { class: 'mini', onclick: () => addEra({
+        label: 'Heavy ERA', plate: 'hha', frontThickness: 0.015, chargeThickness: 0.010, backThickness: 0.005,
+      }) }, '+ Heavy ERA')));
+    p.body.appendChild(el('div', { class: 'hint' },
+      'A cassette is added in front of the array as three bonded layers: front plate, '
+      + 'charge, back plate. It is meshed as ordinary deformable material and only '
+      + 'functions if the impact shocks the charge past its initiation threshold — a '
+      + 'splinter or a slow strike will not set it off. Light ERA is sized against shaped '
+      + 'charges; heavy ERA carries a front plate thick enough to matter against long rods.'));
 
     p.body.appendChild(kv([
       ['Line-of-sight total', U.len(sc.losTotal)],
@@ -408,6 +455,29 @@ export class App {
     } else if (w.state === 'idle') {
       p.body.appendChild(el('div', { class: 'note' }, 'Press FIRE. The projectile flies, contacts the array, and the continuum solver takes over at the struck face.'));
     }
+    // ERA state, when the array has any. Worth its own block: whether a
+    // cassette functioned, and how fast its plates left, is the single thing
+    // that decides whether the rest of the numbers mean anything.
+    if (w.cassettes && w.cassettes.length) {
+      for (const c of w.cassettes) {
+        const done = c.firedColumns >= c.columns.length;
+        p.body.appendChild(kv([
+          [`${c.label}`, c.initiated ? (done ? 'functioned' : 'detonating') : 'inert',
+            c.initiated ? 'bad' : 'good'],
+          c.initiated ? ['— front plate', U.vel(c.vFront)] : null,
+          c.initiated ? ['— back plate', U.vel(c.vBack)] : null,
+          c.initiated ? ['— plate driven', U.mass(c.drivenMass)] : null,
+          c.initiated ? ['— charge consumed', `${c.firedColumns} / ${c.columns.length} slices`] : null,
+        ]));
+      }
+      if (w.cassettes.every((c) => !c.initiated) && w.state === 'done') {
+        p.body.appendChild(el('div', { class: 'note' },
+          'The cassette did not function: the shock never reached its initiation '
+          + 'threshold. An ERA filler is insensitive by design, so this is a result, '
+          + 'not a failure to simulate.'));
+      }
+    }
+
     const at = s.atPerforation;
     p.body.appendChild(kv([
       ['Armour defeated', U.len(s.armourDefeated || 0), s.perforated ? 'bad' : 'hi'],

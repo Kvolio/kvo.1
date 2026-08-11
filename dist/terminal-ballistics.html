@@ -906,6 +906,37 @@ const MATERIALS = {
     detVel: 7980, gurney: 2700, heatOfDet: 5.19e6,
     source: 'Gurney velocity sqrt(2E)=2.70 km/s; D=7.98 km/s (Dobratz & Crawford, LLNL Explosives Handbook)',
   }),
+  // Reactive-armour explosive. 4S20 and its Western equivalents are
+  // plastic-bonded, deliberately INSENSITIVE compositions: an ERA cassette has
+  // to survive small-arms fire, shell splinters and its own vehicle's blast,
+  // and only function when a jet or a rod shocks it. That insensitivity is the
+  // whole design constraint, and it is expressed here by a critical shock
+  // pressure of 7 GPa - roughly where insensitive plastic-bonded compositions
+  // sit, and several times the threshold of a sensitive booster explosive.
+  //
+  // Published data on 4S20 itself is thin. These are representative
+  // plastic-bonded-explosive values, not measurements of the Soviet
+  // composition, and the initiation constants in particular should be read as
+  // "insensitive PBX" rather than as a specific material.
+  era4s20: mat({
+    key: 'era4s20', name: '4S20-type ERA explosive (insensitive PBX)', class: 'explosive',
+    rho: 1500, E: 4.5e9, nu: 0.4, Y: 0.03e9, UTS: 0.03e9, epsF: 0.06,
+    G0: 120, BHN: 6, jcC: 0.0, Tm: 500, cp: 1200, jcM: 1.0,
+    brittle: 0.5, weibull: 15, erosionResist: 0.02,
+    color: '#b0674a', color2: '#6b3c28',
+    detVel: 7000, gurney: 2400, heatOfDet: 4.6e6,
+    // Shock-initiation constants. The criterion is a critical shock pressure
+    // evaluated on the explosive's own Hugoniot,
+    //     Us = c0 + s*up ,   P = rho0 * Us * up
+    // rather than on the solver's nodal stress: the bulk model is linear
+    // elastic with no equation of state, so it cannot generate the tens of GPa
+    // that impedance matching says a jet or a rod drives into a soft filler,
+    // and every threat came out at a similar 3-4 GPa. Particle velocity IS
+    // resolved, so the Hugoniot is fed from that instead. See sim/era.js.
+    shockC0: 2200, shockS: 2.5, pCrit: 7.0e9,
+    source: 'Representative insensitive PBX; Gurney and detonation velocity of the RDX/binder class (Dobratz & Crawford). Walker-Wasley initiation constant is an order-of-magnitude figure for an insensitive composition, not a measurement of 4S20.',
+    notes: 'Used as the interlayer of an ERA cassette. Insensitive by design: small-arms and splinter strikes must not initiate it.',
+  }),
   tnt: mat({
     key: 'tnt', name: 'TNT (HE filler)', class: 'explosive',
     rho: 1630, E: 4e9, nu: 0.4, Y: 0.015e9, UTS: 0.015e9, epsF: 0.05,
@@ -2113,6 +2144,33 @@ function makeLayer(o = {}) {
   }, o);
 }
 
+/**
+ * Expand an ERA cassette into front plate / charge / back plate.
+ *
+ * The plates are bonded to the charge rather than floating: that is how a real
+ * cassette is assembled, and it means the plates are held in place by ordinary
+ * bonds until the charge is removed by the detonation. They then separate
+ * because there is nothing left joining them, not because anything detached
+ * them.
+ */
+function expandEra(o = {}) {
+  const id = o.eraId ?? uid++;
+  const plate = o.plate || 'hha';
+  const label = o.label || 'ERA';
+  const common = {
+    slope: o.slope ?? 0, height: o.height ?? 0.6, offset: o.offset ?? 0,
+    enabled: o.enabled !== false, eraId: id,
+  };
+  return [
+    makeLayer({ ...common, material: plate, thickness: Math.max(0.0005, o.frontThickness ?? 0.003),
+      gap: o.gap ?? 0, eraPart: 'front', label: `${label} front plate` }),
+    makeLayer({ ...common, material: o.explosive || 'era4s20', thickness: Math.max(0.0005, o.chargeThickness ?? 0.006),
+      bonded: true, eraPart: 'charge', label: `${label} charge` }),
+    makeLayer({ ...common, material: plate, thickness: Math.max(0.0005, o.backThickness ?? 0.003),
+      bonded: true, eraPart: 'back', label: `${label} back plate` }),
+  ];
+}
+
 function makeModule(o = {}) {
   return Object.assign({
     id: uid++,
@@ -2149,7 +2207,32 @@ class Scene {
     this.rebuild();
   }
 
-  setLayers(list) { this.layers = list.map((l) => makeLayer(l)); this.rebuild(); return this; }
+  setLayers(list) {
+    // An ERA cassette is authored as ONE entry and expanded here into the
+    // three bonded layers it physically is. Everything downstream - meshing,
+    // contact, depth accounting, rendering - then treats the plates and the
+    // charge as ordinary layers, which is what they are; only initiation and
+    // the Gurney impulse need to know a cassette exists (see sim/era.js).
+    const out = [];
+    for (const l of list) {
+      if (l && l.kind === 'era') out.push(...expandEra(l));
+      else out.push(makeLayer(l));
+    }
+    this.layers = out;
+    this.rebuild();
+    return this;
+  }
+
+  /** Cassette id -> its three layers, for the UI and for save/load. */
+  eraCassettes() {
+    const m = new Map();
+    for (const L of this.layers) {
+      if (L.eraId === undefined) continue;
+      if (!m.has(L.eraId)) m.set(L.eraId, {});
+      m.get(L.eraId)[L.eraPart] = L;
+    }
+    return m;
+  }
   setModules(list) { this.modules = list.map((m) => makeModule(m)); return this; }
 
   /** Recompute every layer polygon from its thickness / slope / gap. */
@@ -2284,7 +2367,7 @@ function modulePoly(m) {
   return out;
 }
 
-__exports.__all = {makeLayer, makeModule, MODULE_TYPES, Scene, modulePoly};
+__exports.__all = {makeLayer, expandEra, makeModule, MODULE_TYPES, Scene, modulePoly};
 Object.assign(__exports, __exports.__all);
 delete __exports.__all;
 
@@ -3382,6 +3465,293 @@ delete __exports.__all;
 
 });
 
+__def("src/sim/era.js", function (__exports, __req) {
+/**
+ * EXPLOSIVE REACTIVE ARMOUR
+ * =========================
+ *
+ * An ERA cassette is a sandwich: a steel front plate, a slab of insensitive
+ * explosive, a steel back plate. It is meshed as three ordinary bonded layers,
+ * so the plates are ordinary deformable armour and the charge is ordinary
+ * deformable material until it functions. Nothing here is a special-cased
+ * effect layered over the simulation.
+ *
+ * WHAT THIS MODULE ACTUALLY DOES
+ * ------------------------------
+ * Two things only:
+ *   1. decides, from the simulated stress state, whether and when the charge
+ *      initiates;
+ *   2. when the detonation front arrives at a slice of charge, removes that
+ *      charge (it has become gas) and adds the Gurney velocity to the two
+ *      plates either side of it.
+ *
+ * Everything that makes ERA *work* is then left to the solver. The plates fly
+ * apart, run into the jet or the rod, and cut it up through the ordinary
+ * contact machinery. The defeat mechanism is not modelled, asserted or
+ * tabulated anywhere - it is whatever the collision between a moving plate and
+ * a penetrator turns out to produce.
+ *
+ * INITIATION - critical shock pressure on the explosive's Hugoniot
+ * ----------------------------------------------------------------
+ * The charge functions when the shock driven into it exceeds a critical
+ * pressure. That pressure is evaluated from the linear shock Hugoniot of the
+ * filler,
+ *
+ *     Us = c0 + s * up ,      P = rho0 * Us * up
+ *
+ * with the particle velocity up taken as half the local material speed the
+ * solver reports for the charge (the usual free-surface approximation).
+ *
+ * WHY NOT THE SOLVER'S OWN STRESS. The obvious implementation - integrate the
+ * nodal virial stress, Walker-Wasley style - was tried and measured, and it
+ * does not discriminate: every threat from a 12.7 mm AP bullet to a
+ * shaped-charge jet produced 3.4-4.1 GPa in the charge, and the jet actually
+ * scored LOWEST on the P^2*tau integral because the integral is dominated by
+ * how long a soft filler stays crushed rather than by how hard it was hit.
+ * The cause is a known limitation of the bulk model (MODEL.md 7.6): the
+ * volumetric response is linear elastic with no equation of state, so it
+ * cannot generate the tens of GPa that impedance matching says a jet drives
+ * into a low-impedance filler. Particle velocity, on the other hand, the
+ * solver resolves well and monotonically - measured peak charge speeds run
+ * 361 m/s for a slow 20 mm strike, 1150-1700 m/s across heavy machine gun,
+ * autocannon and full-calibre AP shot, 2235 m/s for APDS, 3245 m/s for a long
+ * rod and 8293 m/s for a jet. Feeding the Hugoniot from that puts the 7 GPa
+ * threshold of an insensitive PBX squarely in the gap, so the cassette
+ * functions against shaped charges and long rods and stays inert under
+ * machine-gun and autocannon fire, which is what an ERA filler is specified to
+ * do. The threshold is a material property and is stated with its provenance.
+ *
+ * PROPAGATION
+ * -----------
+ * The charge does not go off all at once. Detonation spreads from wherever it
+ * initiated at the explosive's detonation velocity, so a cassette struck near
+ * one edge throws that end of its plates first. Across a 300 mm cassette at
+ * 7000 m/s that is ~43 us of skew, which is the same order as the whole
+ * penetration event and therefore visible in the result.
+ *
+ * FLYER VELOCITY - Gurney sandwich
+ * --------------------------------
+ *     V = sqrt(2E) * (M/C + 1/3)^(-1/2)
+ *
+ * with M the mean plate areal density and C that of the charge, then split
+ * between the two plates so their momenta balance (see below). This is the
+ * plane-wave, fully-confined result and it overestimates a real cassette,
+ * where the detonation runs along the sandwich rather than into it and the
+ * products escape sideways from a thin unconfined slab. A single efficiency
+ * factor covers that gap. It is a calibration constant, not a derivation, it
+ * is exposed in the UI next to the out-of-plane confinement factor, and the
+ * flyer velocity it produces is logged so it can be checked against the
+ * 500-900 m/s that light ERA plates are usually quoted at.
+ */
+
+const { ROLE } = __req("src/sim/pd/domain.js");
+const { SEV } = __req("src/core/events.js");
+
+/**
+ * Gurney sandwich flyer velocities for the two plates.
+ *
+ * The symmetric result sets the scale, using the mean plate areal density:
+ *
+ *     V = eff * sqrt(2E) * (Mbar/C + 1/3)^(-1/2)
+ *
+ * Heavy ERA is not symmetric though - a Kontakt-5 style cassette carries a
+ * thick front plate against a much thinner back plate - and giving both the
+ * same speed would create net momentum out of nothing, pushing the whole
+ * cassette bodily downrange. The pair is therefore split so that
+ * M1*V1 = M2*V2 exactly, which reduces to V1 = V2 = V when the plates match:
+ *
+ *     V1 = V * 2*M2/(M1+M2)      V2 = V * 2*M1/(M1+M2)
+ *
+ * This is an interpolation, not Kennedy's full asymmetric-sandwich solution;
+ * what it guarantees is that the cassette's momentum balances and that the
+ * heavier plate is the slower one, which is the behaviour that matters here.
+ */
+function sandwichFlyerVelocity(frontAreal, backAreal, chargeAreal, gurneyVel, efficiency = 1) {
+  if (chargeAreal <= 0) return { front: 0, back: 0, mean: 0 };
+  const sum = frontAreal + backAreal;
+  if (sum <= 0) return { front: 0, back: 0, mean: 0 };
+  const mean = (efficiency * gurneyVel) / Math.sqrt((0.5 * sum) / chargeAreal + 1 / 3);
+  return { front: mean * (2 * backAreal) / sum, back: mean * (2 * frontAreal) / sum, mean };
+}
+
+/**
+ * Build the per-cassette bookkeeping for a freshly meshed domain.
+ *
+ * The charge is divided into COLUMNS one lattice spacing wide, measured along
+ * the plate tangent. A column is the natural unit here: it is the slice of
+ * charge that drives the piece of plate directly in front of and behind it, so
+ * detonation arrival, charge removal and plate impulse all happen together and
+ * no plate node can be driven twice by neighbouring charge nodes.
+ */
+function buildCassettes(scene, domain) {
+  const layers = scene.activeLayers();
+  const out = [];
+
+  for (let idx = 0; idx < layers.length; idx++) {
+    const L = layers[idx];
+    if (L.eraPart !== 'charge') continue;
+    // Only an actual explosive can function. Without this an inert filler
+    // picked up the default shock constants and "detonated", which silently
+    // destroys the one control worth having: an inert cassette of identical
+    // geometry and mass, to show what the explosive is really contributing.
+    if (!L.mat.detVel || !L.mat.gurney) continue;
+    const front = layers.findIndex((q) => q.eraId === L.eraId && q.eraPart === 'front');
+    const back = layers.findIndex((q) => q.eraId === L.eraId && q.eraPart === 'back');
+    const mat = L.mat;
+    const [tx, ty] = L.tangent;
+    const dx = domain.dx;
+
+    // areal densities: rho * normal thickness
+    const chargeAreal = mat.rho * L.thickness;
+    const frontAreal = front >= 0 ? layers[front].mat.rho * layers[front].thickness : 0;
+    const backAreal = back >= 0 ? layers[back].mat.rho * layers[back].thickness : 0;
+
+    const cols = new Map();
+    const col = (i) => {
+      const s = domain.px[i] * tx + domain.py[i] * ty;
+      const key = Math.round(s / dx);
+      let c = cols.get(key);
+      if (!c) {
+        c = { key, s: key * dx, charge: [], plateFront: [], plateBack: [], fired: false, peakP: 0, x: 0, y: 0 };
+        cols.set(key, c);
+      }
+      return c;
+    };
+
+    for (let i = 0; i < domain.n; i++) {
+      if (domain.role[i] !== ROLE.ARMOUR) continue;
+      const li = domain.layer[i];
+      if (li === idx) { const c = col(i); c.charge.push(i); c.x += domain.px[i]; c.y += domain.py[i]; }
+      else if (li === front) col(i).plateFront.push(i);
+      else if (li === back) col(i).plateBack.push(i);
+    }
+    // a column with no charge in it cannot detonate anything
+    for (const [k, c] of cols) {
+      if (!c.charge.length) { cols.delete(k); continue; }
+      c.x /= c.charge.length; c.y /= c.charge.length;
+    }
+    if (!cols.size) continue;
+
+    out.push({
+      eraId: L.eraId,
+      label: L.label || 'ERA',
+      chargeLayer: idx, frontLayer: front, backLayer: back,
+      normal: L.normal, tangent: L.tangent,
+      detVel: mat.detVel || 7000,
+      gurney: mat.gurney || 2400,
+      rho0: mat.rho,
+      shockC0: mat.shockC0 || 2200,
+      shockS: mat.shockS || 2.5,
+      pCrit: mat.pCrit || 7e9,
+      chargeAreal, frontAreal, backAreal,
+      columns: [...cols.values()],
+      initiated: false, initT: 0, initX: 0, initY: 0,
+      firedColumns: 0, vFront: 0, vBack: 0, flyerVelocity: 0, drivenMass: 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * Advance every cassette by dt. Returns a list of events worth logging.
+ *
+ * @param {Array} cassettes from buildCassettes
+ * @param {PDDomain} d
+ * @param {number} now      simulation time
+ * @param {number} dt       time since the previous call
+ * @param {number} efficiency Gurney efficiency (see header)
+ */
+function stepCassettes(cassettes, d, now, dt, efficiency = 0.45) {
+  const events = [];
+  if (dt <= 0) return events;
+
+  for (const c of cassettes) {
+    if (c.firedColumns >= c.columns.length) continue;
+
+    // ---- initiation: critical shock pressure on the Hugoniot --------------
+    if (!c.initiated) {
+      for (const col of c.columns) {
+        if (col.fired) continue;
+        let fastest = 0;
+        for (const i of col.charge) {
+          if (!d.alive[i]) continue;
+          const v = Math.hypot(d.vx[i], d.vy[i]);
+          if (v > fastest) fastest = v;
+        }
+        const up = 0.5 * fastest;                       // free-surface approx
+        const P = c.rho0 * (c.shockC0 + c.shockS * up) * up;
+        if (P > col.peakP) col.peakP = P;
+        if (P >= c.pCrit) {
+          c.initiated = true;
+          c.initT = now; c.initX = col.x; c.initY = col.y;
+          const V = sandwichFlyerVelocity(c.frontAreal, c.backAreal, c.chargeAreal, c.gurney, efficiency);
+          c.vFront = V.front; c.vBack = V.back; c.flyerVelocity = V.mean;
+          events.push({
+            kind: 'era-initiate', cassette: c,
+            text: `${c.label} initiated — charge shocked to ${(col.peakP / 1e9).toFixed(1)} GPa, `
+              + `past its ${(c.pCrit / 1e9).toFixed(0)} GPa threshold; `
+              + `detonation spreading at ${(c.detVel / 1000).toFixed(1)} km/s, `
+              + `front plate ${c.vFront.toFixed(0)} m/s, back plate ${c.vBack.toFixed(0)} m/s (Gurney sandwich)`,
+          });
+          break;
+        }
+      }
+      if (!c.initiated) continue;
+    }
+
+    // ---- propagation: consume columns as the detonation front reaches them -
+    for (const col of c.columns) {
+      if (col.fired) continue;
+      const r = Math.hypot(col.x - c.initX, col.y - c.initY);
+      if (now < c.initT + r / c.detVel) continue;
+      col.fired = true;
+      c.firedColumns++;
+
+      // the charge in this slice is now gas
+      for (const i of col.charge) {
+        if (!d.alive[i]) continue;
+        d.alive[i] = 0; d.vx[i] = 0; d.vy[i] = 0;
+      }
+      // and it throws the plate either side of it apart along the sandwich
+      // normal - front plate towards the threat, back plate away from it
+      const [nx, ny] = c.normal;
+      for (const i of col.plateFront) {
+        if (!d.alive[i]) continue;
+        d.vx[i] -= nx * c.vFront; d.vy[i] -= ny * c.vFront;
+        c.drivenMass += d.mass[i];
+      }
+      for (const i of col.plateBack) {
+        if (!d.alive[i]) continue;
+        d.vx[i] += nx * c.vBack; d.vy[i] += ny * c.vBack;
+        c.drivenMass += d.mass[i];
+      }
+    }
+
+    if (c.firedColumns >= c.columns.length && !c.completeLogged) {
+      c.completeLogged = true;
+      events.push({
+        kind: 'era-complete', cassette: c,
+        text: `${c.label} fully functioned — ${(c.drivenMass * 1000).toFixed(0)} g of plate driven `
+          + `at ${c.vFront.toFixed(0)} / ${c.vBack.toFixed(0)} m/s`,
+      });
+    }
+  }
+  return events;
+}
+
+/** Push cassette events into the run log. */
+function logCassetteEvents(log, t, events) {
+  for (const e of events) {
+    log.add(t, e.kind, e.text, e.kind === 'era-initiate' ? SEV.WARN : SEV.NOTE);
+  }
+}
+
+__exports.__all = {sandwichFlyerVelocity, buildCassettes, stepCassettes, logCassetteEvents};
+Object.assign(__exports, __exports.__all);
+delete __exports.__all;
+
+});
+
 __def("src/render/palette.js", function (__exports, __req) {
 /**
  * Colour system. Field colour maps are perceptually ordered ramps so that a
@@ -4022,6 +4392,7 @@ const { makeProjectileConfig, PROJECTILE_TYPES } = __req("src/sim/projectileType
 const { FragmentSystem } = __req("src/sim/fragments.js");
 const { InternalDamage } = __req("src/sim/internals.js");
 const { detonate, logDetonation } = __req("src/sim/explosive.js");
+const { buildCassettes, stepCassettes, logCassetteEvents } = __req("src/sim/era.js");
 const { Bus, EventLog, SEV } = __req("src/core/events.js");
 const { Recorder } = __req("src/core/recorder.js");
 const { getMaterial } = __req("src/materials/database.js");
@@ -4040,6 +4411,10 @@ const { analyticPanel } = __req("src/sim/analytics.js");
  * the perforation test so the two cannot contradict each other.
  */
 const PEN_FRACTION = 0.01;
+// Nodes a layer needs through its thickness before it behaves as a layer rather
+// than as a line of loosely connected points. Three is the minimum at which a
+// plate has an inside.
+const MIN_NODES_THROUGH_LAYER = 3;
 
 const QUALITY = {
   low: { budget: 3200, across: 8, mRatio: 2.415, substeps: 3, label: 'Low — fastest' },
@@ -4070,6 +4445,7 @@ class World {
       seed: 20260810,
       maxEventTime: 6e-4,       // hard bound on the resolved continuum window
       corridorScale: 1.0,       // width multiplier for the deformable corridor
+      eraEfficiency: 0.45,      // Gurney sandwich efficiency for ERA (see sim/era.js)
       recordedFrames: 600,      // frames kept for scrubbing; see fire()
     };
 
@@ -4128,6 +4504,8 @@ class World {
     this.residual = null;
     this.impactStartTime = 0;
     this.settleTime = 0;
+    this.cassettes = [];
+    this.eraLastT = 0;
     if (this.projectile) this.projectile.reset();
     for (const L of this.scene.layers) { L.fragHits = 0; }
     this.bus.emit('reset');
@@ -4329,14 +4707,32 @@ class World {
     // for whatever the nominal spacing gives.
     const target = plan.budget * 0.82;
     const dxMin = Math.max(0.0004, plan.dx0 * 0.28);
+    // THIN LAYERS SET THE COARSE BOUND TOO
+    // The lattice used to be sized from the penetrator and the node budget
+    // alone. An array containing a thin layer - an ERA cassette's 3 mm plates,
+    // a stand-off screen - was then meshed at a spacing coarser than the layer
+    // itself: measured at 0.7 nodes through an ERA plate, which is not a plate
+    // at all. It cannot erode a jet, it can only be pushed aside, and a live
+    // cassette came out WORSE than an inert one because detonation cleared the
+    // charge from the jet's path without the plates ever doing any work.
+    // A layer needs a few nodes through it before it behaves like one.
+    let thinnest = Infinity;
+    for (const L of this.scene.activeLayers()) if (L.thickness < thinnest) thinnest = L.thickness;
+    const dxThin = isFinite(thinnest) ? thinnest / MIN_NODES_THROUGH_LAYER : Infinity;
     // the coarse bound follows the mesh reference diameter, not the nominal
     // penetrator: for a shaped charge the "penetrator" is the jet, which is far
     // too fine to be the thing that limits how coarse the lattice may go
-    const dxMax = Math.min(0.030, Math.max(plan.refD / 3, plan.dx0 * 2.5));
+    const dxMax = Math.min(0.030, dxThin, Math.max(plan.refD / 3, plan.dx0 * 2.5));
     let dx = clamp(plan.dx0, dxMin, dxMax);
+    let width = plan.width;
+    // Below this the corridor stops being a corridor: it has to hold the
+    // channel, the crater lip and enough plate either side of them to react.
+    // Trading width for resolution is bounded - narrowing without limit would
+    // clip the array rather than resolve it.
+    const widthFloor = Math.max(0.55 * plan.width, 4 * plan.refD, 0.05);
     let dom = null, count = 0;
     for (let attempt = 0; attempt < 7; attempt++) {
-      dom = this.assembleDomain({ dx, width: plan.width, length, originX, originY, dirx, diry, mRatio: plan.mRatio });
+      dom = this.assembleDomain({ dx, width, length, originX, originY, dirx, diry, mRatio: plan.mRatio });
       count = dom.countSites();
       const ratio = count / target;
       if (ratio > 1.0) {
@@ -4345,18 +4741,26 @@ class World {
         dx = clamp(dx * Math.sqrt(Math.max(ratio, 0.2)), dxMin, dxMax);
       } else break;
     }
-    // hard enforcement: the budget is what keeps the frame inside its time box
+    // Hard enforcement: the budget is what keeps the frame inside its time box.
+    // Narrow the corridor before coarsening the lattice. Meshing 300 mm of
+    // plate that mostly sits still is worth less than resolving the few
+    // millimetres that are actually doing the work, and coarsening first is
+    // what produced the sub-lattice ERA plates described above.
     let guard = 0;
-    while (count > plan.budget && guard++ < 12) {
-      dx = Math.min(0.030, dx * 1.14);
-      dom = this.assembleDomain({ dx, width: plan.width, length, originX, originY, dirx, diry, mRatio: plan.mRatio });
+    while (count > plan.budget && guard++ < 16) {
+      if (width > widthFloor * 1.02) width = Math.max(widthFloor, width * 0.88);
+      else dx = Math.min(0.030, dx * 1.14);
+      dom = this.assembleDomain({ dx, width, length, originX, originY, dirx, diry, mRatio: plan.mRatio });
       count = dom.countSites();
     }
+    plan.width = width;
     dom.build();
     dom.applyLateralBC((x, y) => !!this.scene.isSolid(x, y));
 
     this.domain = dom;
     this.solver = new PDSolver(dom);
+    this.cassettes = buildCassettes(this.scene, dom);
+    this.eraLastT = this.simTime;
     this.state = 'impact';
     this.impactStartTime = this.simTime;
     this.impactKE0 = this.solver.kinetic();
@@ -4374,6 +4778,22 @@ class World {
     this.log.add(this.simTime, 'mesh',
       `Continuum domain built — ${dom.n} nodes, ${dom.nb} bonds, dx = ${(dx * 1000).toFixed(2)} mm, ` +
       `dt = ${(this.solver.dt * 1e9).toFixed(0)} ns`, SEV.INFO, this.meshInfo);
+    // A layer thinner than a couple of lattice spacings is not being simulated
+    // as a layer, and anything that depends on it behaving like one - an ERA
+    // cassette's plates above all - will be wrong. Say so rather than quietly
+    // producing a number.
+    const through = this.meshInfo.throughThickness;
+    let worst = Infinity, worstIdx = -1;
+    through.forEach((t, i) => { if (t < worst) { worst = t; worstIdx = i; } });
+    this.meshInfo.minNodesThroughLayer = worst;
+    if (worstIdx >= 0 && worst < 2) {
+      const L = this.scene.activeLayers()[worstIdx];
+      this.log.add(this.simTime, 'under-resolved',
+        `${L.label || L.mat.name} is ${(L.thickness * 1000).toFixed(1)} mm against a `
+        + `${(dx * 1000).toFixed(2)} mm lattice — ${worst.toFixed(1)} nodes through it. `
+        + `A layer this thin cannot behave as a plate: raise Discretisation or narrow the `
+        + `deformable zone before trusting anything that depends on it.`, SEV.WARN);
+    }
     this.log.add(this.simTime, 'contact', 'Continuum phase armed — projectile within a few lattice spacings', SEV.NOTE);
     this.bus.emit('impact-begin', {
       // a sensible viewing scale: about a dozen calibres across the frame
@@ -4450,10 +4870,15 @@ class World {
         this.simTime += s.dt;
       }
       steps++;
+      // ERA initiation is an integral over the shock, and a shock transit
+      // through a 6 mm charge lasts under a microsecond, so it is sampled
+      // twice as often as the fuze check to avoid stepping over the peak.
+      if (steps % 2 === 0) this.stepEra();
       if (steps % 4 === 0) this.checkFuze();
     }
     this.perf.stepsLastFrame = steps;
     this.checkFuze();
+    this.stepEra();
     this.checkModuleStrikes();
     this.promoteEscapees();
     this.fragments.step(advanced, this.scene, this.simTime, this.internals);
@@ -4593,6 +5018,25 @@ class World {
     const delay = this.projectile.cfg.fuzeDelay ?? fz.delay;
     if (this.simTime - p.fuzeTimer < delay) return;
     this.detonateShell();
+  }
+
+  /**
+   * Advance every ERA cassette. Called on the same cadence as the fuze check:
+   * initiation is a P^2*tau integral, so it only needs to see the stress state
+   * a few times per shock transit, not every step.
+   */
+  stepEra() {
+    if (!this.cassettes || !this.cassettes.length || !this.domain) return;
+    const dt = this.simTime - this.eraLastT;
+    if (dt <= 0) return;
+    this.eraLastT = this.simTime;
+    const ev = stepCassettes(this.cassettes, this.domain, this.simTime, dt,
+      this.settings.eraEfficiency ?? 0.45);
+    if (!ev.length) return;
+    logCassetteEvents(this.log, this.simTime, ev);
+    for (const e of ev) {
+      if (e.kind === 'era-initiate') this.bus.emit('era-initiate', e.cassette);
+    }
   }
 
   detonateShell() {
@@ -6460,6 +6904,47 @@ const PRESETS = {
     },
   },
 
+  'era-light-heat': {
+    name: 'Light ERA vs shaped charge',
+    note: 'A Kontakt-1 class cassette over a main plate, struck at 60°. The charge is initiated by the jet itself, and the plates then sweep across the jet path — which is why obliquity matters so much to ERA: at 0° the plates fly along the jet axis and barely interact with it. Compare with the slope set to 0.',
+    projectile: { type: 'heat', standoff: 0.6 },
+    scene: {
+      layers: [
+        { kind: 'era', label: 'Kontakt-1 type', plate: 'hha', slope: 60, height: 0.8,
+          frontThickness: 0.003, chargeThickness: 0.006, backThickness: 0.003 },
+        { material: 'rha', thickness: 0.090, slope: 60, gap: 0.10, height: 1.2, label: 'main plate' },
+      ],
+      modules: [{ type: 'crew', x: 1.05, y: 0.05, w: 0.32, h: 0.52, label: 'driver' }],
+    },
+  },
+  'era-heavy-ke': {
+    name: 'Heavy ERA vs long rod',
+    note: 'A Kontakt-5 class cassette: the front plate is thick enough to carry real momentum, so the rod is not merely disturbed but bent and yawed before it reaches the main array. The two plates leave at different speeds because they have different masses.',
+    projectile: { type: 'apfsds', velocity: 1650, standoff: 2.6 },
+    scene: {
+      layers: [
+        { kind: 'era', label: 'Kontakt-5 type', plate: 'hha', slope: 55, height: 0.9,
+          frontThickness: 0.015, chargeThickness: 0.010, backThickness: 0.005 },
+        { material: 'hha', thickness: 0.050, slope: 55, gap: 0.08, height: 1.3, label: 'outer plate' },
+        { material: 'rha', thickness: 0.070, slope: 55, gap: 0.06, height: 1.3, label: 'main backing' },
+      ],
+      modules: [{ type: 'crew', x: 1.3, y: 0.05, w: 0.34, h: 0.55, label: 'crew' }],
+    },
+  },
+  'era-insensitive': {
+    name: 'ERA under fragment attack',
+    note: 'The same cassette hit by something it is designed to shrug off. An ERA filler is deliberately insensitive: it has to survive splinters, small arms and its own vehicle firing. Whether it functions here is decided by the Walker-Wasley shock integral on the simulated stress, not by what is hitting it.',
+    projectile: { type: 'ap', caliber: 0.0145, mass: 0.064, velocity: 1000, standoff: 0.5 },
+    scene: {
+      layers: [
+        { kind: 'era', label: 'Cassette', plate: 'hha', slope: 0, height: 0.6,
+          frontThickness: 0.003, chargeThickness: 0.006, backThickness: 0.003 },
+        { material: 'rha', thickness: 0.060, slope: 0, gap: 0.10, height: 1.0, label: 'hull side' },
+      ],
+      modules: [],
+    },
+  },
+
   // ---------------------------------------------------------------------
   // HISTORICAL PLATES
   //
@@ -6573,6 +7058,7 @@ const PRESETS = {
 const PRESET_ORDER = [
   'single-plate', 'sloped-glacis', 'spaced-array', 'shatter-gap',
   'ceramic-composite', 'mbt-frontal', 'nera-sandwich', 'hesh-scab', 'aphe-interior',
+  'era-light-heat', 'era-heavy-ke', 'era-insensitive',
   'tiger1-ufp', 'tiger1-nose', 'tiger1-side-skirt', 'tiger2-ufp', 'panther-glacis',
   't34-glacis', 'is2-ufp', 'sherman-glacis', 'panzer4-front',
 ];
@@ -6923,7 +7409,7 @@ const { el, panel, row, num, select, slider, toggle, kv, clear, panelState } = _
 const { PRESETS, PRESET_ORDER } = __req("src/ui/presets.js");
 const { MATERIALS, ARMOUR_KEYS, PENETRATOR_KEYS, getMaterial, registerMaterial } = __req("src/materials/database.js");
 const { PROJECTILE_TYPES, TYPE_ORDER, makeProjectileConfig } = __req("src/sim/projectileTypes.js");
-const { Scene, makeLayer, makeModule, MODULE_TYPES } = __req("src/sim/scene.js");
+const { Scene, makeLayer, makeModule, expandEra, MODULE_TYPES } = __req("src/sim/scene.js");
 const { QUALITY } = __req("src/sim/world.js");
 const { FIELD_MODES, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, rgb } = __req("src/render/palette.js");
 const U = __req("src/core/units.js");
@@ -7228,14 +7714,42 @@ class App {
         ARMOUR_KEYS.map((k) => ({ value: k, label: MATERIALS[k].name })), Lr.material,
         (v) => { Lr.material = v; changed(); })));
       b.appendChild(row('Thickness (mm)', num(Lr.thickness * 1000, { dp: 1, step: 1, onchange: (v) => { Lr.thickness = Math.max(0.0005, v / 1000); changed(); } })));
-      b.appendChild(row('Slope (°)', num(Lr.slope, { dp: 1, step: 5, onchange: (v) => { Lr.slope = v; changed(); } })));
+      b.appendChild(row('Slope (°)', num(Lr.slope, { dp: 1, step: 5, onchange: (v) => {
+        if (Lr.eraId !== undefined) sc.layers.forEach((q) => { if (q.eraId === Lr.eraId) q.slope = v; });
+        else Lr.slope = v;
+        changed();
+      } })));
       b.appendChild(row('Air gap in front (mm)', num(Lr.gap * 1000, { dp: 0, step: 10, onchange: (v) => { Lr.gap = Math.max(0, v / 1000); changed(); } })));
-      b.appendChild(row('Height (mm)', num(Lr.height * 1000, { dp: 0, step: 50, onchange: (v) => { Lr.height = Math.max(0.05, v / 1000); changed(); } })));
+      b.appendChild(row('Height (mm)', num(Lr.height * 1000, { dp: 0, step: 50, onchange: (v) => {
+        const h = Math.max(0.05, v / 1000);
+        if (Lr.eraId !== undefined) sc.layers.forEach((q) => { if (q.eraId === Lr.eraId) q.height = h; });
+        else Lr.height = h;
+        changed();
+      } })));
       b.appendChild(row('Label', el('input', { type: 'text', value: Lr.label || '', onchange: (e) => { Lr.label = e.target.value; changed(); } })));
-      b.appendChild(el('div', { class: 'grid3' },
-        toggle('Bonded', Lr.bonded, (v) => { Lr.bonded = v; changed(); }),
-        toggle('Enabled', Lr.enabled, (v) => { Lr.enabled = v; changed(); }),
-        el('button', { class: 'mini', onclick: () => { sc.layers.splice(idx, 1); changed(); } }, 'Delete')));
+      // An ERA cassette is three layers that only make sense together, so its
+      // geometry edits and its delete act on all three. Deleting one plate and
+      // leaving a bare charge behind would be a cassette that cannot function.
+      const eraSibs = Lr.eraId === undefined ? null
+        : sc.layers.filter((q) => q.eraId === Lr.eraId);
+      if (eraSibs) {
+        const applyAll = (fn) => { eraSibs.forEach(fn); changed(); };
+        b.appendChild(el('div', { class: 'note' },
+          'Part of an ERA cassette. Slope, height and enable apply to the whole '
+          + 'cassette; thickness is per plate. The charge functions only when the '
+          + 'simulated shock passes its initiation threshold.'));
+        b.appendChild(el('div', { class: 'grid3' },
+          toggle('Enabled', Lr.enabled, (v) => applyAll((q) => { q.enabled = v; })),
+          el('button', { class: 'mini', onclick: () => {
+            const keep = sc.layers.filter((q) => q.eraId !== Lr.eraId);
+            sc.layers = keep; changed();
+          } }, 'Delete cassette')));
+      } else {
+        b.appendChild(el('div', { class: 'grid3' },
+          toggle('Bonded', Lr.bonded, (v) => { Lr.bonded = v; changed(); }),
+          toggle('Enabled', Lr.enabled, (v) => { Lr.enabled = v; changed(); }),
+          el('button', { class: 'mini', onclick: () => { sc.layers.splice(idx, 1); changed(); } }, 'Delete')));
+      }
       b.appendChild(kv([
         ['Density', `${m.rho} kg/m³`],
         ['Yield', U.pressure(m.Y)],
@@ -7249,9 +7763,28 @@ class App {
       p.body.appendChild(box);
     });
 
+    const addEra = (spec) => {
+      const slope = sc.layers.length ? sc.layers[sc.layers.length - 1].slope : 0;
+      const height = sc.layers.length ? sc.layers[sc.layers.length - 1].height : 0.6;
+      sc.layers.unshift(...expandEra({ ...spec, slope, height, gap: 0 }));
+      changed();
+    };
     p.body.appendChild(el('div', { class: 'grid2' },
       el('button', { class: 'mini', onclick: () => { sc.layers.push(makeLayer({ material: 'rha', thickness: 0.02, gap: 0.05 })); changed(); } }, '+ Layer'),
       el('button', { class: 'mini', onclick: () => this.customMaterial() }, '+ Material')));
+    p.body.appendChild(el('div', { class: 'grid2' },
+      el('button', { class: 'mini', onclick: () => addEra({
+        label: 'Light ERA', plate: 'hha', frontThickness: 0.003, chargeThickness: 0.006, backThickness: 0.003,
+      }) }, '+ Light ERA'),
+      el('button', { class: 'mini', onclick: () => addEra({
+        label: 'Heavy ERA', plate: 'hha', frontThickness: 0.015, chargeThickness: 0.010, backThickness: 0.005,
+      }) }, '+ Heavy ERA')));
+    p.body.appendChild(el('div', { class: 'hint' },
+      'A cassette is added in front of the array as three bonded layers: front plate, '
+      + 'charge, back plate. It is meshed as ordinary deformable material and only '
+      + 'functions if the impact shocks the charge past its initiation threshold — a '
+      + 'splinter or a slow strike will not set it off. Light ERA is sized against shaped '
+      + 'charges; heavy ERA carries a front plate thick enough to matter against long rods.'));
 
     p.body.appendChild(kv([
       ['Line-of-sight total', U.len(sc.losTotal)],
@@ -7318,6 +7851,29 @@ class App {
     } else if (w.state === 'idle') {
       p.body.appendChild(el('div', { class: 'note' }, 'Press FIRE. The projectile flies, contacts the array, and the continuum solver takes over at the struck face.'));
     }
+    // ERA state, when the array has any. Worth its own block: whether a
+    // cassette functioned, and how fast its plates left, is the single thing
+    // that decides whether the rest of the numbers mean anything.
+    if (w.cassettes && w.cassettes.length) {
+      for (const c of w.cassettes) {
+        const done = c.firedColumns >= c.columns.length;
+        p.body.appendChild(kv([
+          [`${c.label}`, c.initiated ? (done ? 'functioned' : 'detonating') : 'inert',
+            c.initiated ? 'bad' : 'good'],
+          c.initiated ? ['— front plate', U.vel(c.vFront)] : null,
+          c.initiated ? ['— back plate', U.vel(c.vBack)] : null,
+          c.initiated ? ['— plate driven', U.mass(c.drivenMass)] : null,
+          c.initiated ? ['— charge consumed', `${c.firedColumns} / ${c.columns.length} slices`] : null,
+        ]));
+      }
+      if (w.cassettes.every((c) => !c.initiated) && w.state === 'done') {
+        p.body.appendChild(el('div', { class: 'note' },
+          'The cassette did not function: the shock never reached its initiation '
+          + 'threshold. An ERA filler is insensitive by design, so this is a result, '
+          + 'not a failure to simulate.'));
+      }
+    }
+
     const at = s.atPerforation;
     p.body.appendChild(kv([
       ['Armour defeated', U.len(s.armourDefeated || 0), s.perforated ? 'bad' : 'hi'],

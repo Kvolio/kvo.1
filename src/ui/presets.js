@@ -113,6 +113,47 @@ export const PRESETS = {
     },
   },
 
+  'era-light-heat': {
+    name: 'Light ERA vs shaped charge',
+    note: 'A Kontakt-1 class cassette over a main plate, struck at 60°. The charge is initiated by the jet itself, and the plates then sweep across the jet path — which is why obliquity matters so much to ERA: at 0° the plates fly along the jet axis and barely interact with it. Compare with the slope set to 0.',
+    projectile: { type: 'heat', standoff: 0.6 },
+    scene: {
+      layers: [
+        { kind: 'era', label: 'Kontakt-1 type', plate: 'hha', slope: 60, height: 0.8,
+          frontThickness: 0.003, chargeThickness: 0.006, backThickness: 0.003 },
+        { material: 'rha', thickness: 0.090, slope: 60, gap: 0.10, height: 1.2, label: 'main plate' },
+      ],
+      modules: [{ type: 'crew', x: 1.05, y: 0.05, w: 0.32, h: 0.52, label: 'driver' }],
+    },
+  },
+  'era-heavy-ke': {
+    name: 'Heavy ERA vs long rod',
+    note: 'A Kontakt-5 class cassette: the front plate is thick enough to carry real momentum, so the rod is not merely disturbed but bent and yawed before it reaches the main array. The two plates leave at different speeds because they have different masses.',
+    projectile: { type: 'apfsds', velocity: 1650, standoff: 2.6 },
+    scene: {
+      layers: [
+        { kind: 'era', label: 'Kontakt-5 type', plate: 'hha', slope: 55, height: 0.9,
+          frontThickness: 0.015, chargeThickness: 0.010, backThickness: 0.005 },
+        { material: 'hha', thickness: 0.050, slope: 55, gap: 0.08, height: 1.3, label: 'outer plate' },
+        { material: 'rha', thickness: 0.070, slope: 55, gap: 0.06, height: 1.3, label: 'main backing' },
+      ],
+      modules: [{ type: 'crew', x: 1.3, y: 0.05, w: 0.34, h: 0.55, label: 'crew' }],
+    },
+  },
+  'era-insensitive': {
+    name: 'ERA under fragment attack',
+    note: 'The same cassette hit by something it is designed to shrug off. An ERA filler is deliberately insensitive: it has to survive splinters, small arms and its own vehicle firing. Whether it functions here is decided by the Walker-Wasley shock integral on the simulated stress, not by what is hitting it.',
+    projectile: { type: 'ap', caliber: 0.0145, mass: 0.064, velocity: 1000, standoff: 0.5 },
+    scene: {
+      layers: [
+        { kind: 'era', label: 'Cassette', plate: 'hha', slope: 0, height: 0.6,
+          frontThickness: 0.003, chargeThickness: 0.006, backThickness: 0.003 },
+        { material: 'rha', thickness: 0.060, slope: 0, gap: 0.10, height: 1.0, label: 'hull side' },
+      ],
+      modules: [],
+    },
+  },
+
   // ---------------------------------------------------------------------
   // HISTORICAL PLATES
   //
@@ -226,6 +267,7 @@ export const PRESETS = {
 export const PRESET_ORDER = [
   'single-plate', 'sloped-glacis', 'spaced-array', 'shatter-gap',
   'ceramic-composite', 'mbt-frontal', 'nera-sandwich', 'hesh-scab', 'aphe-interior',
+  'era-light-heat', 'era-heavy-ke', 'era-insensitive',
   'tiger1-ufp', 'tiger1-nose', 'tiger1-side-skirt', 'tiger2-ufp', 'panther-glacis',
   't34-glacis', 'is2-ufp', 'sherman-glacis', 'panzer4-front',
 ];

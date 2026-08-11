@@ -35,6 +35,33 @@ export function makeLayer(o = {}) {
   }, o);
 }
 
+/**
+ * Expand an ERA cassette into front plate / charge / back plate.
+ *
+ * The plates are bonded to the charge rather than floating: that is how a real
+ * cassette is assembled, and it means the plates are held in place by ordinary
+ * bonds until the charge is removed by the detonation. They then separate
+ * because there is nothing left joining them, not because anything detached
+ * them.
+ */
+export function expandEra(o = {}) {
+  const id = o.eraId ?? uid++;
+  const plate = o.plate || 'hha';
+  const label = o.label || 'ERA';
+  const common = {
+    slope: o.slope ?? 0, height: o.height ?? 0.6, offset: o.offset ?? 0,
+    enabled: o.enabled !== false, eraId: id,
+  };
+  return [
+    makeLayer({ ...common, material: plate, thickness: Math.max(0.0005, o.frontThickness ?? 0.003),
+      gap: o.gap ?? 0, eraPart: 'front', label: `${label} front plate` }),
+    makeLayer({ ...common, material: o.explosive || 'era4s20', thickness: Math.max(0.0005, o.chargeThickness ?? 0.006),
+      bonded: true, eraPart: 'charge', label: `${label} charge` }),
+    makeLayer({ ...common, material: plate, thickness: Math.max(0.0005, o.backThickness ?? 0.003),
+      bonded: true, eraPart: 'back', label: `${label} back plate` }),
+  ];
+}
+
 export function makeModule(o = {}) {
   return Object.assign({
     id: uid++,
@@ -71,7 +98,32 @@ export class Scene {
     this.rebuild();
   }
 
-  setLayers(list) { this.layers = list.map((l) => makeLayer(l)); this.rebuild(); return this; }
+  setLayers(list) {
+    // An ERA cassette is authored as ONE entry and expanded here into the
+    // three bonded layers it physically is. Everything downstream - meshing,
+    // contact, depth accounting, rendering - then treats the plates and the
+    // charge as ordinary layers, which is what they are; only initiation and
+    // the Gurney impulse need to know a cassette exists (see sim/era.js).
+    const out = [];
+    for (const l of list) {
+      if (l && l.kind === 'era') out.push(...expandEra(l));
+      else out.push(makeLayer(l));
+    }
+    this.layers = out;
+    this.rebuild();
+    return this;
+  }
+
+  /** Cassette id -> its three layers, for the UI and for save/load. */
+  eraCassettes() {
+    const m = new Map();
+    for (const L of this.layers) {
+      if (L.eraId === undefined) continue;
+      if (!m.has(L.eraId)) m.set(L.eraId, {});
+      m.get(L.eraId)[L.eraPart] = L;
+    }
+    return m;
+  }
   setModules(list) { this.modules = list.map((m) => makeModule(m)); return this; }
 
   /** Recompute every layer polygon from its thickness / slope / gap. */

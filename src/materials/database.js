@@ -274,6 +274,37 @@ export const MATERIALS = {
     detVel: 7980, gurney: 2700, heatOfDet: 5.19e6,
     source: 'Gurney velocity sqrt(2E)=2.70 km/s; D=7.98 km/s (Dobratz & Crawford, LLNL Explosives Handbook)',
   }),
+  // Reactive-armour explosive. 4S20 and its Western equivalents are
+  // plastic-bonded, deliberately INSENSITIVE compositions: an ERA cassette has
+  // to survive small-arms fire, shell splinters and its own vehicle's blast,
+  // and only function when a jet or a rod shocks it. That insensitivity is the
+  // whole design constraint, and it is expressed here by a critical shock
+  // pressure of 7 GPa - roughly where insensitive plastic-bonded compositions
+  // sit, and several times the threshold of a sensitive booster explosive.
+  //
+  // Published data on 4S20 itself is thin. These are representative
+  // plastic-bonded-explosive values, not measurements of the Soviet
+  // composition, and the initiation constants in particular should be read as
+  // "insensitive PBX" rather than as a specific material.
+  era4s20: mat({
+    key: 'era4s20', name: '4S20-type ERA explosive (insensitive PBX)', class: 'explosive',
+    rho: 1500, E: 4.5e9, nu: 0.4, Y: 0.03e9, UTS: 0.03e9, epsF: 0.06,
+    G0: 120, BHN: 6, jcC: 0.0, Tm: 500, cp: 1200, jcM: 1.0,
+    brittle: 0.5, weibull: 15, erosionResist: 0.02,
+    color: '#b0674a', color2: '#6b3c28',
+    detVel: 7000, gurney: 2400, heatOfDet: 4.6e6,
+    // Shock-initiation constants. The criterion is a critical shock pressure
+    // evaluated on the explosive's own Hugoniot,
+    //     Us = c0 + s*up ,   P = rho0 * Us * up
+    // rather than on the solver's nodal stress: the bulk model is linear
+    // elastic with no equation of state, so it cannot generate the tens of GPa
+    // that impedance matching says a jet or a rod drives into a soft filler,
+    // and every threat came out at a similar 3-4 GPa. Particle velocity IS
+    // resolved, so the Hugoniot is fed from that instead. See sim/era.js.
+    shockC0: 2200, shockS: 2.5, pCrit: 7.0e9,
+    source: 'Representative insensitive PBX; Gurney and detonation velocity of the RDX/binder class (Dobratz & Crawford). Walker-Wasley initiation constant is an order-of-magnitude figure for an insensitive composition, not a measurement of 4S20.',
+    notes: 'Used as the interlayer of an ERA cassette. Insensitive by design: small-arms and splinter strikes must not initiate it.',
+  }),
   tnt: mat({
     key: 'tnt', name: 'TNT (HE filler)', class: 'explosive',
     rho: 1630, E: 4e9, nu: 0.4, Y: 0.015e9, UTS: 0.015e9, epsF: 0.05,
