@@ -732,6 +732,26 @@ dominate the figure the moment the plate is perforated.
 
 ## 7. Known limitations
 
+### 7.0 Obliquity below the ricochet threshold buys nothing
+
+Surfaced while removing the fixed event window (§4.7), which had been hiding
+it: once runs are allowed to finish, an 88 mm APCBC at 800 m/s exits 70 mm of
+flat RHA at 399 m/s and 70 mm at 60° at **416 m/s** — the extra 70 mm of
+line-of-sight steel costs the round nothing at all. The same 140 mm presented
+as *flat* plate costs it a great deal (173 m/s exit).
+
+Above the ricochet threshold the model behaves correctly and strongly: at
+100 mm the flat plate is perforated and the 60° plate turns the shot away with
+nothing defeated. So obliquity is not ignored — it is all-or-nothing. Below the
+angle at which the round is deflected, the sloped plate behaves as though only
+its normal thickness counts, and the longer path through the material is not
+being paid for.
+
+The regression check for obliquity is deliberately pinned at 100 mm, where the
+discrimination is real, and deliberately *not* at 70 mm, where pinning it would
+only have concealed this. Cause not yet established.
+
+
 1. **Not validated.** No comparison against firing trials has been performed.
 2. **Energy drift** of tens of per cent on violent impacts (§4.5). The
    *creation* of energy has been eliminated — kinetic energy no longer grows

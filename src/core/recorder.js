@@ -124,7 +124,9 @@ export class Recorder {
       dmg[i] = dv > 255 ? 255 : dv;
       const tv = (d.temp[i] - 293) / S.tempSpan * 255;
       tmp[i] = tv > 255 ? 255 : tv < 0 ? 0 : tv;
-      alv[i] = d.alive[i] | (d.flags[i] & 8 ? 2 : 0);
+      // bit 2 = free material, bit 4 = ERA detonation products, so a scrubbed
+      // frame draws the gas the same way the live view does
+      alv[i] = d.alive[i] | (d.flags[i] & 8 ? 2 : 0) | (d.flags[i] & 16 ? 4 : 0);
       const pd = d.matTable[d.matIndex[i]].pd;
       const pv = d.plStrain[i] / Math.max(pd.epsF * 3, 1e-4) * 255;
       pls[i] = pv > 255 ? 255 : pv;

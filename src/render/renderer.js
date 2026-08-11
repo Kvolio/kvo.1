@@ -453,6 +453,22 @@ export class Renderer {
   nodeColor(d, i, frame) {
     const mode = this.opts.field;
     const dmg = frame ? frame.dmg[i] / 255 : d.damage[i];
+    // ERA DETONATION PRODUCTS
+    // The charge keeps its mass when it functions (sim/era.js) but it is gas,
+    // not plate. Coloured by material and darkened by damage - which is 1.0,
+    // since every bond on it is broken - it rendered as near-black and the
+    // detonation was invisible: the cassette went off and nothing on screen
+    // said so. It is drawn here as hot gas cooling as it disperses. The
+    // brightness is the node's own speed, so this is simulation state being
+    // displayed, not an effect played over the top.
+    const isGas = frame ? (frame.alv && (frame.alv[i] & 4)) : (d.flags[i] & 16);
+    if (isGas && (mode === 'material' || mode === 'damage')) {
+      const sp = frame
+        ? (frame.vel ? frame.vel[i] / 255 : 0.5)
+        : Math.hypot(d.vx[i], d.vy[i]) / 900;
+      const g = clamp(sp, 0, 1);
+      return [255, 90 + 150 * g, 30 + 70 * g];
+    }
     switch (mode) {
       case 'damage': return RAMP_DAMAGE(dmg);
       case 'plastic': {

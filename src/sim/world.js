@@ -229,6 +229,30 @@ export class World {
     let want = clamp(realDt, 0, 0.05) * scale;
 
     if (this.state === 'flight') {
+      // THE APPROACH IS NOT WHERE THE INFORMATION IS.
+      //
+      // Free flight is a rigid body on a straight line - exactly integrable,
+      // and nothing about the outcome depends on how finely it is resolved.
+      // Resolving it at the ordinary time scale means a HEAT round, whose
+      // defaults are a 1.8 m standoff at 300 m/s, spends 6 ms of SIMULATED
+      // time getting to the plate. At 1/4000 that is roughly 1400 frames, or
+      // about 24 SECONDS of real time watching a stationary picture before
+      // anything happens at all. Fire a cassette scenario and it is
+      // indistinguishable from "the ERA does nothing".
+      //
+      // So the step is scaled to the distance left to run: the approach takes
+      // about the same short wall-clock time whatever the standoff and muzzle
+      // velocity. `flightPhase` still sub-steps at a fixed 1.5 mm of travel,
+      // so the trajectory, the sabot discard point and the moment of contact
+      // are bit-for-bit what they were - only the number of frames spent
+      // getting there changes.
+      const pf = this.projectile;
+      const [ux, uy] = normalize(pf.vx, pf.vy);
+      const hit = this.scene.raycast(pf.x, pf.y, ux, uy, 60)[0];
+      if (hit) {
+        const frames = Math.max(1, this.settings.approachFrames ?? 40);
+        want = Math.max(want, (hit.t / Math.max(pf.speed, 1)) / frames);
+      }
       this.flightPhase(want);
     } else if (this.state === 'impact' || this.state === 'settle') {
       const maxSteps = this.paused ? budgetSteps : this.adaptiveSubsteps(q);
