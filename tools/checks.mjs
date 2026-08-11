@@ -142,14 +142,14 @@ console.log('\n== explosive reactive armour ==');
   // shrug off the first and function on the second, and a velocity- or
   // pressure-only test cannot express that.
   const cold = run({ type: 'ap', proj: { caliber: 0.0076, mass: 0.012, velocity: 700, standoff: 0.4 },
-    layers: [cassette(0), main(0)] });
+    layers: [cassette(0), main(0)], maxFrames: 1800 });
   check(!cold.w.cassettes[0].initiated,
     `a rifle-calibre strike does not initiate an insensitive filler (${cold.verdict.headline})`);
   const mg = run({ type: 'ap', proj: { caliber: 0.0145, mass: 0.064, velocity: 1000, standoff: 0.35 },
-    layers: [cassette(0), main(0)] });
+    layers: [cassette(0), main(0)], maxFrames: 1800 });
   check(!mg.w.cassettes[0].initiated, 'a 14.5 mm AP strike does not initiate it either');
   const shot = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 },
-    layers: [cassette(0), main(0)] });
+    layers: [cassette(0), main(0)], maxFrames: 1800 });
   check(shot.w.cassettes[0].initiated,
     'a full-calibre AP shot DOES initiate it (narrow-and-fast must not be the only path)');
 
