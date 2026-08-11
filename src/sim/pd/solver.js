@@ -93,10 +93,22 @@ export class PDSolver {
     for (let i = 0; i < domain.n; i++) {
       this.kNode[i] = domain.matTable[domain.matIndex[i]].pd.E * h * domain.pscale[i];
     }
-    let kMax = 0, mMin = Infinity;
+    // Contact-stability bound, per node rather than worst-against-worst.
+    // Pairing the lightest node in the whole domain with the stiffest is
+    // enormously over-conservative once the array contains anything soft: an
+    // ERA charge or a polymer layer next to steel drove the step down to 52 ns
+    // where the same mesh in plain steel ran at 134, roughly tripling the work
+    // for the same simulated time. It is also wrong. A pair's contact spring
+    // is the two node springs in SERIES, so it can never be stiffer than twice
+    // the softer node's, and the effective mass can never exceed the lighter
+    // node's. Bounding each node by its OWN stiffness and mass is therefore
+    // still conservative, and reduces to dx/c_wave - the same Courant
+    // condition the bond bound obeys.
+    let kMax = 0, ratio = Infinity;
     for (let i = 0; i < domain.n; i++) {
       if (this.kNode[i] > kMax) kMax = this.kNode[i];
-      if (domain.mass[i] < mMin) mMin = domain.mass[i];
+      const r = domain.mass[i] / Math.max(2 * this.kNode[i], 1e-30);
+      if (r < ratio) ratio = r;
     }
     this.kContact = kMax;
     this.dcContact = domain.dx * 0.98;
@@ -121,7 +133,7 @@ export class PDSolver {
     this.confinement = opts.confinement ?? 1.8;
 
     // contact stiffness also constrains the time step
-    const dtC = 0.22 * 2 * Math.sqrt(mMin / Math.max(kMax, 1e-9));
+    const dtC = 0.22 * 2 * Math.sqrt(ratio);
     this.dt = Math.min(this.dt, dtC);
     this.dtBase = this.dt;
 

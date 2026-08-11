@@ -294,6 +294,17 @@ the separation at the moment of failure: the pair is already compacted, and
 contact's job is to resist *further* approach rather than to violently undo
 the compaction. Pairs that fail while still separated keep the nominal `d_c`.
 
+The contact bound is evaluated **per node against its own stiffness**, not by
+pairing the lightest node in the domain with the stiffest. A pair's contact
+spring is two node springs in series, so it can never be stiffer than twice the
+softer node's, and the effective mass never exceeds the lighter node's; bounding
+each node by its own `m_i / 2k_i` is therefore still conservative and reduces to
+`Δ/c_wave`, the same Courant condition the bond bound obeys. Worst-against-worst
+was not merely pessimistic but wrong, and it was expensive: any array containing
+something soft next to steel — an ERA charge, a polymer backing, a rubber
+interlayer — ran at a step three times shorter than the same mesh in plain
+steel, for no gain in accuracy.
+
 ### 4.3 Viscosity
 
 A small linear Kelvin–Voigt term (≈ 1 % of critical by default) plus a

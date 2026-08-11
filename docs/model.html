@@ -264,6 +264,16 @@ shear/compression  |s_p| ≥ 4 ε_f       (accumulated plastic stretch)</code></
 <p>the separation at the moment of failure: the pair is already compacted, and</p>
 <p>contact's job is to resist <em>further</em> approach rather than to violently undo</p>
 <p>the compaction. Pairs that fail while still separated keep the nominal <code>d_c</code>.</p>
+<p>The contact bound is evaluated <strong>per node against its own stiffness</strong>, not by</p>
+<p>pairing the lightest node in the domain with the stiffest. A pair's contact</p>
+<p>spring is two node springs in series, so it can never be stiffer than twice the</p>
+<p>softer node's, and the effective mass never exceeds the lighter node's; bounding</p>
+<p>each node by its own <code>m_i / 2k_i</code> is therefore still conservative and reduces to</p>
+<p><code>Δ/c_wave</code>, the same Courant condition the bond bound obeys. Worst-against-worst</p>
+<p>was not merely pessimistic but wrong, and it was expensive: any array containing</p>
+<p>something soft next to steel — an ERA charge, a polymer backing, a rubber</p>
+<p>interlayer — ran at a step three times shorter than the same mesh in plain</p>
+<p>steel, for no gain in accuracy.</p>
 <h3 id="4-3-viscosity">4.3 Viscosity</h3>
 <p>A small linear Kelvin–Voigt term (≈ 1 % of critical by default) plus a</p>
 <p>compression-only quadratic term in the von Neumann–Richtmyer spirit, scaled so</p>
