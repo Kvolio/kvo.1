@@ -1044,6 +1044,41 @@ export const PENETRATOR_KEYS = [
   'tantalum', 'tatungsten', 'diamond',
 ];
 
+/**
+ * A one-line quantitative descriptor: what the material is, how hard, how
+ * tough, how it fails.
+ *
+ * It is GENERATED from the same constants the solver integrates, never written
+ * by hand, so it cannot drift away from the simulated behaviour. Fracture
+ * toughness is recovered from the stored fracture energy, K_IC = sqrt(G0 * E),
+ * which is the inverse of how G0 was derived in the first place - so the value
+ * shown here reproduces the K_IC quoted in each entry's `source`.
+ *
+ * The word bands exist because a number alone does not tell a reader whether
+ * 63 MPa*m^0.5 is a lot. They are conventional engineering descriptions, not
+ * thresholds with any physical meaning of their own.
+ */
+export function describeMaterial(m) {
+  const kic = Math.sqrt(Math.max(m.G0, 0) * m.E) / 1e6;      // MPa*m^0.5
+  const band = (v, cuts, words) => {
+    for (let i = 0; i < cuts.length; i++) if (v < cuts[i]) return words[i];
+    return words[words.length - 1];
+  };
+  const hard = band(m.BHN, [120, 300, 450, 600, 1200],
+    ['very soft', 'soft', 'medium hardness', 'hard', 'very hard', 'ceramic-hard']);
+  const tough = band(kic, [3, 12, 30, 60, 110],
+    ['negligible toughness', 'very low toughness', 'low toughness',
+      'moderate toughness', 'high toughness', 'very high toughness']);
+  const fail = band(m.brittle, [0.15, 0.40, 0.70, 0.95],
+    ['fails ductile', 'mostly ductile', 'mixed ductile/brittle',
+      'mostly brittle', 'fails brittle']);
+  const cls = { metal: 'Metal', ceramic: 'Ceramic', composite: 'Composite',
+    polymer: 'Polymer', explosive: 'Explosive' }[m.class] || m.class;
+  const kicTxt = kic >= 10 ? kic.toFixed(0) : kic.toFixed(1);
+  return `${cls} · ${m.rho} kg/m³ · ${m.BHN} BHN (${hard}) · `
+    + `K\u1D35\u1D9C ${kicTxt} MPa·m^½ (${tough}) · ${fail}`;
+}
+
 export function getMaterial(key) {
   const m = MATERIALS[key];
   if (!m) throw new Error(`unknown material '${key}'`);

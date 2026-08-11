@@ -1676,6 +1676,41 @@ const PENETRATOR_KEYS = [
   'tantalum', 'tatungsten', 'diamond',
 ];
 
+/**
+ * A one-line quantitative descriptor: what the material is, how hard, how
+ * tough, how it fails.
+ *
+ * It is GENERATED from the same constants the solver integrates, never written
+ * by hand, so it cannot drift away from the simulated behaviour. Fracture
+ * toughness is recovered from the stored fracture energy, K_IC = sqrt(G0 * E),
+ * which is the inverse of how G0 was derived in the first place - so the value
+ * shown here reproduces the K_IC quoted in each entry's `source`.
+ *
+ * The word bands exist because a number alone does not tell a reader whether
+ * 63 MPa*m^0.5 is a lot. They are conventional engineering descriptions, not
+ * thresholds with any physical meaning of their own.
+ */
+function describeMaterial(m) {
+  const kic = Math.sqrt(Math.max(m.G0, 0) * m.E) / 1e6;      // MPa*m^0.5
+  const band = (v, cuts, words) => {
+    for (let i = 0; i < cuts.length; i++) if (v < cuts[i]) return words[i];
+    return words[words.length - 1];
+  };
+  const hard = band(m.BHN, [120, 300, 450, 600, 1200],
+    ['very soft', 'soft', 'medium hardness', 'hard', 'very hard', 'ceramic-hard']);
+  const tough = band(kic, [3, 12, 30, 60, 110],
+    ['negligible toughness', 'very low toughness', 'low toughness',
+      'moderate toughness', 'high toughness', 'very high toughness']);
+  const fail = band(m.brittle, [0.15, 0.40, 0.70, 0.95],
+    ['fails ductile', 'mostly ductile', 'mixed ductile/brittle',
+      'mostly brittle', 'fails brittle']);
+  const cls = { metal: 'Metal', ceramic: 'Ceramic', composite: 'Composite',
+    polymer: 'Polymer', explosive: 'Explosive' }[m.class] || m.class;
+  const kicTxt = kic >= 10 ? kic.toFixed(0) : kic.toFixed(1);
+  return `${cls} · ${m.rho} kg/m³ · ${m.BHN} BHN (${hard}) · `
+    + `K\u1D35\u1D9C ${kicTxt} MPa·m^½ (${tough}) · ${fail}`;
+}
+
 function getMaterial(key) {
   const m = MATERIALS[key];
   if (!m) throw new Error(`unknown material '${key}'`);
@@ -1717,7 +1752,7 @@ function sampleGradient(m, f) {
   return out;
 }
 
-__exports.__all = {MATERIALS, BASIC_ARMOUR_KEYS, ADVANCED_ARMOUR_KEYS, ARMOUR_KEYS, armourTier, PENETRATOR_KEYS, getMaterial, cloneMaterial, registerMaterial, sampleGradient};
+__exports.__all = {MATERIALS, BASIC_ARMOUR_KEYS, ADVANCED_ARMOUR_KEYS, ARMOUR_KEYS, armourTier, PENETRATOR_KEYS, describeMaterial, getMaterial, cloneMaterial, registerMaterial, sampleGradient};
 Object.assign(__exports, __exports.__all);
 delete __exports.__all;
 
@@ -8719,7 +8754,7 @@ __def("src/ui/app.js", function (__exports, __req) {
 const { el, panel, row, num, select, slider, toggle, kv, clear, panelState } = __req("src/ui/dom.js");
 const { PRESETS, PRESET_ORDER } = __req("src/ui/presets.js");
 const { AMMO, AMMO_ORDER, ammoLabel } = __req("src/ui/ammo.js");
-const { MATERIALS, ARMOUR_KEYS, armourTier, PENETRATOR_KEYS, getMaterial, registerMaterial } = __req("src/materials/database.js");
+const { MATERIALS, ARMOUR_KEYS, armourTier, describeMaterial, PENETRATOR_KEYS, getMaterial, registerMaterial } = __req("src/materials/database.js");
 
 /** Headings for the two armour tiers in the material dropdown. */
 const MATERIAL_GROUP = {
@@ -8894,6 +8929,12 @@ class App {
       p.body.appendChild(row(label, select(
         opts.map((k) => ({ value: k, label: MATERIALS[k].name })), cfg[key], (v) => set(key, v),
       )));
+      // same descriptor the armour layers get, so a core is not just a name
+      const pm = MATERIALS[cfg[key]];
+      if (pm) {
+        p.body.appendChild(el('div', { class: 'hint' }, describeMaterial(pm)));
+        if (pm.notes) p.body.appendChild(el('div', { class: 'note' }, pm.notes));
+      }
     }
 
     const d = w.projectile.describe();
@@ -9065,6 +9106,11 @@ class App {
           value: k, label: MATERIALS[k].name, group: MATERIAL_GROUP[armourTier(k)],
         })), Lr.material,
         (v) => { Lr.material = v; changed(); })));
+      // What this material IS, right under the picker rather than buried below
+      // the geometry fields. The first line is generated from the material's
+      // own constants (see describeMaterial); the second is its role.
+      b.appendChild(el('div', { class: 'hint' }, describeMaterial(m)));
+      if (m.notes) b.appendChild(el('div', { class: 'note' }, m.notes));
       b.appendChild(row('Thickness (mm)', num(Lr.thickness * 1000, { dp: 1, step: 1, onchange: (v) => { Lr.thickness = Math.max(0.0005, v / 1000); changed(); } })));
       b.appendChild(row('Slope (°)', num(Lr.slope, { dp: 1, step: 5, onchange: (v) => {
         if (Lr.eraId !== undefined) sc.layers.forEach((q) => { if (q.eraId === Lr.eraId) q.slope = v; });
@@ -9110,7 +9156,6 @@ class App {
         ['LOS thickness', U.len(Lr.losThickness || Lr.thickness)],
         ['Areal mass', `${(Lr.thickness * m.rho).toFixed(0)} kg/m²`],
       ]));
-      if (m.notes) b.appendChild(el('div', { class: 'note' }, m.notes));
       box.appendChild(head); box.appendChild(b);
       p.body.appendChild(box);
     });
@@ -9326,6 +9371,8 @@ class App {
         ['Hardness', `${m.BHN} BHN`],
         ['Fragment strikes', String(L.fragHits || 0)],
       ]));
+      p.body.appendChild(el('div', { class: 'hint' }, describeMaterial(m)));
+      if (m.notes) p.body.appendChild(el('div', { class: 'note' }, m.notes));
       if (m.source) p.body.appendChild(el('div', { class: 'note' }, `Source: ${m.source}`));
     } else if (sel.kind === 'module') {
       const m = sel.obj, spec = MODULE_TYPES[m.type];

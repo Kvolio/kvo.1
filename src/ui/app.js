@@ -12,7 +12,7 @@
 import { el, panel, row, num, select, slider, toggle, kv, clear, panelState } from './dom.js';
 import { PRESETS, PRESET_ORDER } from './presets.js';
 import { AMMO, AMMO_ORDER, ammoLabel } from './ammo.js';
-import { MATERIALS, ARMOUR_KEYS, armourTier, PENETRATOR_KEYS, getMaterial, registerMaterial } from '../materials/database.js';
+import { MATERIALS, ARMOUR_KEYS, armourTier, describeMaterial, PENETRATOR_KEYS, getMaterial, registerMaterial } from '../materials/database.js';
 
 /** Headings for the two armour tiers in the material dropdown. */
 const MATERIAL_GROUP = {
@@ -187,6 +187,12 @@ export class App {
       p.body.appendChild(row(label, select(
         opts.map((k) => ({ value: k, label: MATERIALS[k].name })), cfg[key], (v) => set(key, v),
       )));
+      // same descriptor the armour layers get, so a core is not just a name
+      const pm = MATERIALS[cfg[key]];
+      if (pm) {
+        p.body.appendChild(el('div', { class: 'hint' }, describeMaterial(pm)));
+        if (pm.notes) p.body.appendChild(el('div', { class: 'note' }, pm.notes));
+      }
     }
 
     const d = w.projectile.describe();
@@ -358,6 +364,11 @@ export class App {
           value: k, label: MATERIALS[k].name, group: MATERIAL_GROUP[armourTier(k)],
         })), Lr.material,
         (v) => { Lr.material = v; changed(); })));
+      // What this material IS, right under the picker rather than buried below
+      // the geometry fields. The first line is generated from the material's
+      // own constants (see describeMaterial); the second is its role.
+      b.appendChild(el('div', { class: 'hint' }, describeMaterial(m)));
+      if (m.notes) b.appendChild(el('div', { class: 'note' }, m.notes));
       b.appendChild(row('Thickness (mm)', num(Lr.thickness * 1000, { dp: 1, step: 1, onchange: (v) => { Lr.thickness = Math.max(0.0005, v / 1000); changed(); } })));
       b.appendChild(row('Slope (°)', num(Lr.slope, { dp: 1, step: 5, onchange: (v) => {
         if (Lr.eraId !== undefined) sc.layers.forEach((q) => { if (q.eraId === Lr.eraId) q.slope = v; });
@@ -403,7 +414,6 @@ export class App {
         ['LOS thickness', U.len(Lr.losThickness || Lr.thickness)],
         ['Areal mass', `${(Lr.thickness * m.rho).toFixed(0)} kg/m²`],
       ]));
-      if (m.notes) b.appendChild(el('div', { class: 'note' }, m.notes));
       box.appendChild(head); box.appendChild(b);
       p.body.appendChild(box);
     });
@@ -619,6 +629,8 @@ export class App {
         ['Hardness', `${m.BHN} BHN`],
         ['Fragment strikes', String(L.fragHits || 0)],
       ]));
+      p.body.appendChild(el('div', { class: 'hint' }, describeMaterial(m)));
+      if (m.notes) p.body.appendChild(el('div', { class: 'note' }, m.notes));
       if (m.source) p.body.appendChild(el('div', { class: 'note' }, `Source: ${m.source}`));
     } else if (sel.kind === 'module') {
       const m = sel.obj, spec = MODULE_TYPES[m.type];

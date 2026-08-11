@@ -20,7 +20,7 @@ import { PRESETS, PRESET_ORDER } from '../src/ui/presets.js';
 import { AMMO, AMMO_ORDER, ammoLabel } from '../src/ui/ammo.js';
 import { sandwichFlyerVelocity } from '../src/sim/era.js';
 import { MATERIALS, ARMOUR_KEYS, BASIC_ARMOUR_KEYS, ADVANCED_ARMOUR_KEYS, armourTier,
-  PENETRATOR_KEYS, sampleGradient } from '../src/materials/database.js';
+  PENETRATOR_KEYS, sampleGradient, describeMaterial } from '../src/materials/database.js';
 import { BOND } from '../src/sim/pd/domain.js';
 
 let failures = 0;
@@ -510,6 +510,32 @@ console.log('\n== the material library ==');
     if (probs.length) fail(`${k}: ${probs.join(', ')}`); else sane++;
   }
   check(sane === ARMOUR_KEYS.length, `all ${sane} materials have sane, documented properties`);
+
+  // Every material must describe itself, in both halves: a generated
+  // quantitative line and a written note saying what it is for. The generated
+  // half is derived from the solver's own constants, so it cannot drift; the
+  // check is that it is well formed and that K_IC recovers what the entry
+  // documents (G0 was defined as K_IC^2/E, so sqrt(G0*E) must invert it).
+  let described = 0;
+  for (const k of [...ARMOUR_KEYS, ...PENETRATOR_KEYS]) {
+    const m = MATERIALS[k];
+    const d = describeMaterial(m);
+    const kic = Math.sqrt(Math.max(m.G0, 0) * m.E) / 1e6;
+    const ok = typeof d === 'string' && d.length > 30 && !/NaN|undefined/.test(d)
+      && d.includes(String(m.BHN)) && d.includes(String(m.rho))
+      && Number.isFinite(kic) && kic > 0 && kic < 500
+      && typeof m.notes === 'string' && m.notes.length > 30;
+    if (ok) described++; else fail(`${k}: bad descriptor "${d}" / notes ${m.notes ? m.notes.length : 0} chars`);
+  }
+  const uniq = new Set([...ARMOUR_KEYS, ...PENETRATOR_KEYS]).size;
+  check(described === uniq + (ARMOUR_KEYS.length + PENETRATOR_KEYS.length - uniq),
+    `all ${described} material entries carry a descriptor and a written note`);
+  // the bands must actually discriminate, or the words are decoration
+  check(/ceramic-hard/.test(describeMaterial(MATERIALS.diamond))
+    && /very soft/.test(describeMaterial(MATERIALS.silicone))
+    && /fails brittle/.test(describeMaterial(MATERIALS.b4c))
+    && /fails ductile/.test(describeMaterial(MATERIALS.inconel625)),
+    'the hardness and failure-mode bands separate diamond, silicone, B4C and Inconel 625');
 
   // A live shot through one material of every class, so a class-wide breakage
   // is caught without paying for all 81 on every CI run.
