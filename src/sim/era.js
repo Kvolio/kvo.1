@@ -164,14 +164,26 @@ export function buildCassettes(scene, domain) {
     // that were still stitched to each other, and the cassette barely opened.
     // They are gathered here and cut when the column they belong to fires.
     const spanBonds = new Map();
+    // Every bond with at least one end in the charge. The charge keeps its
+    // mass when it detonates (see stepCassettes) but loses all strength, so
+    // these have to be cut - otherwise the products would still be glued to
+    // the plates and to each other. There is no per-node bond index on the
+    // domain, so they are gathered here in the same single sweep.
+    const chargeBonds = new Map();
     for (let b = 0; b < domain.nb; b++) {
-      const a = domain.layer[domain.bi[b]], z = domain.layer[domain.bj[b]];
-      if (!((a === front && z === back) || (a === back && z === front))) continue;
-      const mx = 0.5 * (domain.px[domain.bi[b]] + domain.px[domain.bj[b]]);
-      const my = 0.5 * (domain.py[domain.bi[b]] + domain.py[domain.bj[b]]);
+      const i = domain.bi[b], j = domain.bj[b];
+      const a = domain.layer[i], z = domain.layer[j];
+      const mx = 0.5 * (domain.px[i] + domain.px[j]);
+      const my = 0.5 * (domain.py[i] + domain.py[j]);
       const key = Math.round((mx * tx + my * ty) / dx);
-      if (!spanBonds.has(key)) spanBonds.set(key, []);
-      spanBonds.get(key).push(b);
+      if ((a === front && z === back) || (a === back && z === front)) {
+        if (!spanBonds.has(key)) spanBonds.set(key, []);
+        spanBonds.get(key).push(b);
+      }
+      if (a === idx || z === idx) {
+        if (!chargeBonds.has(key)) chargeBonds.set(key, []);
+        chargeBonds.get(key).push(b);
+      }
     }
 
     for (let i = 0; i < domain.n; i++) {
@@ -186,6 +198,7 @@ export function buildCassettes(scene, domain) {
       if (!c.charge.length) { cols.delete(k); continue; }
       c.x /= c.charge.length; c.y /= c.charge.length;
       c.span = spanBonds.get(k) || [];
+      c.chargeBonds = chargeBonds.get(k) || [];
     }
     if (!cols.size) continue;
 
@@ -197,7 +210,7 @@ export function buildCassettes(scene, domain) {
       detVel: mat.detVel || 7000,
       gurney: mat.gurney || 2400,
       heldV2d: mat.heldV2d || 200,
-      chargeAreal, frontAreal, backAreal,
+      chargeAreal, frontAreal, backAreal, chargeT: L.thickness,
       columns: [...cols.values()],
       initiated: false, initT: 0, initX: 0, initY: 0,
       firedColumns: 0, vFront: 0, vBack: 0, flyerVelocity: 0, drivenMass: 0, peakHeld: 0,
@@ -274,10 +287,49 @@ export function stepCassettes(cassettes, d, now, dt, efficiency = 0.45) {
       col.fired = true;
       c.firedColumns++;
 
-      // the charge in this slice is now gas
+      // THE CHARGE BECOMES DETONATION PRODUCTS, IT DOES NOT VANISH
+      //
+      // This used to delete the charge nodes outright. That is a bigger lie
+      // than it looks, and it biases directly against the armour: 10 mm of
+      // 4S20-type filler is about 16 kg/m^2, against 23.5 kg/m^2 for a 3 mm
+      // HHA flyer plate. So annihilating the charge removed very nearly a
+      // whole flyer plate's worth of areal mass from the threat's path, for
+      // free, at the exact moment the cassette was supposed to start helping.
+      // Measured live-versus-inert, that artefact is the same size as the
+      // entire effect being measured, and it is worst where the charge is a
+      // large fraction of the cassette - which is exactly the light-ERA case.
+      //
+      // Real products are a dense gas: no strength, but full inertia, and a
+      // jet or rod crossing them still has to displace that mass. So the
+      // nodes stay, keep their mass, lose all their bonds (gas has no
+      // strength), and are given Gurney's linear velocity profile - zero at
+      // the charge mid-plane rising to the adjacent plate's velocity at each
+      // face. That profile carries no net momentum for a symmetric sandwich,
+      // so the plate velocities remain the momentum-balanced Gurney result
+      // and nothing is double-counted.
+      const [gnx, gny] = c.normal;
+      const halfT = Math.max(c.chargeT * 0.5, 1e-9);
+      for (const b of col.chargeBonds) {
+        if (d.bstate[b] !== BOND.INTACT) continue;
+        d.bstate[b] = BOND.BROKEN;
+        const bi = d.bi[b], bj = d.bj[b];
+        d.nBroken[bi]++; d.nBroken[bj]++;
+        d.damage[bi] = d.nBroken[bi] / (d.nBond0[bi] || 1);
+        d.damage[bj] = d.nBroken[bj] / (d.nBond0[bj] || 1);
+      }
       for (const i of col.charge) {
         if (!d.alive[i]) continue;
-        d.alive[i] = 0; d.vx[i] = 0; d.vy[i] = 0;
+        // 8 = free material, so the solver includes it in the contact set and
+        // the threat actually has to push through it. 16 = detonation
+        // products specifically, so the stats can tell gas apart from spall:
+        // without it the whole charge is reported as spalled armour.
+        d.flags[i] |= 8 | 16;
+        // signed position across the charge: -1 at the front face, +1 at the back
+        const off = ((d.px[i] - col.x) * gnx + (d.py[i] - col.y) * gny) / halfT;
+        const q = off < -1 ? -1 : off > 1 ? 1 : off;
+        const v = q < 0 ? -q * c.vFront : q * c.vBack;
+        const sgn = q < 0 ? -1 : 1;
+        d.vx[i] += sgn * gnx * v; d.vy[i] += sgn * gny * v;
       }
       // and nothing joins the two plates across it any more
       for (const b of col.span) {

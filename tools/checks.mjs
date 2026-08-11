@@ -211,9 +211,67 @@ console.log('\n== explosive reactive armour ==');
   const c = hot.w.cassettes[0];
   check(hot.w.cassettes.length === 1, `cassette is found in the meshed domain (${c.columns.length} charge slices)`);
   check(c.initiated, 'a shaped-charge jet initiates the cassette');
-  let live = 0;
-  for (const col of c.columns) for (const i of col.charge) if (hot.w.domain.alive[i]) live++;
-  check(live === 0, `the charge is entirely consumed once it functions (${live} explosive nodes left)`);
+  // The charge must be entirely REACTED. It is no longer deleted - detonation
+  // products keep their mass, because annihilating them handed the threat
+  // ~16 kg/m2 of free path at the exact moment the cassette should start
+  // helping (see era.js). So the test is that nothing unreacted is left, not
+  // that nothing is left: every column has fired, and every surviving charge
+  // node is flagged as products (16) with no strength rather than sitting
+  // there as intact explosive.
+  const dHot = hot.w.domain;
+  check(c.firedColumns === c.columns.length,
+    `every charge slice reacted (${c.firedColumns}/${c.columns.length})`);
+  let unreacted = 0, products = 0;
+  for (const col of c.columns) {
+    for (const i of col.charge) {
+      if (!dHot.alive[i]) continue;
+      if (dHot.flags[i] & 16) products++; else unreacted++;
+    }
+  }
+  check(unreacted === 0,
+    `no unreacted explosive is left once it functions `
+    + `(${unreacted} intact, ${products} as products)`);
+  // and the products must have no strength left
+  let bonded = 0;
+  for (let b = 0; b < dHot.nb; b++) {
+    if (dHot.bstate[b] !== BOND.INTACT) continue;
+    if ((dHot.flags[dHot.bi[b]] & 16) || (dHot.flags[dHot.bj[b]] & 16)) bonded++;
+  }
+  check(bonded === 0, `detonation products carry no strength (${bonded} intact bonds on them)`);
+
+  // THE ARTEFACT THIS GUARDS
+  // Deleting the charge on detonation removed ~16 kg/m2 of areal mass from the
+  // threat's path - against 23.5 kg/m2 for a 3 mm HHA flyer plate, so very
+  // nearly a whole plate, handed over for free at the exact moment the
+  // cassette was supposed to start helping. Measured, it was the same size as
+  // the entire effect under test. Products must therefore keep their mass.
+  {
+    const w2 = new World();
+    w2.settings.deterministic = true; w2.settings.quality = 'low'; w2.settings.recordFrames = false;
+    const sc2 = new Scene();
+    sc2.setLayers([cassette(60), main(60)].map((l) => makeLayer(l)));
+    w2.setScene(sc2);
+    w2.setProjectile(makeProjectileConfig('heat', { standoff: 0.6 }));
+    w2.fire();
+    const chargeMass = () => {
+      const c2 = w2.cassettes[0]; let m = 0;
+      if (!c2) return 0;
+      for (const col of c2.columns) for (const i of col.charge) if (w2.domain.alive[i]) m += w2.domain.mass[i];
+      return m;
+    };
+    let f2 = 0, before = 0, after = -1;
+    while (w2.state !== 'done' && f2 < 3000) {
+      const c2 = w2.cassettes[0];
+      const wasInit = c2 && c2.initiated;
+      if (c2 && !wasInit) before = chargeMass();
+      w2.update(1 / 60); f2++;
+      const c3 = w2.cassettes[0];
+      if (after < 0 && c3 && c3.initiated && c3.firedColumns >= c3.columns.length) after = chargeMass();
+    }
+    check(before > 0 && after > before * 0.9,
+      `detonation converts the charge, it does not annihilate it `
+      + `(${(before * 1000).toFixed(0)} g before, ${(after * 1000).toFixed(0)} g of products after)`);
+  }
   check(c.vFront > 0 && c.drivenMass > 0,
     `plate is actually driven (${(c.drivenMass * 1000).toFixed(0)} g at ${c.vFront.toFixed(0)} m/s)`);
 

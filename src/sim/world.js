@@ -1056,7 +1056,9 @@ export class World {
       }
 
       if (d.role[i] === ROLE.ARMOUR) {
-        if (d.flags[i] & 8) { spall += d.mass[i]; freeCount++; }
+        // flag 16 is ERA detonation products - free, but gas rather than
+        // spalled plate, so it must not be reported as spall mass
+        if ((d.flags[i] & 8) && !(d.flags[i] & 16)) { spall += d.mass[i]; freeCount++; }
         // Back-face bulge: permanent forward motion of rear-face material that
         // is still attached. Detached material is spall, not bulge, so it is
         // excluded - otherwise a scab flying off would be reported as an

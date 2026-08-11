@@ -471,6 +471,34 @@ recording because each looked like "ERA just doesn't do much":
 2. *Initiation keyed on intensity alone*, so a full-calibre AP shot — slow but
    wide — never set the cassette off. See the initiation note above.
 
+**The charge no longer vanishes when it detonates.** It used to be deleted
+outright, and that is a larger distortion than it looks. Ten millimetres of
+4S20-type filler is about 16 kg/m2 of areal mass; a 3 mm HHA flyer plate is
+23.5 kg/m2. So annihilating the charge handed the threat very nearly a whole
+flyer plate's worth of free path, at the exact moment the cassette was supposed
+to start helping — an artefact the same size as the effect being measured, and
+worst where the charge is a large fraction of the cassette, which is precisely
+the light-ERA case.
+
+Real detonation products are a dense gas: no strength, but full inertia, and a
+jet or rod crossing them still has to displace that mass. The charge nodes now
+stay in the lattice, keep their mass, lose every bond (gas has no strength),
+and receive Gurney's linear velocity profile — zero at the charge mid-plane
+rising to the adjacent plate's velocity at each face. That profile carries no
+net momentum for a symmetric sandwich, so the plate velocities remain the
+momentum-balanced Gurney result and nothing is double-counted.
+
+Measured against the empty-cassette control below, this moved the charge's
+contribution from negative to positive in seven of eight cases, including all
+four shaped-charge cases — the 68° jet case went from −72 to +258 m/s. It also
+stopped the front plate being blown bodily downrange: its centroid displacement
+over the event fell from 264 mm to 26 mm, because the plate now has products
+behind it to work against rather than vacuum.
+
+This is a fix to a modelling defect, not a calibration to make ERA look better.
+The magnitudes are still wild (+11 to +1017 m/s) and one case, a long rod at
+60°, is still negative, so the conclusion below is unchanged.
+
 **Live-versus-inert is the wrong control, and the table above uses it.**
 Detonation deletes the charge nodes, so a live cassette does not merely throw
 its plates — it also removes ~10 mm of material from the threat's path that the
