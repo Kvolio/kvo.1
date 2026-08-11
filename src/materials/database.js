@@ -264,6 +264,42 @@ export const MATERIALS = {
     notes: 'Purely aerodynamic. Crushes away in the first microseconds and contributes essentially nothing to penetration.',
   }),
 
+
+  // ------------------------------------------------ heavy and exotic armour
+  // Dense metals are poor armour per unit MASS - their merit is per unit
+  // THICKNESS. Where volume is the binding constraint rather than weight
+  // (turret fronts, test targets, backing behind a ceramic) they buy far more
+  // resistance in the same space than steel does, at three to five times the
+  // areal density. The simulation reports areal mass alongside thickness for
+  // exactly this reason: it is the number that makes them look bad.
+  maraging: mat({
+    key: 'maraging', name: 'Maraging steel (18Ni-350)', class: 'metal',
+    rho: 8080, E: 190e9, nu: 0.30, Y: 2.35e9, UTS: 2.45e9, epsF: 0.06,
+    G0: 22e3, BHN: 600, jcC: 0.010, Tm: 1685, cp: 420, jcM: 0.9,
+    brittle: 0.35, weibull: 22, erosionResist: 1.30,
+    color: '#a6a2ad', color2: '#5f5c66',
+    source: '18Ni(350) maraging grade, aged: 2.4 GPa UTS at ~6 % elongation',
+    notes: 'Roughly twice the yield of RHA at a similar density, bought with ductility. Resists penetration well and cracks readily; a poor choice where spall behind the plate matters.',
+  }),
+  tantalum: mat({
+    key: 'tantalum', name: 'Tantalum', class: 'metal',
+    rho: 16650, E: 186e9, nu: 0.34, Y: 0.45e9, UTS: 0.62e9, epsF: 0.40,
+    G0: 60e3, BHN: 200, jcC: 0.030, Tm: 3290, cp: 140, jcM: 0.44,
+    brittle: 0.0, weibull: 26, erosionResist: 1.5,
+    color: '#6e7480', color2: '#3e424a',
+    source: 'Unalloyed Ta; Johnson-Cook constants from Chen & Gray (1996)',
+    notes: 'Dense and extraordinarily ductile - it deforms rather than fractures, which is why it is used for EFP liners. As armour it soaks up energy in plastic work and barely spalls, but its low yield means it is defeated by thickness rather than by strength.',
+  }),
+  tib2: mat({
+    key: 'tib2', name: 'Titanium diboride (TiB2)', class: 'ceramic',
+    rho: 4520, E: 565e9, nu: 0.11, Y: 5.5e9, UTS: 0.40e9, epsF: 0.0012,
+    G0: 60, BHN: 3400, jcC: 0.0, Tm: 3500, cp: 640, jcM: 1.0,
+    brittle: 0.97, weibull: 9, compFail: true, erosionResist: 0.85,
+    color: '#7c8ba0', color2: '#41495a',
+    source: 'Hot-pressed TiB2; E = 565 GPa, HV ~ 33 GPa',
+    notes: 'Harder and stiffer than silicon carbide and denser than boron carbide. Like every ceramic here it works in compression and is worthless in tension: it must be confined and backed, and it comminutes once through.',
+  }),
+
   // --------------------------------------------------------------- fillers
   compb: mat({
     key: 'compb', name: 'Composition B (HE filler)', class: 'explosive',
@@ -293,15 +329,16 @@ export const MATERIALS = {
     brittle: 0.5, weibull: 15, erosionResist: 0.02,
     color: '#b0674a', color2: '#6b3c28',
     detVel: 7000, gurney: 2400, heatOfDet: 4.6e6,
-    // Shock-initiation constants. The criterion is a critical shock pressure
-    // evaluated on the explosive's own Hugoniot,
-    //     Us = c0 + s*up ,   P = rho0 * Us * up
-    // rather than on the solver's nodal stress: the bulk model is linear
-    // elastic with no equation of state, so it cannot generate the tens of GPa
-    // that impedance matching says a jet or a rod drives into a soft filler,
-    // and every threat came out at a similar 3-4 GPa. Particle velocity IS
-    // resolved, so the Hugoniot is fed from that instead. See sim/era.js.
-    shockC0: 2200, shockS: 2.5, pCrit: 7.0e9,
+    // Initiation threshold, Held-style: the charge functions when v^2 * d
+    // exceeds this, with v the speed the insult drives into the filler and d
+    // the width of filler it drives. Units are (km/s)^2 * mm. Held's published
+    // constants for covered charges are 16-25 for sensitive compositions; this
+    // is larger both because the composition is insensitive and because d here
+    // is the width of disturbed filler the solver resolves rather than a jet
+    // diameter, so the constant is calibrated to this model and is not
+    // interchangeable with a published one. See sim/era.js for the measured
+    // separation it sits in.
+    heldV2d: 200,
     source: 'Representative insensitive PBX; Gurney and detonation velocity of the RDX/binder class (Dobratz & Crawford). Walker-Wasley initiation constant is an order-of-magnitude figure for an insensitive composition, not a measurement of 4S20.',
     notes: 'Used as the interlayer of an ERA cassette. Insensitive by design: small-arms and splinter strikes must not initiate it.',
   }),
@@ -343,8 +380,9 @@ export const MATERIALS = {
 
 /** Materials that make sense as an armour layer choice in the UI. */
 export const ARMOUR_KEYS = [
-  'rha', 'hha', 'fha', 'cast', 'mild', 'al5083', 'al7039', 'ti64',
-  'alumina', 'sic', 'b4c', 'uhmwpe', 'grp', 'aramid', 'rubber', 'boxsteel',
+  'rha', 'hha', 'fha', 'cast', 'mild', 'maraging', 'boxsteel',
+  'al5083', 'al7039', 'ti64', 'tantalum', 'wha', 'du',
+  'alumina', 'sic', 'b4c', 'tib2', 'uhmwpe', 'grp', 'aramid', 'rubber',
 ];
 
 /** Materials that make sense as a penetrator body/core in the UI. */

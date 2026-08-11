@@ -344,39 +344,50 @@ shear/compression  |s_p| ≥ 4 ε_f       (accumulated plastic stretch)</code></
 <p>sweeping across the jet, cutting it, and the residue arriving at the main</p>
 <p>array disturbed — is left entirely to the contact solver. No defeat mechanism</p>
 <p>is modelled, tabulated or asserted anywhere.</p>
-<p><strong>What works, and what does not.</strong> The cassette functions: it initiates from</p>
-<p>the simulated shock, the detonation propagates, the charge is consumed, and the</p>
-<p>plates leave at Gurney velocities with their momenta balanced. Initiation</p>
-<p>discriminates threats correctly (table below). All of that is verified.</p>
-<p><strong>The net armour benefit is not reproduced.</strong> Measured against an inert</p>
-<p>cassette of identical geometry and mass — the only control worth having — a</p>
-<p>live cassette currently leaves the residual jet slightly <em>faster</em>, not slower:</p>
-<p>1382 m/s against 1126 m/s for a heavy cassette at 60° over 150 mm of RHA.</p>
-<p>Three things contribute, and they are worth stating plainly rather than</p>
-<p>tuning away:</p>
+<p><strong>What works.</strong> The cassette initiates from the simulated insult, the</p>
+<p>detonation propagates, the charge is consumed, the plates leave at Gurney</p>
+<p>velocities with their momenta balanced, and — with the spanning bonds cut, see</p>
+<p>below — a live cassette measurably beats an inert one of identical geometry and</p>
+<p>mass. Against a shaped charge with a light cassette at 60°, the live cassette</p>
+<p>leaves 90 g of jet where the inert one leaves 153 g, and drops the residual</p>
+<p>from 1092 to 774 m/s.</p>
+<p><strong>Two defects had to be fixed before any of that was true</strong>, and both are worth</p>
+<p>recording because each looked like "ERA just doesn't do much":</p>
 <ol>
-<li>Detonation removes the charge from the jet's path. That is correct — it has</li>
+<li><em>The plates were bonded to each other through the charge.</em> The horizon is</li>
 </ol>
-<p>   become gas — but it is a real reduction in the material the jet must cross,</p>
-<p>   and in the model it is not paid for by anything.</p>
+<p>   about three lattice spacings and a cassette's charge is thinner than that,</p>
+<p>   so front-plate and back-plate nodes fell inside each other's horizons and</p>
+<p>   were bonded directly — 339 such bonds on a light cassette, against only 237</p>
+<p>   holding the front plate to itself. Removing the charge did nothing to them,</p>
+<p>   so the detonation was trying to throw two plates that were still stitched</p>
+<p>   together. They are now cut when the column they belong to fires.</p>
 <ol>
-<li>The back plate accelerates <em>away</em> from the jet, so the closing velocity</li>
+<li><em>Initiation keyed on intensity alone</em>, so a full-calibre AP shot — slow but</li>
 </ol>
-<p>   falls and it erodes less than a stationary plate would.</p>
-<ol>
-<li>The mechanism that should dominate — the plates sweeping laterally across</li>
-</ol>
-<p>   the jet for as long as the jet keeps arriving, continuously feeding fresh</p>
-<p>   steel into it — needs a jet that arrives over tens of microseconds. The</p>
-<p>   shaped-charge model here spawns a compact collapsed slug (§5.3, already</p>
-<p>   flagged as the largest single approximation in the model), and its arrival</p>
-<p>   window is short enough that a plate moving at ~600 m/s sweeps less than one</p>
-<p>   jet diameter while the jet is passing. Without that, only effects 1 and 2</p>
-<p>   remain, and both favour the attacker.</p>
-<p>So: ERA cassettes are simulated, not faked, and every intermediate quantity is</p>
-<p>inspectable and checked — but this model should <strong>not</strong> be used to argue that</p>
-<p>ERA does or does not defeat a given threat. Fixing it means giving the shaped</p>
-<p>charge a physically extended jet, not adjusting anything in <code>era.js</code>.</p>
+<p>   wide — never set the cassette off. See the initiation note above.</p>
+<p><strong>Read residual velocity carefully.</strong> A functioning cassette can <em>raise</em> it.</p>
+<p>The plates chew up the slow tail of a jet and leave the fast tip, so less</p>
+<p>material arrives but what does arrive is faster. Penetration depth and</p>
+<p>surviving penetrator mass are the meaningful measures; residual velocity on its</p>
+<p>own will mislead.</p>
+<p><strong>Heavy cassettes are not currently a win against shaped charges</strong> in this</p>
+<p>model, though they are marginally better than inert against long rods. A</p>
+<p>Kontakt-5 style cassette carries a thick front plate against a thin back plate,</p>
+<p>and the momentum-balanced Gurney split gives that heavy plate only ~230 m/s</p>
+<p>against the back plate's ~690. The sweep it buys does not pay for the 10 mm of</p>
+<p>filler the detonation removes from the jet's path. The suspect is the</p>
+<p>asymmetric split itself — the interpolation used here forces M₁V₁ = M₂V₂</p>
+<p>exactly, which ignores the momentum carried by the products and so</p>
+<p>over-penalises the heavy plate relative to Kennedy's full asymmetric-sandwich</p>
+<p>solution. That is the thing to fix next, and it is a fix in <code>era.js</code>, not a</p>
+<p>limitation of the solver.</p>
+<p>An earlier version of this section blamed the shaped-charge jet for being too</p>
+<p>compact in time to be swept. That was <strong>wrong</strong> and is recorded here so it is</p>
+<p>not repeated: the jet arrives over 247 µs, the cassette initiates 4.3 µs after</p>
+<p>the jet first reaches it, and the plates sweep ~147 mm laterally in that</p>
+<p>window — far more than the 6 mm jet diameter. There was never a timing problem;</p>
+<p>the plates were tied together.</p>
 <p>Light cassettes carry a further problem of their own: see the resolution note</p>
 <p>below.</p>
 <p><strong>Initiation.</strong> The criterion is a critical shock pressure evaluated on the</p>

@@ -18,6 +18,8 @@ import { makeProjectileConfig } from '../src/sim/projectileTypes.js';
 import { PROJECTILE_TYPES, TYPE_ORDER } from '../src/sim/projectileTypes.js';
 import { PRESETS, PRESET_ORDER } from '../src/ui/presets.js';
 import { sandwichFlyerVelocity } from '../src/sim/era.js';
+import { MATERIALS, ARMOUR_KEYS } from '../src/materials/database.js';
+import { BOND } from '../src/sim/pd/domain.js';
 
 let failures = 0;
 const pass = (m) => console.log(`  ok    ${m}`);
@@ -115,11 +117,41 @@ console.log('\n== explosive reactive armour ==');
   check(c.vFront > 0 && c.drivenMass > 0,
     `plate is actually driven (${(c.drivenMass * 1000).toFixed(0)} g at ${c.vFront.toFixed(0)} m/s)`);
 
-  // insensitivity: a small, low-energy strike must NOT function it
+  // nothing may still join the two plates once the charge between them has
+  // gone: the horizon is wider than the charge is thick, so the plates are
+  // bonded straight through it and the detonation was trying to throw two
+  // plates that were still stitched together
+  {
+    const d = hot.w.domain;
+    const ls = hot.w.scene.activeLayers();
+    const fi = ls.findIndex((L) => L.eraPart === 'front');
+    const bi2 = ls.findIndex((L) => L.eraPart === 'back');
+    let spanning = 0;
+    for (let b = 0; b < d.nb; b++) {
+      if (d.bstate[b] !== BOND.INTACT) continue;
+      const a = d.layer[d.bi[b]], z = d.layer[d.bj[b]];
+      if ((a === fi && z === bi2) || (a === bi2 && z === fi)) spanning++;
+    }
+    check(spanning === 0,
+      `no bond still spans the consumed charge after the cassette functions (${spanning})`);
+  }
+
+  // INITIATION MUST DISCRIMINATE BY BOTH INTENSITY AND EXTENT.
+  // A rifle bullet drives a narrow plug of filler very fast; a full-calibre AP
+  // shot drives a much wider region more slowly. An insensitive filler must
+  // shrug off the first and function on the second, and a velocity- or
+  // pressure-only test cannot express that.
   const cold = run({ type: 'ap', proj: { caliber: 0.0076, mass: 0.012, velocity: 700, standoff: 0.4 },
     layers: [cassette(0), main(0)] });
   check(!cold.w.cassettes[0].initiated,
     `a rifle-calibre strike does not initiate an insensitive filler (${cold.verdict.headline})`);
+  const mg = run({ type: 'ap', proj: { caliber: 0.0145, mass: 0.064, velocity: 1000, standoff: 0.35 },
+    layers: [cassette(0), main(0)] });
+  check(!mg.w.cassettes[0].initiated, 'a 14.5 mm AP strike does not initiate it either');
+  const shot = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 },
+    layers: [cassette(0), main(0)] });
+  check(shot.w.cassettes[0].initiated,
+    'a full-calibre AP shot DOES initiate it (narrow-and-fast must not be the only path)');
 
   // an inert filler must not produce a functioning cassette at all, or the
   // control below is worthless
@@ -147,12 +179,62 @@ console.log('\n== explosive reactive armour ==');
     `an under-resolved layer is reported rather than quietly simulated `
     + `(${lightRes.meshInfo.minNodesThroughLayer.toFixed(1)} nodes through the thinnest layer)`);
 
-  // NOT asserted: that a live cassette defeats more than an inert one. It does
-  // not in this model - see MODEL.md 5.1a. Measured heavy cassette at 60 deg
-  // over 150 mm RHA: 1382 m/s residual live against 1126 m/s inert for a
-  // shaped charge, 1069 against 1046 for a long rod. The cassette functions
-  // correctly; the jet model is too compact in time for the plates to sweep
-  // it. Pinning a false expectation here would be worse than pinning none.
+  // THE POINT OF THE WHOLE THING: a live cassette must destroy more of the
+  // penetrator than an inert one of identical geometry and mass. Measured on
+  // surviving penetrator mass rather than residual velocity - a functioning
+  // cassette chews up the slow tail of a jet and leaves the fast tip, so it
+  // can RAISE residual velocity while doing more damage.
+  const survivors = (r) => {
+    const d = r.w.domain;
+    let m = 0;
+    for (let i = 0; i < d.n; i++) if (d.alive[i] && d.role[i] === 1) m += d.mass[i];
+    return m;
+  };
+  const liveL = run({ type: 'heat', proj: { standoff: 0.6 }, quality: 'normal',
+    layers: [cassette(60, 'era4s20'), { material: 'rha', thickness: 0.15, gap: 0.09, slope: 60, height: 1.2 }] });
+  const inertL = run({ type: 'heat', proj: { standoff: 0.6 }, quality: 'normal',
+    layers: [cassette(60, 'rubber'), { material: 'rha', thickness: 0.15, gap: 0.09, slope: 60, height: 1.2 }] });
+  const ml = survivors(liveL), mi = survivors(inertL);
+  check(ml < mi * 0.95,
+    `a live cassette destroys more jet than an inert one of the same mass at 60 deg `
+    + `(${(ml * 1000).toFixed(0)} g surviving vs ${(mi * 1000).toFixed(0)} g)`);
+
+  // NOT asserted: that a HEAVY cassette beats an inert one against a shaped
+  // charge. It does not yet - the momentum-balanced Gurney split leaves its
+  // thick front plate too slow to pay for the filler the detonation removes.
+  // See MODEL.md 5.1a. Pinning an expectation that is currently false would be
+  // worse than pinning none.
+}
+
+console.log('\n== armour materials ==');
+for (const k of ARMOUR_KEYS) {
+  const m = MATERIALS[k];
+  if (!check(!!m, `${k}: present in the database`)) continue;
+  const bad = ['rho', 'E', 'Y', 'UTS', 'epsF', 'G0', 'Tm', 'cp']
+    .filter((f) => !Number.isFinite(m[f]) || m[f] <= 0);
+  check(bad.length === 0, `${k}: physical constants are finite and positive${bad.length ? ` (bad: ${bad})` : ''}`);
+}
+{
+  // the dense metals are new as armour; they must mesh and run, and their
+  // areal mass must come out where the density says it should
+  for (const k of ['wha', 'du', 'tantalum', 'maraging', 'tib2', 'ti64']) {
+    const r = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 },
+      layers: [{ material: k, thickness: 0.06, height: 1.0 }] });
+    const finite = Number.isFinite(r.stats.maxDepth) && Number.isFinite(r.stats.armourDefeated);
+    check(finite && r.w.domain.n > 200,
+      `${k}: meshes and runs (${r.w.domain.n} nodes, ${(r.stats.armourDefeated * 1000).toFixed(0)} mm defeated)`);
+  }
+  // and a dense metal must beat steel of the SAME THICKNESS while costing more
+  // mass to do it - the whole trade the material list exists to show
+  const w1 = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 },
+    layers: [{ material: 'wha', thickness: 0.09, height: 1.0 }] });
+  const s1 = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 },
+    layers: [{ material: 'rha', thickness: 0.09, height: 1.0 }] });
+  check(w1.stats.maxDepth <= s1.stats.maxDepth,
+    `tungsten alloy resists better than RHA at equal thickness `
+    + `(${(w1.stats.maxDepth * 1000).toFixed(0)} vs ${(s1.stats.maxDepth * 1000).toFixed(0)} mm)`);
+  check(MATERIALS.wha.rho > 2 * MATERIALS.rha.rho,
+    `and costs the mass to do it (${MATERIALS.wha.rho} vs ${MATERIALS.rha.rho} kg/m3)`);
 }
 
 console.log('\n== aiming ==');

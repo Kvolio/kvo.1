@@ -23,35 +23,34 @@
  * tabulated anywhere - it is whatever the collision between a moving plate and
  * a penetrator turns out to produce.
  *
- * INITIATION - critical shock pressure on the explosive's Hugoniot
- * ----------------------------------------------------------------
- * The charge functions when the shock driven into it exceeds a critical
- * pressure. That pressure is evaluated from the linear shock Hugoniot of the
- * filler,
+ * INITIATION - Held's v^2 * d
+ * ---------------------------
+ * The charge functions when v^2 * d exceeds a material constant, with v the
+ * speed the insult drives into the filler and d the width of filler it drives.
+ * Initiation needs BOTH intensity and extent: a rifle bullet drives a narrow
+ * plug very fast and must not set off an insensitive composition, while a
+ * full-calibre AP shot drives a much wider region more slowly and must. This
+ * is the criterion the ERA literature uses, and it is the only one tried here
+ * that orders the threats correctly. Measured on this model, in (km/s)^2 mm:
  *
- *     Us = c0 + s * up ,      P = rho0 * Us * up
+ *     slow 20 mm strike    1      12.7 mm AP    94      14.5 mm AP   138
+ *     30 mm AP           245      APDS         292      APFSDS       375
+ *     full-calibre APCBC 411      shaped-charge jet   5158
  *
- * with the particle velocity up taken as half the local material speed the
- * solver reports for the charge (the usual free-surface approximation).
+ * The threshold of 200 sits in the gap, giving small-arms immunity while
+ * functioning against autocannon and everything above it.
  *
- * WHY NOT THE SOLVER'S OWN STRESS. The obvious implementation - integrate the
- * nodal virial stress, Walker-Wasley style - was tried and measured, and it
- * does not discriminate: every threat from a 12.7 mm AP bullet to a
- * shaped-charge jet produced 3.4-4.1 GPa in the charge, and the jet actually
- * scored LOWEST on the P^2*tau integral because the integral is dominated by
- * how long a soft filler stays crushed rather than by how hard it was hit.
- * The cause is a known limitation of the bulk model (MODEL.md 7.6): the
- * volumetric response is linear elastic with no equation of state, so it
- * cannot generate the tens of GPa that impedance matching says a jet drives
- * into a low-impedance filler. Particle velocity, on the other hand, the
- * solver resolves well and monotonically - measured peak charge speeds run
- * 361 m/s for a slow 20 mm strike, 1150-1700 m/s across heavy machine gun,
- * autocannon and full-calibre AP shot, 2235 m/s for APDS, 3245 m/s for a long
- * rod and 8293 m/s for a jet. Feeding the Hugoniot from that puts the 7 GPa
- * threshold of an insensitive PBX squarely in the gap, so the cassette
- * functions against shaped charges and long rods and stays inert under
- * machine-gun and autocannon fire, which is what an ERA filler is specified to
- * do. The threshold is a material property and is stated with its provenance.
+ * TWO CRITERIA THAT DID NOT WORK, so they are not tried again:
+ *   - Walker-Wasley P^2*tau on the solver's nodal stress. Every threat from a
+ *     12.7 mm bullet to a jet produced 3.4-4.1 GPa in the charge and the jet
+ *     scored LOWEST, because the integral is dominated by how long a soft
+ *     filler stays crushed rather than by how hard it was hit. The bulk model
+ *     is linear elastic with no equation of state (MODEL.md 7.6), so it cannot
+ *     generate the tens of GPa impedance matching demands.
+ *   - A critical shock pressure on the filler's Hugoniot fed by particle
+ *     velocity. This ordered the threats better but still keyed on intensity
+ *     alone, so a full-calibre AP shot - slow and wide - never initiated the
+ *     cassette at all. That was the "sometimes it just does not go off".
  *
  * PROPAGATION
  * -----------
@@ -76,8 +75,14 @@
  * 500-900 m/s that light ERA plates are usually quoted at.
  */
 
-import { ROLE } from './pd/domain.js';
+import { ROLE, BOND } from './pd/domain.js';
 import { SEV } from '../core/events.js';
+
+/**
+ * Filler moving slower than this is not being driven by anything, just riding
+ * along with the cassette. Including it would inflate the measured width.
+ */
+const DRIVEN_FLOOR = 200;   // m/s
 
 /**
  * Gurney sandwich flyer velocities for the two plates.
@@ -150,6 +155,25 @@ export function buildCassettes(scene, domain) {
       return c;
     };
 
+    // BONDS THAT SPAN THE CHARGE
+    // The horizon is around three lattice spacings, and a cassette's charge is
+    // thinner than that, so the front and back plates end up bonded directly
+    // THROUGH the explosive - measured at 339 such bonds on a light cassette,
+    // more than the 237 holding the front plate to itself. Removing the charge
+    // does not touch them, so the detonation was trying to throw two plates
+    // that were still stitched to each other, and the cassette barely opened.
+    // They are gathered here and cut when the column they belong to fires.
+    const spanBonds = new Map();
+    for (let b = 0; b < domain.nb; b++) {
+      const a = domain.layer[domain.bi[b]], z = domain.layer[domain.bj[b]];
+      if (!((a === front && z === back) || (a === back && z === front))) continue;
+      const mx = 0.5 * (domain.px[domain.bi[b]] + domain.px[domain.bj[b]]);
+      const my = 0.5 * (domain.py[domain.bi[b]] + domain.py[domain.bj[b]]);
+      const key = Math.round((mx * tx + my * ty) / dx);
+      if (!spanBonds.has(key)) spanBonds.set(key, []);
+      spanBonds.get(key).push(b);
+    }
+
     for (let i = 0; i < domain.n; i++) {
       if (domain.role[i] !== ROLE.ARMOUR) continue;
       const li = domain.layer[i];
@@ -161,6 +185,7 @@ export function buildCassettes(scene, domain) {
     for (const [k, c] of cols) {
       if (!c.charge.length) { cols.delete(k); continue; }
       c.x /= c.charge.length; c.y /= c.charge.length;
+      c.span = spanBonds.get(k) || [];
     }
     if (!cols.size) continue;
 
@@ -171,14 +196,11 @@ export function buildCassettes(scene, domain) {
       normal: L.normal, tangent: L.tangent,
       detVel: mat.detVel || 7000,
       gurney: mat.gurney || 2400,
-      rho0: mat.rho,
-      shockC0: mat.shockC0 || 2200,
-      shockS: mat.shockS || 2.5,
-      pCrit: mat.pCrit || 7e9,
+      heldV2d: mat.heldV2d || 200,
       chargeAreal, frontAreal, backAreal,
       columns: [...cols.values()],
       initiated: false, initT: 0, initX: 0, initY: 0,
-      firedColumns: 0, vFront: 0, vBack: 0, flyerVelocity: 0, drivenMass: 0,
+      firedColumns: 0, vFront: 0, vBack: 0, flyerVelocity: 0, drivenMass: 0, peakHeld: 0,
     });
   }
   return out;
@@ -200,32 +222,45 @@ export function stepCassettes(cassettes, d, now, dt, efficiency = 0.45) {
   for (const c of cassettes) {
     if (c.firedColumns >= c.columns.length) continue;
 
-    // ---- initiation: critical shock pressure on the Hugoniot --------------
+    // ---- initiation: Held v^2 * d on the driven filler --------------------
+    // Initiation needs both intensity and extent. A rifle bullet drives a
+    // narrow plug of filler very fast and does not initiate an insensitive
+    // composition; a full-calibre AP shot drives a much wider region more
+    // slowly and does. A pure velocity or pure pressure test cannot express
+    // that, and a pressure test measured on this solver's stress could not
+    // even order the threats correctly. v^2 * d does both, and it is the
+    // criterion the ERA literature actually uses (Held).
     if (!c.initiated) {
+      let v = 0, lo = Infinity, hi = -Infinity, cx = 0, cy = 0, m = 0;
       for (const col of c.columns) {
         if (col.fired) continue;
-        let fastest = 0;
         for (const i of col.charge) {
           if (!d.alive[i]) continue;
-          const v = Math.hypot(d.vx[i], d.vy[i]);
-          if (v > fastest) fastest = v;
+          const sp = Math.hypot(d.vx[i], d.vy[i]);
+          if (sp < DRIVEN_FLOOR) continue;         // undisturbed filler
+          if (sp > v) v = sp;
+          const t = d.px[i] * c.tangent[0] + d.py[i] * c.tangent[1];
+          if (t < lo) lo = t;
+          if (t > hi) hi = t;
+          cx += d.px[i]; cy += d.py[i]; m++;
         }
-        const up = 0.5 * fastest;                       // free-surface approx
-        const P = c.rho0 * (c.shockC0 + c.shockS * up) * up;
-        if (P > col.peakP) col.peakP = P;
-        if (P >= c.pCrit) {
+      }
+      if (m > 0) {
+        const width = Math.max(hi - lo, d.dx);
+        const held = (v / 1000) * (v / 1000) * (width * 1000);   // (km/s)^2 mm
+        if (held > c.peakHeld) c.peakHeld = held;
+        if (held >= c.heldV2d) {
           c.initiated = true;
-          c.initT = now; c.initX = col.x; c.initY = col.y;
+          c.initT = now; c.initX = cx / m; c.initY = cy / m;
           const V = sandwichFlyerVelocity(c.frontAreal, c.backAreal, c.chargeAreal, c.gurney, efficiency);
           c.vFront = V.front; c.vBack = V.back; c.flyerVelocity = V.mean;
           events.push({
             kind: 'era-initiate', cassette: c,
-            text: `${c.label} initiated — charge shocked to ${(col.peakP / 1e9).toFixed(1)} GPa, `
-              + `past its ${(c.pCrit / 1e9).toFixed(0)} GPa threshold; `
+            text: `${c.label} initiated — ${(width * 1000).toFixed(0)} mm of filler driven at `
+              + `${v.toFixed(0)} m/s (v\u00b2d = ${held.toFixed(0)}, threshold ${c.heldV2d}); `
               + `detonation spreading at ${(c.detVel / 1000).toFixed(1)} km/s, `
               + `front plate ${c.vFront.toFixed(0)} m/s, back plate ${c.vBack.toFixed(0)} m/s (Gurney sandwich)`,
           });
-          break;
         }
       }
       if (!c.initiated) continue;
@@ -243,6 +278,15 @@ export function stepCassettes(cassettes, d, now, dt, efficiency = 0.45) {
       for (const i of col.charge) {
         if (!d.alive[i]) continue;
         d.alive[i] = 0; d.vx[i] = 0; d.vy[i] = 0;
+      }
+      // and nothing joins the two plates across it any more
+      for (const b of col.span) {
+        if (d.bstate[b] !== BOND.INTACT) continue;
+        d.bstate[b] = BOND.BROKEN;
+        const i = d.bi[b], j = d.bj[b];
+        d.nBroken[i]++; d.nBroken[j]++;
+        d.damage[i] = d.nBroken[i] / (d.nBond0[i] || 1);
+        d.damage[j] = d.nBroken[j] / (d.nBond0[j] || 1);
       }
       // and it throws the plate either side of it apart along the sandwich
       // normal - front plate towards the threat, back plate away from it

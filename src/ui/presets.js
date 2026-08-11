@@ -154,6 +154,19 @@ export const PRESETS = {
     },
   },
 
+  'dense-metals': {
+    name: 'Dense metal backing — tungsten vs steel',
+    note: 'A tungsten-alloy plate against the same thickness of RHA. Per unit THICKNESS the heavy metal wins comfortably; per unit MASS it loses badly, and the areal figures in the Setup panel are the ones that decide whether a vehicle can carry it. Swap the material and compare.',
+    projectile: { type: 'apfsds', velocity: 1650, standoff: 2.4 },
+    scene: {
+      layers: [
+        { material: 'wha', thickness: 0.040, slope: 0, height: 0.9, label: 'tungsten alloy' },
+        { material: 'rha', thickness: 0.060, slope: 0, gap: 0.05, height: 1.1, label: 'RHA backing' },
+      ],
+      modules: [{ type: 'crew', x: 0.85, y: 0.05, w: 0.32, h: 0.52, label: 'crew' }],
+    },
+  },
+
   // ---------------------------------------------------------------------
   // HISTORICAL PLATES
   //
@@ -267,7 +280,7 @@ export const PRESETS = {
 export const PRESET_ORDER = [
   'single-plate', 'sloped-glacis', 'spaced-array', 'shatter-gap',
   'ceramic-composite', 'mbt-frontal', 'nera-sandwich', 'hesh-scab', 'aphe-interior',
-  'era-light-heat', 'era-heavy-ke', 'era-insensitive',
+  'era-light-heat', 'era-heavy-ke', 'era-insensitive', 'dense-metals',
   'tiger1-ufp', 'tiger1-nose', 'tiger1-side-skirt', 'tiger2-ufp', 'panther-glacis',
   't34-glacis', 'is2-ufp', 'sherman-glacis', 'panzer4-front',
 ];

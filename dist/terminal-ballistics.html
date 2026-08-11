@@ -896,6 +896,42 @@ const MATERIALS = {
     notes: 'Purely aerodynamic. Crushes away in the first microseconds and contributes essentially nothing to penetration.',
   }),
 
+
+  // ------------------------------------------------ heavy and exotic armour
+  // Dense metals are poor armour per unit MASS - their merit is per unit
+  // THICKNESS. Where volume is the binding constraint rather than weight
+  // (turret fronts, test targets, backing behind a ceramic) they buy far more
+  // resistance in the same space than steel does, at three to five times the
+  // areal density. The simulation reports areal mass alongside thickness for
+  // exactly this reason: it is the number that makes them look bad.
+  maraging: mat({
+    key: 'maraging', name: 'Maraging steel (18Ni-350)', class: 'metal',
+    rho: 8080, E: 190e9, nu: 0.30, Y: 2.35e9, UTS: 2.45e9, epsF: 0.06,
+    G0: 22e3, BHN: 600, jcC: 0.010, Tm: 1685, cp: 420, jcM: 0.9,
+    brittle: 0.35, weibull: 22, erosionResist: 1.30,
+    color: '#a6a2ad', color2: '#5f5c66',
+    source: '18Ni(350) maraging grade, aged: 2.4 GPa UTS at ~6 % elongation',
+    notes: 'Roughly twice the yield of RHA at a similar density, bought with ductility. Resists penetration well and cracks readily; a poor choice where spall behind the plate matters.',
+  }),
+  tantalum: mat({
+    key: 'tantalum', name: 'Tantalum', class: 'metal',
+    rho: 16650, E: 186e9, nu: 0.34, Y: 0.45e9, UTS: 0.62e9, epsF: 0.40,
+    G0: 60e3, BHN: 200, jcC: 0.030, Tm: 3290, cp: 140, jcM: 0.44,
+    brittle: 0.0, weibull: 26, erosionResist: 1.5,
+    color: '#6e7480', color2: '#3e424a',
+    source: 'Unalloyed Ta; Johnson-Cook constants from Chen & Gray (1996)',
+    notes: 'Dense and extraordinarily ductile - it deforms rather than fractures, which is why it is used for EFP liners. As armour it soaks up energy in plastic work and barely spalls, but its low yield means it is defeated by thickness rather than by strength.',
+  }),
+  tib2: mat({
+    key: 'tib2', name: 'Titanium diboride (TiB2)', class: 'ceramic',
+    rho: 4520, E: 565e9, nu: 0.11, Y: 5.5e9, UTS: 0.40e9, epsF: 0.0012,
+    G0: 60, BHN: 3400, jcC: 0.0, Tm: 3500, cp: 640, jcM: 1.0,
+    brittle: 0.97, weibull: 9, compFail: true, erosionResist: 0.85,
+    color: '#7c8ba0', color2: '#41495a',
+    source: 'Hot-pressed TiB2; E = 565 GPa, HV ~ 33 GPa',
+    notes: 'Harder and stiffer than silicon carbide and denser than boron carbide. Like every ceramic here it works in compression and is worthless in tension: it must be confined and backed, and it comminutes once through.',
+  }),
+
   // --------------------------------------------------------------- fillers
   compb: mat({
     key: 'compb', name: 'Composition B (HE filler)', class: 'explosive',
@@ -925,15 +961,16 @@ const MATERIALS = {
     brittle: 0.5, weibull: 15, erosionResist: 0.02,
     color: '#b0674a', color2: '#6b3c28',
     detVel: 7000, gurney: 2400, heatOfDet: 4.6e6,
-    // Shock-initiation constants. The criterion is a critical shock pressure
-    // evaluated on the explosive's own Hugoniot,
-    //     Us = c0 + s*up ,   P = rho0 * Us * up
-    // rather than on the solver's nodal stress: the bulk model is linear
-    // elastic with no equation of state, so it cannot generate the tens of GPa
-    // that impedance matching says a jet or a rod drives into a soft filler,
-    // and every threat came out at a similar 3-4 GPa. Particle velocity IS
-    // resolved, so the Hugoniot is fed from that instead. See sim/era.js.
-    shockC0: 2200, shockS: 2.5, pCrit: 7.0e9,
+    // Initiation threshold, Held-style: the charge functions when v^2 * d
+    // exceeds this, with v the speed the insult drives into the filler and d
+    // the width of filler it drives. Units are (km/s)^2 * mm. Held's published
+    // constants for covered charges are 16-25 for sensitive compositions; this
+    // is larger both because the composition is insensitive and because d here
+    // is the width of disturbed filler the solver resolves rather than a jet
+    // diameter, so the constant is calibrated to this model and is not
+    // interchangeable with a published one. See sim/era.js for the measured
+    // separation it sits in.
+    heldV2d: 200,
     source: 'Representative insensitive PBX; Gurney and detonation velocity of the RDX/binder class (Dobratz & Crawford). Walker-Wasley initiation constant is an order-of-magnitude figure for an insensitive composition, not a measurement of 4S20.',
     notes: 'Used as the interlayer of an ERA cassette. Insensitive by design: small-arms and splinter strikes must not initiate it.',
   }),
@@ -975,8 +1012,9 @@ const MATERIALS = {
 
 /** Materials that make sense as an armour layer choice in the UI. */
 const ARMOUR_KEYS = [
-  'rha', 'hha', 'fha', 'cast', 'mild', 'al5083', 'al7039', 'ti64',
-  'alumina', 'sic', 'b4c', 'uhmwpe', 'grp', 'aramid', 'rubber', 'boxsteel',
+  'rha', 'hha', 'fha', 'cast', 'mild', 'maraging', 'boxsteel',
+  'al5083', 'al7039', 'ti64', 'tantalum', 'wha', 'du',
+  'alumina', 'sic', 'b4c', 'tib2', 'uhmwpe', 'grp', 'aramid', 'rubber',
 ];
 
 /** Materials that make sense as a penetrator body/core in the UI. */
@@ -3491,35 +3529,34 @@ __def("src/sim/era.js", function (__exports, __req) {
  * tabulated anywhere - it is whatever the collision between a moving plate and
  * a penetrator turns out to produce.
  *
- * INITIATION - critical shock pressure on the explosive's Hugoniot
- * ----------------------------------------------------------------
- * The charge functions when the shock driven into it exceeds a critical
- * pressure. That pressure is evaluated from the linear shock Hugoniot of the
- * filler,
+ * INITIATION - Held's v^2 * d
+ * ---------------------------
+ * The charge functions when v^2 * d exceeds a material constant, with v the
+ * speed the insult drives into the filler and d the width of filler it drives.
+ * Initiation needs BOTH intensity and extent: a rifle bullet drives a narrow
+ * plug very fast and must not set off an insensitive composition, while a
+ * full-calibre AP shot drives a much wider region more slowly and must. This
+ * is the criterion the ERA literature uses, and it is the only one tried here
+ * that orders the threats correctly. Measured on this model, in (km/s)^2 mm:
  *
- *     Us = c0 + s * up ,      P = rho0 * Us * up
+ *     slow 20 mm strike    1      12.7 mm AP    94      14.5 mm AP   138
+ *     30 mm AP           245      APDS         292      APFSDS       375
+ *     full-calibre APCBC 411      shaped-charge jet   5158
  *
- * with the particle velocity up taken as half the local material speed the
- * solver reports for the charge (the usual free-surface approximation).
+ * The threshold of 200 sits in the gap, giving small-arms immunity while
+ * functioning against autocannon and everything above it.
  *
- * WHY NOT THE SOLVER'S OWN STRESS. The obvious implementation - integrate the
- * nodal virial stress, Walker-Wasley style - was tried and measured, and it
- * does not discriminate: every threat from a 12.7 mm AP bullet to a
- * shaped-charge jet produced 3.4-4.1 GPa in the charge, and the jet actually
- * scored LOWEST on the P^2*tau integral because the integral is dominated by
- * how long a soft filler stays crushed rather than by how hard it was hit.
- * The cause is a known limitation of the bulk model (MODEL.md 7.6): the
- * volumetric response is linear elastic with no equation of state, so it
- * cannot generate the tens of GPa that impedance matching says a jet drives
- * into a low-impedance filler. Particle velocity, on the other hand, the
- * solver resolves well and monotonically - measured peak charge speeds run
- * 361 m/s for a slow 20 mm strike, 1150-1700 m/s across heavy machine gun,
- * autocannon and full-calibre AP shot, 2235 m/s for APDS, 3245 m/s for a long
- * rod and 8293 m/s for a jet. Feeding the Hugoniot from that puts the 7 GPa
- * threshold of an insensitive PBX squarely in the gap, so the cassette
- * functions against shaped charges and long rods and stays inert under
- * machine-gun and autocannon fire, which is what an ERA filler is specified to
- * do. The threshold is a material property and is stated with its provenance.
+ * TWO CRITERIA THAT DID NOT WORK, so they are not tried again:
+ *   - Walker-Wasley P^2*tau on the solver's nodal stress. Every threat from a
+ *     12.7 mm bullet to a jet produced 3.4-4.1 GPa in the charge and the jet
+ *     scored LOWEST, because the integral is dominated by how long a soft
+ *     filler stays crushed rather than by how hard it was hit. The bulk model
+ *     is linear elastic with no equation of state (MODEL.md 7.6), so it cannot
+ *     generate the tens of GPa impedance matching demands.
+ *   - A critical shock pressure on the filler's Hugoniot fed by particle
+ *     velocity. This ordered the threats better but still keyed on intensity
+ *     alone, so a full-calibre AP shot - slow and wide - never initiated the
+ *     cassette at all. That was the "sometimes it just does not go off".
  *
  * PROPAGATION
  * -----------
@@ -3544,8 +3581,14 @@ __def("src/sim/era.js", function (__exports, __req) {
  * 500-900 m/s that light ERA plates are usually quoted at.
  */
 
-const { ROLE } = __req("src/sim/pd/domain.js");
+const { ROLE, BOND } = __req("src/sim/pd/domain.js");
 const { SEV } = __req("src/core/events.js");
+
+/**
+ * Filler moving slower than this is not being driven by anything, just riding
+ * along with the cassette. Including it would inflate the measured width.
+ */
+const DRIVEN_FLOOR = 200;   // m/s
 
 /**
  * Gurney sandwich flyer velocities for the two plates.
@@ -3618,6 +3661,25 @@ function buildCassettes(scene, domain) {
       return c;
     };
 
+    // BONDS THAT SPAN THE CHARGE
+    // The horizon is around three lattice spacings, and a cassette's charge is
+    // thinner than that, so the front and back plates end up bonded directly
+    // THROUGH the explosive - measured at 339 such bonds on a light cassette,
+    // more than the 237 holding the front plate to itself. Removing the charge
+    // does not touch them, so the detonation was trying to throw two plates
+    // that were still stitched to each other, and the cassette barely opened.
+    // They are gathered here and cut when the column they belong to fires.
+    const spanBonds = new Map();
+    for (let b = 0; b < domain.nb; b++) {
+      const a = domain.layer[domain.bi[b]], z = domain.layer[domain.bj[b]];
+      if (!((a === front && z === back) || (a === back && z === front))) continue;
+      const mx = 0.5 * (domain.px[domain.bi[b]] + domain.px[domain.bj[b]]);
+      const my = 0.5 * (domain.py[domain.bi[b]] + domain.py[domain.bj[b]]);
+      const key = Math.round((mx * tx + my * ty) / dx);
+      if (!spanBonds.has(key)) spanBonds.set(key, []);
+      spanBonds.get(key).push(b);
+    }
+
     for (let i = 0; i < domain.n; i++) {
       if (domain.role[i] !== ROLE.ARMOUR) continue;
       const li = domain.layer[i];
@@ -3629,6 +3691,7 @@ function buildCassettes(scene, domain) {
     for (const [k, c] of cols) {
       if (!c.charge.length) { cols.delete(k); continue; }
       c.x /= c.charge.length; c.y /= c.charge.length;
+      c.span = spanBonds.get(k) || [];
     }
     if (!cols.size) continue;
 
@@ -3639,14 +3702,11 @@ function buildCassettes(scene, domain) {
       normal: L.normal, tangent: L.tangent,
       detVel: mat.detVel || 7000,
       gurney: mat.gurney || 2400,
-      rho0: mat.rho,
-      shockC0: mat.shockC0 || 2200,
-      shockS: mat.shockS || 2.5,
-      pCrit: mat.pCrit || 7e9,
+      heldV2d: mat.heldV2d || 200,
       chargeAreal, frontAreal, backAreal,
       columns: [...cols.values()],
       initiated: false, initT: 0, initX: 0, initY: 0,
-      firedColumns: 0, vFront: 0, vBack: 0, flyerVelocity: 0, drivenMass: 0,
+      firedColumns: 0, vFront: 0, vBack: 0, flyerVelocity: 0, drivenMass: 0, peakHeld: 0,
     });
   }
   return out;
@@ -3668,32 +3728,45 @@ function stepCassettes(cassettes, d, now, dt, efficiency = 0.45) {
   for (const c of cassettes) {
     if (c.firedColumns >= c.columns.length) continue;
 
-    // ---- initiation: critical shock pressure on the Hugoniot --------------
+    // ---- initiation: Held v^2 * d on the driven filler --------------------
+    // Initiation needs both intensity and extent. A rifle bullet drives a
+    // narrow plug of filler very fast and does not initiate an insensitive
+    // composition; a full-calibre AP shot drives a much wider region more
+    // slowly and does. A pure velocity or pure pressure test cannot express
+    // that, and a pressure test measured on this solver's stress could not
+    // even order the threats correctly. v^2 * d does both, and it is the
+    // criterion the ERA literature actually uses (Held).
     if (!c.initiated) {
+      let v = 0, lo = Infinity, hi = -Infinity, cx = 0, cy = 0, m = 0;
       for (const col of c.columns) {
         if (col.fired) continue;
-        let fastest = 0;
         for (const i of col.charge) {
           if (!d.alive[i]) continue;
-          const v = Math.hypot(d.vx[i], d.vy[i]);
-          if (v > fastest) fastest = v;
+          const sp = Math.hypot(d.vx[i], d.vy[i]);
+          if (sp < DRIVEN_FLOOR) continue;         // undisturbed filler
+          if (sp > v) v = sp;
+          const t = d.px[i] * c.tangent[0] + d.py[i] * c.tangent[1];
+          if (t < lo) lo = t;
+          if (t > hi) hi = t;
+          cx += d.px[i]; cy += d.py[i]; m++;
         }
-        const up = 0.5 * fastest;                       // free-surface approx
-        const P = c.rho0 * (c.shockC0 + c.shockS * up) * up;
-        if (P > col.peakP) col.peakP = P;
-        if (P >= c.pCrit) {
+      }
+      if (m > 0) {
+        const width = Math.max(hi - lo, d.dx);
+        const held = (v / 1000) * (v / 1000) * (width * 1000);   // (km/s)^2 mm
+        if (held > c.peakHeld) c.peakHeld = held;
+        if (held >= c.heldV2d) {
           c.initiated = true;
-          c.initT = now; c.initX = col.x; c.initY = col.y;
+          c.initT = now; c.initX = cx / m; c.initY = cy / m;
           const V = sandwichFlyerVelocity(c.frontAreal, c.backAreal, c.chargeAreal, c.gurney, efficiency);
           c.vFront = V.front; c.vBack = V.back; c.flyerVelocity = V.mean;
           events.push({
             kind: 'era-initiate', cassette: c,
-            text: `${c.label} initiated — charge shocked to ${(col.peakP / 1e9).toFixed(1)} GPa, `
-              + `past its ${(c.pCrit / 1e9).toFixed(0)} GPa threshold; `
+            text: `${c.label} initiated — ${(width * 1000).toFixed(0)} mm of filler driven at `
+              + `${v.toFixed(0)} m/s (v\u00b2d = ${held.toFixed(0)}, threshold ${c.heldV2d}); `
               + `detonation spreading at ${(c.detVel / 1000).toFixed(1)} km/s, `
               + `front plate ${c.vFront.toFixed(0)} m/s, back plate ${c.vBack.toFixed(0)} m/s (Gurney sandwich)`,
           });
-          break;
         }
       }
       if (!c.initiated) continue;
@@ -3711,6 +3784,15 @@ function stepCassettes(cassettes, d, now, dt, efficiency = 0.45) {
       for (const i of col.charge) {
         if (!d.alive[i]) continue;
         d.alive[i] = 0; d.vx[i] = 0; d.vy[i] = 0;
+      }
+      // and nothing joins the two plates across it any more
+      for (const b of col.span) {
+        if (d.bstate[b] !== BOND.INTACT) continue;
+        d.bstate[b] = BOND.BROKEN;
+        const i = d.bi[b], j = d.bj[b];
+        d.nBroken[i]++; d.nBroken[j]++;
+        d.damage[i] = d.nBroken[i] / (d.nBond0[i] || 1);
+        d.damage[j] = d.nBroken[j] / (d.nBond0[j] || 1);
       }
       // and it throws the plate either side of it apart along the sandwich
       // normal - front plate towards the threat, back plate away from it
@@ -6945,6 +7027,19 @@ const PRESETS = {
     },
   },
 
+  'dense-metals': {
+    name: 'Dense metal backing — tungsten vs steel',
+    note: 'A tungsten-alloy plate against the same thickness of RHA. Per unit THICKNESS the heavy metal wins comfortably; per unit MASS it loses badly, and the areal figures in the Setup panel are the ones that decide whether a vehicle can carry it. Swap the material and compare.',
+    projectile: { type: 'apfsds', velocity: 1650, standoff: 2.4 },
+    scene: {
+      layers: [
+        { material: 'wha', thickness: 0.040, slope: 0, height: 0.9, label: 'tungsten alloy' },
+        { material: 'rha', thickness: 0.060, slope: 0, gap: 0.05, height: 1.1, label: 'RHA backing' },
+      ],
+      modules: [{ type: 'crew', x: 0.85, y: 0.05, w: 0.32, h: 0.52, label: 'crew' }],
+    },
+  },
+
   // ---------------------------------------------------------------------
   // HISTORICAL PLATES
   //
@@ -7058,7 +7153,7 @@ const PRESETS = {
 const PRESET_ORDER = [
   'single-plate', 'sloped-glacis', 'spaced-array', 'shatter-gap',
   'ceramic-composite', 'mbt-frontal', 'nera-sandwich', 'hesh-scab', 'aphe-interior',
-  'era-light-heat', 'era-heavy-ke', 'era-insensitive',
+  'era-light-heat', 'era-heavy-ke', 'era-insensitive', 'dense-metals',
   'tiger1-ufp', 'tiger1-nose', 'tiger1-side-skirt', 'tiger2-ufp', 'panther-glacis',
   't34-glacis', 'is2-ufp', 'sherman-glacis', 'panzer4-front',
 ];
