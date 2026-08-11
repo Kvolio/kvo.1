@@ -4629,6 +4629,7 @@ class World {
     this.settleTime = 0;
     this.cassettes = [];
     this.eraLastT = 0;
+    this.retiredProjM = 0; this.retiredProjPX = 0; this.retiredProjPY = 0;
     if (this.projectile) this.projectile.reset();
     for (const L of this.scene.layers) { L.fragHits = 0; }
     this.bus.emit('reset');
@@ -5289,6 +5290,14 @@ class World {
         d.alive[i] = 0;
         this.stats.retiredMass = (this.stats.retiredMass || 0) + d.mass[i];
         this.stats.retiredCount = (this.stats.retiredCount || 0) + 1;
+        // Keep its momentum on the books if it was part of the projectile.
+        // Dropping a slow piece silently RAISES the reported remnant speed,
+        // which is one of the ways the round appears to accelerate.
+        if (d.role[i] !== ROLE.ARMOUR && d.role[i] !== ROLE.MODULE) {
+          this.retiredProjM = (this.retiredProjM || 0) + d.mass[i];
+          this.retiredProjPX = (this.retiredProjPX || 0) + d.vx[i] * d.mass[i];
+          this.retiredProjPY = (this.retiredProjPY || 0) + d.vy[i] * d.mass[i];
+        }
         continue;
       }
       this.fragments.add({
@@ -5384,6 +5393,18 @@ class World {
     let chanMass = 0, chanKE = 0, chanVX = 0, chanVY = 0, massThrough = 0;
     let sMin = Infinity, sMax = -Infinity, uMin = Infinity, uMax = -Infinity;
     let spall = 0, freeCount = 0, hot = 293, coherent = 0, attached = 0;
+    // RESIDUAL VELOCITY IS THE REMNANT'S, NOT THE CORE'S
+    // A capped shot is not one body: the core, the cap and the windscreen
+    // exchange momentum through elastic waves for as long as they stay in
+    // contact. Quoting the core's own centre-of-mass velocity therefore shows
+    // it OSCILLATING - it was measured swinging 877 -> 874.4 -> 875.7 m/s
+    // while the assembly as a whole decelerated smoothly from 854 to 821 -
+    // and a round crossing a stand-off gap appears to speed up. Nothing is
+    // gaining energy; momentum is sloshing between parts that are still
+    // touching. The reported figure is the whole coherent remnant, which is
+    // also what "residual velocity" means in the literature: the mass that
+    // emerges, not one component of it.
+    let remM = 0, remVX = 0, remVY = 0;
     let bulge = 0;
 
     for (let i = 0; i < d.n; i++) {
@@ -5437,6 +5458,28 @@ class World {
         if (s < sMin) sMin = s; if (s > sMax) sMax = s;
         if (u < uMin) uMin = u; if (u > uMax) uMax = u;
       }
+      // Membership must not depend on the free flag. A node crossing the
+      // damage threshold is reclassified from "attached" to "free" in one
+      // step, and dropping it from the average makes the reported speed JUMP -
+      // measured rising by up to 0.9 m/s in mid-gap with nothing touching the
+      // round, purely because a slower-than-average node stopped counting.
+      // Every rise seen during free flight was of exactly this kind. Comminuted
+      // material driven forward in the channel is still part of the remnant and
+      // still arrives at the next plate, so it keeps counting.
+      // Every surviving piece of projectile, with NO position or velocity
+      // weighting. Any weight that depends on where a node is changes as the
+      // debris cloud spreads, so the reported speed drifts upward even in free
+      // flight - a channel cut, a tapered channel cut and a free-flag test were
+      // each measured doing it, by up to 1 m/s between plates with nothing
+      // touching the round. Over a set fixed at mesh time the figure is exact:
+      // internal forces cancel, so it can only change when something outside
+      // the projectile pushes it. Mass times this velocity is the projectile's
+      // remaining momentum, which is what the mass readout beside it means.
+      if (d.role[i] !== ROLE.ARMOUR && d.role[i] !== ROLE.MODULE) {
+        const mm = d.mass[i];
+        remM += mm; remVX += d.vx[i] * mm; remVY += d.vy[i] * mm;
+      }
+
       if (d.role[i] === ROLE.ARMOUR) {
         if (d.flags[i] & 8) { spall += d.mass[i]; freeCount++; }
         // Back-face bulge: permanent forward motion of rear-face material that
@@ -5498,7 +5541,20 @@ class World {
     st.coherentMass = coherent;         // of that, still largely undamaged
     st.comminutedMass = Math.max(0, penMass - attached);
     st.channelMass = chanMass;
-    st.residualVelocity = chanMass > 0 ? Math.hypot(chanVX / chanMass, chanVY / chanMass) : 0;
+    // Projectile material retired from the lattice is still projectile
+    // material: it is flying on as a ballistic fragment. Leaving it out means
+    // the figure ticks upward every time a slow piece is retired, which is the
+    // last source of apparent acceleration in free flight.
+    for (const fr of this.fragments.list) {
+      if (!fr.alive || fr.source !== 'projectile') continue;
+      remM += fr.mass; remVX += fr.vx * fr.mass; remVY += fr.vy * fr.mass;
+    }
+    remM += this.retiredProjM || 0;
+    remVX += this.retiredProjPX || 0;
+    remVY += this.retiredProjPY || 0;
+    st.residualVelocity = remM > 0 ? Math.hypot(remVX / remM, remVY / remM)
+      : (chanMass > 0 ? Math.hypot(chanVX / chanMass, chanVY / chanMass) : 0);
+    st.remnantMass = remM;
     st.residualLength = isFinite(sMax) ? Math.hypot(sMax - sMin, uMax - uMin) : 0;
     st.residualKE = chanKE;
     // "lost" means gone from the domain - promoted to a ballistic fragment or

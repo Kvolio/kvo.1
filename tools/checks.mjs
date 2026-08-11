@@ -213,6 +213,45 @@ console.log('\n== explosive reactive armour ==');
   // worse than pinning none.
 }
 
+console.log('\n== a round does not gain speed in free flight ==');
+{
+  // The reported velocity is an average, and an average over a set that
+  // changes as the round erodes will tick upward even though nothing is
+  // accelerating. Quoting the core of a capped shot on its own was the worst
+  // of it: the core exchanges momentum with its cap through elastic waves and
+  // was measured swinging 877 -> 874 -> 876 m/s while the assembly decelerated
+  // smoothly, so a round crossing a stand-off gap looked like it was speeding
+  // up. Between plates, with nothing in contact, the figure must not rise.
+  const w = new World();
+  w.settings.quality = 'normal';
+  w.settings.recordFrames = false;
+  const sc = new Scene();
+  sc.setLayers([
+    makeLayer({ material: 'rha', thickness: 0.030, height: 1.0 }),
+    makeLayer({ material: 'rha', thickness: 0.045, gap: 0.30, height: 1.0 }),
+    makeLayer({ material: 'rha', thickness: 0.060, gap: 0.30, height: 1.0 }),
+  ]);
+  w.setScene(sc);
+  w.setProjectile(makeProjectileConfig('apcbc', { velocity: 900, standoff: 0.8 }));
+  w.fire();
+  let f = 0;
+  while (!w.domain && f < 900) { w.update(1 / 60); f++; }
+  let prev = null, worstRise = 0, quiet = 0;
+  while (w.state !== 'done' && f < 3000) {
+    w.update(1 / 60); f++;
+    if (f % 10) continue;
+    const v = w.stats.residualVelocity;
+    if (v <= 1) continue;
+    const still = w.solver.maxContactForce === 0 && w.solver.brokenThisStep === 0;
+    if (still && prev !== null) { quiet++; if (v - prev > worstRise) worstRise = v - prev; }
+    prev = v;
+  }
+  check(quiet > 0, `the round spends time in free flight between the plates (${quiet} samples)`);
+  check(worstRise < 0.05,
+    `reported velocity does not rise while nothing is touching the round `
+    + `(worst +${worstRise.toFixed(3)} m/s)`);
+}
+
 console.log('\n== armour materials ==');
 for (const k of ARMOUR_KEYS) {
   const m = MATERIALS[k];
