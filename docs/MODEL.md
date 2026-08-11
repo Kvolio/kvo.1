@@ -698,6 +698,48 @@ are from the standard explosives-handbook range for each composition.
 These are handbook figures for a class of material. Real armour plate varies
 substantially with heat treatment, thickness and lot.
 
+### 8.1 Textolite and the Soviet laminate glacis
+
+`textolite` is a phenolic–cotton laminate of the PTK class, the filler used
+between steel plates in Soviet combination glacis armour from the T-64 onward.
+It is in the database as a genuinely soft, light, weak material — roughly a
+fifth the density of steel and a tenth its tensile strength — because that is
+what it is. It does not stop rounds; it is there to add line-of-sight
+thickness and disrupt a jet for very little mass.
+
+The `t72-ural-ufp`, `t72b-ufp` and `t90a-ufp` presets use it. Their layer
+stacks (80/105/20 mm at 68° for the T-72 Ural, and so on) are **representative
+published figures, not measurements**, and the elastic and failure constants
+for the laminate are class-typical rather than lot-specific. The geometry is
+asserted in CI; the penetration result the model produces from that geometry
+is not, and should not be quoted as an armour-performance figure.
+
+### 8.2 The historic ammunition catalogue
+
+`src/ui/ammo.js` holds 27 service rounds from 1939 to 2003, selectable
+independently of the scenario presets so one target can be shot with several
+generations of round. Its header documents the provenance in full; the three
+things that matter most:
+
+- **Muzzle velocity is used as the striking velocity.** There is no exterior
+  ballistics in this simulation, so every round arrives as though fired at
+  point blank. A round quoted at 1700 m/s does not arrive at 1700 m/s at
+  2000 m, and the model will happily let you forget that.
+- **Sub-calibre rod dimensions are reconstructions.** Calibre, projectile mass
+  and muzzle velocity are published and reliable. `rodD` and `rodLd` for
+  modern APFSDS mostly are not, and where they are not they are inferred from
+  the published mass at a plausible L/D. They are consistent with the mass —
+  which is what the solver actually integrates — but they are not the real rod.
+- **Core materials are a class, not a specification** — steel, tungsten
+  carbide, tungsten heavy alloy, depleted uranium.
+
+So the catalogue is a set of plausible reconstructions with correct mass and
+velocity, not a data table, and the penetration figures it produces inherit
+that status. CI asserts that every entry meshes and fires with finite stats,
+and that the 1939 and 2003 rounds do not land in the same place. It does not
+assert any round's penetration against any plate, because there is nothing
+here to validate that against.
+
 ---
 
 ## 9. Extension points

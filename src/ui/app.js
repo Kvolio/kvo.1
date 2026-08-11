@@ -11,6 +11,7 @@
 
 import { el, panel, row, num, select, slider, toggle, kv, clear, panelState } from './dom.js';
 import { PRESETS, PRESET_ORDER } from './presets.js';
+import { AMMO, AMMO_ORDER, ammoLabel } from './ammo.js';
 import { MATERIALS, ARMOUR_KEYS, PENETRATOR_KEYS, getMaterial, registerMaterial } from '../materials/database.js';
 import { PROJECTILE_TYPES, TYPE_ORDER, makeProjectileConfig } from '../sim/projectileTypes.js';
 import { Scene, makeLayer, makeModule, expandEra, MODULE_TYPES } from '../sim/scene.js';
@@ -126,13 +127,44 @@ export class App {
     const p = panel('Projectile', { tag: t.family });
     p.body.appendChild(row('Type', select(
       TYPE_ORDER.map((k) => ({ value: k, label: PROJECTILE_TYPES[k].name.split(' — ')[0] })),
-      cfg.type, (k) => { w.setProjectile(makeProjectileConfig(k)); this.refreshLeft(); this.refreshRight(); },
+      cfg.type, (k) => {
+        this.ammoKey = '';
+        w.setProjectile(makeProjectileConfig(k));
+        this.refreshLeft(); this.refreshRight();
+      },
     )));
     p.body.appendChild(el('div', { class: 'note' }, t.mechanism));
+
+    // HISTORIC ROUNDS
+    // Separate from the scenario presets on purpose: this replaces the
+    // projectile and leaves the armour alone, so the same target can be shot
+    // with a 1942 capped shot and a modern long rod back to back.
+    p.body.appendChild(row('Historic round', select(
+      [{ value: '', label: '— pick a service round —' },
+        ...AMMO_ORDER.map((k) => ({ value: k, label: ammoLabel(k) }))],
+      this.ammoKey || '',
+      (k) => {
+        if (!k) { this.ammoKey = ''; return; }
+        const a = AMMO[k];
+        this.ammoKey = k;
+        w.setProjectile(makeProjectileConfig(a.type, a.cfg));
+        this.refreshLeft(); this.refreshRight();
+      },
+    )));
+    if (this.ammoKey && AMMO[this.ammoKey]) {
+      p.body.appendChild(el('div', { class: 'note' }, AMMO[this.ammoKey].note));
+      p.body.appendChild(el('div', { class: 'hint' },
+        'Muzzle velocity is used as the STRIKING velocity — there is no exterior '
+        + 'ballistics here, so every round arrives as if fired at point blank. Rod '
+        + 'dimensions for sub-calibre rounds are reconstructed to match the published '
+        + 'mass where the real ones are not public; see src/ui/ammo.js.'));
+    }
 
     const set = (key, v) => {
       const next = { ...w.projectileCfg, [key]: v };
       w.setProjectile(next);
+      // hand-editing a parameter means this is no longer that service round
+      this.ammoKey = '';
       this.refreshLeft(); this.refreshRight();
     };
 

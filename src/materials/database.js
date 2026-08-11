@@ -265,6 +265,16 @@ export const MATERIALS = {
   }),
 
 
+  textolite: mat({
+    key: 'textolite', name: 'Textolite (phenolic-cotton laminate)', class: 'composite',
+    rho: 1380, E: 8.0e9, nu: 0.35, Y: 0.13e9, UTS: 0.10e9, epsF: 0.022,
+    G0: 3.0e3, BHN: 30, jcC: 0.0, Tm: 500, cp: 1500, jcM: 1.0,
+    brittle: 0.55, weibull: 12, erosionResist: 0.15,
+    color: '#8a6a3f', color2: '#4f3c22',
+    source: 'PTK-grade cotton-fabric phenolic laminate (GOST 5-78 class): rho 1.3-1.4 g/cm3, tensile ~100 MPa, compressive ~150-200 MPa, E ~ 6-10 GPa in plane.',
+    notes: 'The filler of Soviet combination glacis armour, sandwiched between steel plates. It is not a "hard" armour material at all - a fifth the density of steel and a tenth its strength. Its value is as a low-impedance spacer: it costs the penetrator length and time, disrupts a shaped-charge jet across the impedance mismatch at each interface, and adds line-of-sight thickness for very little mass. Judge it by the areal-mass column, not by how much it stops on its own.',
+  }),
+
   // ------------------------------------------------ heavy and exotic armour
   // Dense metals are poor armour per unit MASS - their merit is per unit
   // THICKNESS. Where volume is the binding constraint rather than weight
@@ -382,7 +392,7 @@ export const MATERIALS = {
 export const ARMOUR_KEYS = [
   'rha', 'hha', 'fha', 'cast', 'mild', 'maraging', 'boxsteel',
   'al5083', 'al7039', 'ti64', 'tantalum', 'wha', 'du',
-  'alumina', 'sic', 'b4c', 'tib2', 'uhmwpe', 'grp', 'aramid', 'rubber',
+  'alumina', 'sic', 'b4c', 'tib2', 'uhmwpe', 'grp', 'aramid', 'textolite', 'rubber',
 ];
 
 /** Materials that make sense as a penetrator body/core in the UI. */

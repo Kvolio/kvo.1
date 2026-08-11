@@ -168,6 +168,82 @@ export const PRESETS = {
   },
 
   // ---------------------------------------------------------------------
+  // POST-WAR COMBINATION GLACIS
+  //
+  // Soviet "combination armour" is a steel-textolite-steel laminate carried at
+  // extreme obliquity. The published layer breakdowns below are the ones that
+  // recur in the open literature; they are not measurements, and armour
+  // layouts of vehicles still in service are not public. Treat the layer
+  // thicknesses as representative of the design idea - a low-density spacer
+  // between steel skins, angled hard - rather than as the armour of any
+  // particular tank on any particular day.
+  //
+  // Slope is from the vertical, so a 68 deg glacis is the near-horizontal one.
+  // ---------------------------------------------------------------------
+  't72-ural-ufp': {
+    name: 'T-72 Ural — glacis, 80/105/20 at 68°',
+    note: 'The classic combination glacis: high-hardness steel, a thick textolite filler, a thin steel back plate, all at 68°. 205 mm of material becomes about 550 mm of line of sight, and the textolite contributes barely a tenth of the mass of the same thickness of steel. Fired on here by the 105 mm APDS it was designed against.',
+    projectile: { type: 'apds', caliber: 0.105, coreD: 0.036, coreLd: 4.2, mass: 3.8, velocity: 1478, standoff: 1.8 },
+    scene: {
+      layers: [
+        { material: 'hha', thickness: 0.080, slope: 68, height: 1.3, label: 'front plate' },
+        { material: 'textolite', thickness: 0.105, slope: 68, bonded: true, height: 1.3, label: 'textolite filler' },
+        { material: 'rha', thickness: 0.020, slope: 68, bonded: true, height: 1.3, label: 'back plate' },
+      ],
+      modules: [
+        { type: 'crew', x: 1.25, y: 0.05, w: 0.34, h: 0.55, label: 'driver' },
+        { type: 'ammo', x: 1.70, y: -0.28, w: 0.36, h: 0.28, label: 'carousel' },
+      ],
+    },
+  },
+  't72b-ufp': {
+    name: 'T-72B — glacis with reflecting plates, at 68°',
+    note: 'The later laminate trades textolite for thin steel plates separated by a compliant interlayer. Each interface reflects part of the shock and each plate has to be cut separately, which is worth more against a long rod than the same mass of textolite is.',
+    projectile: { type: 'apfsds', caliber: 0.125, rodD: 0.022, rodLd: 20, mass: 3.9, velocity: 1700, standoff: 2.4 },
+    scene: {
+      layers: [
+        { material: 'hha', thickness: 0.060, slope: 68, height: 1.3, label: 'front plate' },
+        { material: 'rubber', thickness: 0.010, slope: 68, bonded: true, height: 1.3, label: 'interlayer' },
+        { material: 'rha', thickness: 0.035, slope: 68, bonded: true, height: 1.3, label: 'reflecting plate' },
+        { material: 'rubber', thickness: 0.010, slope: 68, bonded: true, height: 1.3, label: 'interlayer' },
+        { material: 'rha', thickness: 0.050, slope: 68, bonded: true, height: 1.3, label: 'back plate' },
+      ],
+      modules: [
+        { type: 'crew', x: 1.30, y: 0.05, w: 0.34, h: 0.55, label: 'driver' },
+        { type: 'ammo', x: 1.75, y: -0.28, w: 0.36, h: 0.28, label: 'carousel' },
+      ],
+    },
+  },
+  't90a-ufp': {
+    name: 'T-90A — glacis with heavy ERA, at 68°',
+    note: 'The T-72B laminate with a Kontakt-5 class cassette on top. The heavy front plate is the point: it is thick enough to carry real momentum against a long rod rather than merely to confine the charge. Compare with the cassette deleted.',
+    projectile: { type: 'apfsds', caliber: 0.120, rodD: 0.022, rodLd: 26, mass: 4.6, velocity: 1670, core: 'du', standoff: 2.6 },
+    scene: {
+      layers: [
+        { kind: 'era', label: 'Kontakt-5', plate: 'hha', slope: 68, height: 1.0,
+          frontThickness: 0.015, chargeThickness: 0.010, backThickness: 0.005 },
+        { material: 'hha', thickness: 0.060, slope: 68, gap: 0.02, height: 1.3, label: 'front plate' },
+        { material: 'rubber', thickness: 0.010, slope: 68, bonded: true, height: 1.3, label: 'interlayer' },
+        { material: 'rha', thickness: 0.035, slope: 68, bonded: true, height: 1.3, label: 'reflecting plate' },
+        { material: 'rha', thickness: 0.050, slope: 68, bonded: true, height: 1.3, label: 'back plate' },
+      ],
+      modules: [
+        { type: 'crew', x: 1.40, y: 0.05, w: 0.34, h: 0.55, label: 'driver' },
+        { type: 'ammo', x: 1.85, y: -0.28, w: 0.36, h: 0.28, label: 'carousel' },
+      ],
+    },
+  },
+  't55-ufp': {
+    name: 'T-55 — glacis, 100 mm at 60°',
+    note: 'Homogeneous steel, no laminate: 200 mm of line of sight from 100 mm of plate. The baseline every post-war combination array was trying to beat without gaining weight.',
+    projectile: { type: 'apcbc', caliber: 0.090, mass: 11.0, velocity: 850, standoff: 1.5 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.100, slope: 60, height: 1.3, label: 'glacis' }],
+      modules: [{ type: 'crew', x: 0.75, y: 0.05, w: 0.32, h: 0.52, label: 'driver' }],
+    },
+  },
+
+  // ---------------------------------------------------------------------
   // HISTORICAL PLATES
   //
   // Nominal design figures from published armour layouts, not measurements of
@@ -281,6 +357,7 @@ export const PRESET_ORDER = [
   'single-plate', 'sloped-glacis', 'spaced-array', 'shatter-gap',
   'ceramic-composite', 'mbt-frontal', 'nera-sandwich', 'hesh-scab', 'aphe-interior',
   'era-light-heat', 'era-heavy-ke', 'era-insensitive', 'dense-metals',
+  't55-ufp', 't72-ural-ufp', 't72b-ufp', 't90a-ufp',
   'tiger1-ufp', 'tiger1-nose', 'tiger1-side-skirt', 'tiger2-ufp', 'panther-glacis',
   't34-glacis', 'is2-ufp', 'sherman-glacis', 'panzer4-front',
 ];

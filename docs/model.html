@@ -634,6 +634,47 @@ v_r    = m/(m + m_plug) · √(v² - v_bl²)    (Recht &amp; Ipson 1963)</code><
 <p>are from the standard explosives-handbook range for each composition.</p>
 <p>These are handbook figures for a class of material. Real armour plate varies</p>
 <p>substantially with heat treatment, thickness and lot.</p>
+<h3 id="8-1-textolite-and-the-soviet-laminate-glacis">8.1 Textolite and the Soviet laminate glacis</h3>
+<p><code>textolite</code> is a phenolic–cotton laminate of the PTK class, the filler used</p>
+<p>between steel plates in Soviet combination glacis armour from the T-64 onward.</p>
+<p>It is in the database as a genuinely soft, light, weak material — roughly a</p>
+<p>fifth the density of steel and a tenth its tensile strength — because that is</p>
+<p>what it is. It does not stop rounds; it is there to add line-of-sight</p>
+<p>thickness and disrupt a jet for very little mass.</p>
+<p>The <code>t72-ural-ufp</code>, <code>t72b-ufp</code> and <code>t90a-ufp</code> presets use it. Their layer</p>
+<p>stacks (80/105/20 mm at 68° for the T-72 Ural, and so on) are **representative</p>
+<p>published figures, not measurements**, and the elastic and failure constants</p>
+<p>for the laminate are class-typical rather than lot-specific. The geometry is</p>
+<p>asserted in CI; the penetration result the model produces from that geometry</p>
+<p>is not, and should not be quoted as an armour-performance figure.</p>
+<h3 id="8-2-the-historic-ammunition-catalogue">8.2 The historic ammunition catalogue</h3>
+<p><code>src/ui/ammo.js</code> holds 27 service rounds from 1939 to 2003, selectable</p>
+<p>independently of the scenario presets so one target can be shot with several</p>
+<p>generations of round. Its header documents the provenance in full; the three</p>
+<p>things that matter most:</p>
+<ul>
+<li><strong>Muzzle velocity is used as the striking velocity.</strong> There is no exterior</li>
+</ul>
+<p>  ballistics in this simulation, so every round arrives as though fired at</p>
+<p>  point blank. A round quoted at 1700 m/s does not arrive at 1700 m/s at</p>
+<p>  2000 m, and the model will happily let you forget that.</p>
+<ul>
+<li><strong>Sub-calibre rod dimensions are reconstructions.</strong> Calibre, projectile mass</li>
+</ul>
+<p>  and muzzle velocity are published and reliable. <code>rodD</code> and <code>rodLd</code> for</p>
+<p>  modern APFSDS mostly are not, and where they are not they are inferred from</p>
+<p>  the published mass at a plausible L/D. They are consistent with the mass —</p>
+<p>  which is what the solver actually integrates — but they are not the real rod.</p>
+<ul>
+<li><strong>Core materials are a class, not a specification</strong> — steel, tungsten</li>
+</ul>
+<p>  carbide, tungsten heavy alloy, depleted uranium.</p>
+<p>So the catalogue is a set of plausible reconstructions with correct mass and</p>
+<p>velocity, not a data table, and the penetration figures it produces inherit</p>
+<p>that status. CI asserts that every entry meshes and fires with finite stats,</p>
+<p>and that the 1939 and 2003 rounds do not land in the same place. It does not</p>
+<p>assert any round's penetration against any plate, because there is nothing</p>
+<p>here to validate that against.</p>
 <hr>
 <h2 id="9-extension-points">9. Extension points</h2>
 <p>The layering is deliberate, so a better model can replace a worse one without</p>

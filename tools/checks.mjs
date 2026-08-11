@@ -17,6 +17,7 @@ import { Scene, makeLayer, makeModule } from '../src/sim/scene.js';
 import { makeProjectileConfig } from '../src/sim/projectileTypes.js';
 import { PROJECTILE_TYPES, TYPE_ORDER } from '../src/sim/projectileTypes.js';
 import { PRESETS, PRESET_ORDER } from '../src/ui/presets.js';
+import { AMMO, AMMO_ORDER, ammoLabel } from '../src/ui/ammo.js';
 import { sandwichFlyerVelocity } from '../src/sim/era.js';
 import { MATERIALS, ARMOUR_KEYS } from '../src/materials/database.js';
 import { BOND } from '../src/sim/pd/domain.js';
@@ -88,6 +89,99 @@ for (const key of PRESET_ORDER) {
   } catch (e) {
     fail(`${key}: threw — ${e.message}`);
   }
+}
+
+console.log('\n== the Soviet laminate presets ==');
+{
+  // The T-series glacis presets are the only ones with a soft filler between
+  // steel, so they are the only ones that exercise a low-impedance layer in
+  // the middle of the stack. Assert the geometry the published figures give,
+  // not a penetration number - the layout is a claim about the plate, the
+  // penetration is a claim about the model.
+  const los = (key) => PRESETS[key].scene.layers.reduce(
+    (s, l) => s + l.thickness / Math.cos(((l.slope || 0) * Math.PI) / 180), 0);
+  const normal = (key) => PRESETS[key].scene.layers.reduce((s, l) => s + l.thickness, 0);
+
+  check(Math.abs(normal('t72-ural-ufp') - 0.205) < 1e-6,
+    `T-72 Ural glacis is 80 + 105 + 20 mm = ${(normal('t72-ural-ufp') * 1000).toFixed(0)} mm of plate`);
+  check(Math.abs(los('t72-ural-ufp') - 0.547) < 0.005,
+    `and ${(los('t72-ural-ufp') * 1000).toFixed(0)} mm along the line of sight at 68 deg`);
+  check(PRESETS['t72-ural-ufp'].scene.layers.some((l) => l.material === 'textolite'),
+    'its middle layer is textolite, not more steel');
+  check(PRESETS['t90a-ufp'].scene.layers.some((l) => l.kind === 'era'),
+    'the T-90A preset carries a reactive cassette');
+
+  // and all four must actually survive a shot, not just parse
+  for (const key of ['t55-ufp', 't72-ural-ufp', 't72b-ufp', 't90a-ufp']) {
+    const w = new World();
+    w.settings.deterministic = true;
+    w.settings.quality = 'low';
+    w.settings.recordFrames = false;
+    w.setScene(Scene.fromJSON(PRESETS[key].scene));
+    w.setProjectile(makeProjectileConfig(PRESETS[key].projectile.type, PRESETS[key].projectile));
+    w.fire();
+    let f = 0;
+    while (w.state !== 'done' && f < 3000) { w.update(1 / 60); f++; }
+    check(Number.isFinite(w.stats.maxDepth) && Number.isFinite(w.stats.residualVelocity)
+      && w.stats.residualVelocity >= 0,
+      `${key}: runs to completion (${(w.stats.maxDepth * 1000).toFixed(0)} mm, `
+      + `residual ${w.stats.residualVelocity.toFixed(0)} m/s)`);
+  }
+}
+
+console.log('\n== the historic ammunition catalogue ==');
+{
+  check(AMMO_ORDER.length === Object.keys(AMMO).length,
+    `every round is in the ordering (${AMMO_ORDER.length} rounds)`);
+  let ordered = true;
+  for (let i = 1; i < AMMO_ORDER.length; i++) {
+    if (AMMO[AMMO_ORDER[i]].year < AMMO[AMMO_ORDER[i - 1]].year) ordered = false;
+  }
+  check(ordered, `the list reads oldest first (${AMMO[AMMO_ORDER[0]].year} to `
+    + `${AMMO[AMMO_ORDER[AMMO_ORDER.length - 1]].year})`);
+
+  // Every entry must name a real projectile type and describe itself.
+  let wellFormed = 0;
+  for (const key of AMMO_ORDER) {
+    const a = AMMO[key];
+    const ok = !!PROJECTILE_TYPES[a.type] && typeof a.name === 'string' && a.name.length > 0
+      && typeof a.vehicle === 'string' && a.vehicle.length > 0
+      && Number.isFinite(a.year) && a.cfg && Number.isFinite(a.cfg.velocity)
+      && a.cfg.velocity > 0 && Number.isFinite(a.cfg.caliber) && a.cfg.caliber > 0
+      && ammoLabel(key).includes(a.name);
+    if (ok) wellFormed++; else fail(`${key}: malformed entry`);
+  }
+  check(wellFormed === AMMO_ORDER.length, `all ${wellFormed} entries are well formed`);
+
+  // and every one of them must mesh and fire without throwing. This is the
+  // check that catches a mass/geometry combination the mesher cannot resolve,
+  // which is the realistic failure mode for a hand-written catalogue.
+  let fired = 0;
+  for (const key of AMMO_ORDER) {
+    const a = AMMO[key];
+    try {
+      const r = run({ type: a.type, proj: a.cfg, layers: [{ material: 'rha', thickness: 0.10 }] });
+      const ok = r.w.domain && r.w.domain.n > 200
+        && Number.isFinite(r.stats.maxDepth) && r.stats.maxDepth >= 0
+        && Number.isFinite(r.stats.residualVelocity) && r.stats.residualVelocity >= 0;
+      if (ok) fired++; else fail(`${key}: ran but produced unusable stats`);
+    } catch (e) {
+      fail(`${key}: threw — ${e.message}`);
+    }
+  }
+  check(fired === AMMO_ORDER.length,
+    `all ${fired} rounds mesh and fire at 100 mm RHA`);
+
+  // The catalogue exists to show the problem getting harder. A 1939 2-pdr and
+  // a 2003 M829A3 must not land in the same place.
+  const old = run({ type: AMMO['qf2pdr-ap'].type, proj: AMMO['qf2pdr-ap'].cfg,
+    layers: [{ material: 'rha', thickness: 0.10 }] });
+  const modern = run({ type: AMMO['m829a3'].type, proj: AMMO['m829a3'].cfg,
+    layers: [{ material: 'rha', thickness: 0.10 }] });
+  check(modern.stats.maxDepth > old.stats.maxDepth,
+    `1939 vs 2003 against the same 100 mm plate: `
+    + `2-pdr ${(old.stats.maxDepth * 1000).toFixed(0)} mm, `
+    + `M829A3 ${(modern.stats.maxDepth * 1000).toFixed(0)} mm`);
 }
 
 console.log('\n== explosive reactive armour ==');
@@ -287,6 +381,37 @@ for (const k of ARMOUR_KEYS) {
     + `(${(w1.stats.maxDepth * 1000).toFixed(0)} vs ${(s1.stats.maxDepth * 1000).toFixed(0)} mm)`);
   check(MATERIALS.wha.rho > 2 * MATERIALS.rha.rho,
     `and costs the mass to do it (${MATERIALS.wha.rho} vs ${MATERIALS.rha.rho} kg/m3)`);
+
+  // Textolite is the opposite trade and must behave like it: a soft laminate
+  // filler, far worse than steel per millimetre. If it ever tests as
+  // *stronger* than RHA at equal thickness the constants have been mistyped,
+  // and the T-72 glacis preset built on it becomes nonsense.
+  //
+  // Note on how this is measured: depth saturates once a round exits and
+  // keeps flying, so at 100 mm both materials report the same number and a
+  // depth comparison there proves nothing. Use residual velocity where both
+  // perforate, and thickness where only one does.
+  const tx = MATERIALS.textolite;
+  check(tx && tx.rho < MATERIALS.rha.rho * 0.25,
+    `textolite is a light filler (${tx.rho} vs ${MATERIALS.rha.rho} kg/m3 for RHA)`);
+  check(tx && tx.UTS < MATERIALS.rha.UTS * 0.15,
+    `and a weak one (${(tx.UTS / 1e6).toFixed(0)} vs ${(MATERIALS.rha.UTS / 1e6).toFixed(0)} MPa)`);
+  const txThin = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 },
+    layers: [{ material: 'textolite', thickness: 0.10, height: 1.0 }] });
+  const rhaThin = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 },
+    layers: [{ material: 'rha', thickness: 0.10, height: 1.0 }] });
+  check(txThin.w.domain.n > 200 && Number.isFinite(txThin.stats.maxDepth),
+    `textolite meshes and runs (${txThin.w.domain.n} nodes)`);
+  check(txThin.stats.residualVelocity > rhaThin.stats.residualVelocity * 1.5,
+    `100 mm of textolite costs the round far less speed than 100 mm of steel `
+    + `(exits at ${txThin.stats.residualVelocity.toFixed(0)} vs `
+    + `${rhaThin.stats.residualVelocity.toFixed(0)} m/s)`);
+  const txThick = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 },
+    layers: [{ material: 'textolite', thickness: 0.20, height: 1.0 }] });
+  const rhaThick = run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6 },
+    layers: [{ material: 'rha', thickness: 0.20, height: 1.0 }] });
+  check(txThick.stats.perforated && !rhaThick.stats.perforated,
+    '200 mm of textolite is perforated by the shot that 200 mm of steel stops');
 }
 
 console.log('\n== aiming ==');

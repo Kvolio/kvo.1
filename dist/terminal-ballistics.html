@@ -897,6 +897,16 @@ const MATERIALS = {
   }),
 
 
+  textolite: mat({
+    key: 'textolite', name: 'Textolite (phenolic-cotton laminate)', class: 'composite',
+    rho: 1380, E: 8.0e9, nu: 0.35, Y: 0.13e9, UTS: 0.10e9, epsF: 0.022,
+    G0: 3.0e3, BHN: 30, jcC: 0.0, Tm: 500, cp: 1500, jcM: 1.0,
+    brittle: 0.55, weibull: 12, erosionResist: 0.15,
+    color: '#8a6a3f', color2: '#4f3c22',
+    source: 'PTK-grade cotton-fabric phenolic laminate (GOST 5-78 class): rho 1.3-1.4 g/cm3, tensile ~100 MPa, compressive ~150-200 MPa, E ~ 6-10 GPa in plane.',
+    notes: 'The filler of Soviet combination glacis armour, sandwiched between steel plates. It is not a "hard" armour material at all - a fifth the density of steel and a tenth its strength. Its value is as a low-impedance spacer: it costs the penetrator length and time, disrupts a shaped-charge jet across the impedance mismatch at each interface, and adds line-of-sight thickness for very little mass. Judge it by the areal-mass column, not by how much it stops on its own.',
+  }),
+
   // ------------------------------------------------ heavy and exotic armour
   // Dense metals are poor armour per unit MASS - their merit is per unit
   // THICKNESS. Where volume is the binding constraint rather than weight
@@ -1014,7 +1024,7 @@ const MATERIALS = {
 const ARMOUR_KEYS = [
   'rha', 'hha', 'fha', 'cast', 'mild', 'maraging', 'boxsteel',
   'al5083', 'al7039', 'ti64', 'tantalum', 'wha', 'du',
-  'alumina', 'sic', 'b4c', 'tib2', 'uhmwpe', 'grp', 'aramid', 'rubber',
+  'alumina', 'sic', 'b4c', 'tib2', 'uhmwpe', 'grp', 'aramid', 'textolite', 'rubber',
 ];
 
 /** Materials that make sense as a penetrator body/core in the UI. */
@@ -7148,6 +7158,82 @@ const PRESETS = {
   },
 
   // ---------------------------------------------------------------------
+  // POST-WAR COMBINATION GLACIS
+  //
+  // Soviet "combination armour" is a steel-textolite-steel laminate carried at
+  // extreme obliquity. The published layer breakdowns below are the ones that
+  // recur in the open literature; they are not measurements, and armour
+  // layouts of vehicles still in service are not public. Treat the layer
+  // thicknesses as representative of the design idea - a low-density spacer
+  // between steel skins, angled hard - rather than as the armour of any
+  // particular tank on any particular day.
+  //
+  // Slope is from the vertical, so a 68 deg glacis is the near-horizontal one.
+  // ---------------------------------------------------------------------
+  't72-ural-ufp': {
+    name: 'T-72 Ural — glacis, 80/105/20 at 68°',
+    note: 'The classic combination glacis: high-hardness steel, a thick textolite filler, a thin steel back plate, all at 68°. 205 mm of material becomes about 550 mm of line of sight, and the textolite contributes barely a tenth of the mass of the same thickness of steel. Fired on here by the 105 mm APDS it was designed against.',
+    projectile: { type: 'apds', caliber: 0.105, coreD: 0.036, coreLd: 4.2, mass: 3.8, velocity: 1478, standoff: 1.8 },
+    scene: {
+      layers: [
+        { material: 'hha', thickness: 0.080, slope: 68, height: 1.3, label: 'front plate' },
+        { material: 'textolite', thickness: 0.105, slope: 68, bonded: true, height: 1.3, label: 'textolite filler' },
+        { material: 'rha', thickness: 0.020, slope: 68, bonded: true, height: 1.3, label: 'back plate' },
+      ],
+      modules: [
+        { type: 'crew', x: 1.25, y: 0.05, w: 0.34, h: 0.55, label: 'driver' },
+        { type: 'ammo', x: 1.70, y: -0.28, w: 0.36, h: 0.28, label: 'carousel' },
+      ],
+    },
+  },
+  't72b-ufp': {
+    name: 'T-72B — glacis with reflecting plates, at 68°',
+    note: 'The later laminate trades textolite for thin steel plates separated by a compliant interlayer. Each interface reflects part of the shock and each plate has to be cut separately, which is worth more against a long rod than the same mass of textolite is.',
+    projectile: { type: 'apfsds', caliber: 0.125, rodD: 0.022, rodLd: 20, mass: 3.9, velocity: 1700, standoff: 2.4 },
+    scene: {
+      layers: [
+        { material: 'hha', thickness: 0.060, slope: 68, height: 1.3, label: 'front plate' },
+        { material: 'rubber', thickness: 0.010, slope: 68, bonded: true, height: 1.3, label: 'interlayer' },
+        { material: 'rha', thickness: 0.035, slope: 68, bonded: true, height: 1.3, label: 'reflecting plate' },
+        { material: 'rubber', thickness: 0.010, slope: 68, bonded: true, height: 1.3, label: 'interlayer' },
+        { material: 'rha', thickness: 0.050, slope: 68, bonded: true, height: 1.3, label: 'back plate' },
+      ],
+      modules: [
+        { type: 'crew', x: 1.30, y: 0.05, w: 0.34, h: 0.55, label: 'driver' },
+        { type: 'ammo', x: 1.75, y: -0.28, w: 0.36, h: 0.28, label: 'carousel' },
+      ],
+    },
+  },
+  't90a-ufp': {
+    name: 'T-90A — glacis with heavy ERA, at 68°',
+    note: 'The T-72B laminate with a Kontakt-5 class cassette on top. The heavy front plate is the point: it is thick enough to carry real momentum against a long rod rather than merely to confine the charge. Compare with the cassette deleted.',
+    projectile: { type: 'apfsds', caliber: 0.120, rodD: 0.022, rodLd: 26, mass: 4.6, velocity: 1670, core: 'du', standoff: 2.6 },
+    scene: {
+      layers: [
+        { kind: 'era', label: 'Kontakt-5', plate: 'hha', slope: 68, height: 1.0,
+          frontThickness: 0.015, chargeThickness: 0.010, backThickness: 0.005 },
+        { material: 'hha', thickness: 0.060, slope: 68, gap: 0.02, height: 1.3, label: 'front plate' },
+        { material: 'rubber', thickness: 0.010, slope: 68, bonded: true, height: 1.3, label: 'interlayer' },
+        { material: 'rha', thickness: 0.035, slope: 68, bonded: true, height: 1.3, label: 'reflecting plate' },
+        { material: 'rha', thickness: 0.050, slope: 68, bonded: true, height: 1.3, label: 'back plate' },
+      ],
+      modules: [
+        { type: 'crew', x: 1.40, y: 0.05, w: 0.34, h: 0.55, label: 'driver' },
+        { type: 'ammo', x: 1.85, y: -0.28, w: 0.36, h: 0.28, label: 'carousel' },
+      ],
+    },
+  },
+  't55-ufp': {
+    name: 'T-55 — glacis, 100 mm at 60°',
+    note: 'Homogeneous steel, no laminate: 200 mm of line of sight from 100 mm of plate. The baseline every post-war combination array was trying to beat without gaining weight.',
+    projectile: { type: 'apcbc', caliber: 0.090, mass: 11.0, velocity: 850, standoff: 1.5 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.100, slope: 60, height: 1.3, label: 'glacis' }],
+      modules: [{ type: 'crew', x: 0.75, y: 0.05, w: 0.32, h: 0.52, label: 'driver' }],
+    },
+  },
+
+  // ---------------------------------------------------------------------
   // HISTORICAL PLATES
   //
   // Nominal design figures from published armour layouts, not measurements of
@@ -7261,11 +7347,217 @@ const PRESET_ORDER = [
   'single-plate', 'sloped-glacis', 'spaced-array', 'shatter-gap',
   'ceramic-composite', 'mbt-frontal', 'nera-sandwich', 'hesh-scab', 'aphe-interior',
   'era-light-heat', 'era-heavy-ke', 'era-insensitive', 'dense-metals',
+  't55-ufp', 't72-ural-ufp', 't72b-ufp', 't90a-ufp',
   'tiger1-ufp', 'tiger1-nose', 'tiger1-side-skirt', 'tiger2-ufp', 'panther-glacis',
   't34-glacis', 'is2-ufp', 'sherman-glacis', 'panzer4-front',
 ];
 
 __exports.__all = {PRESETS, PRESET_ORDER};
+Object.assign(__exports, __exports.__all);
+delete __exports.__all;
+
+});
+
+__def("src/ui/ammo.js", function (__exports, __req) {
+/**
+ * HISTORIC AMMUNITION
+ * ===================
+ *
+ * A catalogue of real tank rounds, WW2 to modern, as projectile configurations.
+ * Selecting one replaces the projectile and leaves the armour array alone, so
+ * the same target can be shot with a 1942 capped shot and a modern long rod
+ * back to back. This is deliberately separate from the scenario presets, which
+ * replace the whole scene.
+ *
+ * WHAT THE NUMBERS ARE
+ * --------------------
+ * Calibre, projectile mass and muzzle velocity are published figures and are
+ * reliable. Everything else is not:
+ *
+ *   - Muzzle velocity is used as the STRIKING velocity. There is no exterior
+ *     ballistics here, so every round is being fired at point blank. A round
+ *     quoted at 1700 m/s does not arrive at 1700 m/s at 2000 m.
+ *   - Sub-calibre rod dimensions (`rodD`, `rodLd`) are rarely published for
+ *     anything modern. Where they are not, they are inferred from the quoted
+ *     projectile mass and the core material's density at a plausible L/D. They
+ *     are consistent with the mass, which is what the simulation actually
+ *     integrates, but they are not the real rod.
+ *   - Core materials are the usual class for the round's generation - steel,
+ *     tungsten carbide, tungsten heavy alloy, depleted uranium - not a
+ *     specific alloy specification.
+ *
+ * So this is a catalogue of plausible reconstructions with correct mass and
+ * velocity, not a data table. Penetration figures the simulation produces from
+ * them should be read the same way.
+ */
+
+/**
+ * @typedef {object} AmmoEntry
+ * @property {string} name    what to show in the list
+ * @property {string} vehicle the vehicle that carried it
+ * @property {number} year    for ordering
+ * @property {string} type    projectile type key
+ * @property {object} cfg     overrides passed to makeProjectileConfig
+ * @property {string} [note]  what is interesting about it
+ */
+
+/** Stand-off is a simulation staging distance, not a range. */
+const KE = 1.4;      // full-calibre shot: mesh a little before contact
+const SAB = 2.4;     // sabot rounds need room to discard first
+
+const AMMO = {
+  // ------------------------------------------------------------ WW2, 1939-45
+  'qf2pdr-ap': {
+    name: '2-pdr AP shot', vehicle: 'Matilda II / Crusader', year: 1939, type: 'ap',
+    cfg: { caliber: 0.040, mass: 1.08, velocity: 792, ld: 3.2, standoff: KE },
+    note: 'Uncapped solid shot. Adequate in 1940 and obsolete by 1942; try it against anything face-hardened and watch it shatter.',
+  },
+  'kwk40-pzgr39': {
+    name: '7.5 cm PzGr. 39 (KwK 40)', vehicle: 'Panzer IV Ausf. F2-J', year: 1942, type: 'apcbc',
+    cfg: { caliber: 0.075, mass: 6.8, velocity: 790, standoff: KE },
+    note: 'Capped, ballistic-capped shot: the standard German medium-velocity AP round of the middle war.',
+  },
+  'm61-apcbc': {
+    name: '75 mm M61 APCBC', vehicle: 'M4 Sherman', year: 1942, type: 'apcbc',
+    cfg: { caliber: 0.075, mass: 6.79, velocity: 618, standoff: KE },
+    note: 'Low velocity by 1944 standards. The cap is doing a lot of work here — compare with the uncapped 2-pdr on face-hardened plate.',
+  },
+  'br350a': {
+    name: '76 mm BR-350A', vehicle: 'T-34 (F-34 gun)', year: 1941, type: 'apc',
+    cfg: { caliber: 0.0762, mass: 6.3, velocity: 655, standoff: KE },
+    note: 'Blunt-capped Soviet shot. The blunt nose is why it bites at obliquity where a pointed shot would glance.',
+  },
+  'kwk36-pzgr39': {
+    name: '8.8 cm PzGr. 39 (KwK 36)', vehicle: 'Tiger I', year: 1942, type: 'apcbc',
+    cfg: { caliber: 0.088, mass: 10.2, velocity: 773, standoff: KE },
+    note: 'The Tiger I round. Heavy, well-capped, and accurate; not especially fast.',
+  },
+  'kwk42-pzgr39': {
+    name: '7.5 cm PzGr. 39/42 (KwK 42)', vehicle: 'Panther', year: 1943, type: 'apcbc',
+    cfg: { caliber: 0.075, mass: 6.8, velocity: 935, standoff: KE },
+    note: 'Same shell weight as the KwK 40 round, 145 m/s faster. Velocity, not mass, is what made the Panther gun.',
+  },
+  'br365': {
+    name: '85 mm BR-365', vehicle: 'T-34-85 / SU-85', year: 1943, type: 'apcbc',
+    cfg: { caliber: 0.085, mass: 9.2, velocity: 792, standoff: KE },
+    note: 'The round that let a T-34 fight a Panther frontally, if not comfortably.',
+  },
+  'm62-apcbc': {
+    name: '76 mm M62 APCBC', vehicle: 'M4A3(76)W Sherman', year: 1944, type: 'apcbc',
+    cfg: { caliber: 0.076, mass: 7.0, velocity: 792, standoff: KE },
+    note: 'The up-gunned Sherman round. Still not enough against a Panther glacis; try it and see.',
+  },
+  'm93-hvap': {
+    name: '76 mm M93 HVAP', vehicle: 'M4A3(76)W Sherman', year: 1944, type: 'apcr',
+    cfg: { caliber: 0.076, mass: 4.26, velocity: 1036, standoff: KE },
+    note: 'Tungsten-carbide core in a light body. Very fast, very good up close, and it sheds velocity and bites badly at obliquity.',
+  },
+  '17pdr-apcbc': {
+    name: '17-pdr APCBC', vehicle: 'Sherman Firefly / Challenger', year: 1944, type: 'apcbc',
+    cfg: { caliber: 0.0765, mass: 7.65, velocity: 884, standoff: KE },
+    note: 'The best Allied full-calibre shot of the war.',
+  },
+  '17pdr-apds': {
+    name: '17-pdr APDS', vehicle: 'Sherman Firefly / Challenger', year: 1944, type: 'apds',
+    cfg: { caliber: 0.0765, coreD: 0.0305, coreLd: 4.0, mass: 1.90, velocity: 1203, standoff: SAB },
+    note: 'The first service discarding-sabot round. Enormous penetration for 1944 and famously inaccurate.',
+  },
+  'kwk43-pzgr39': {
+    name: '8.8 cm PzGr. 39/43 (KwK 43)', vehicle: 'Tiger II / Jagdpanther', year: 1944, type: 'apcbc',
+    cfg: { caliber: 0.088, mass: 10.16, velocity: 1000, standoff: KE },
+    note: 'The heaviest-hitting full-calibre AP round to see service in the war.',
+  },
+  'br471': {
+    name: '122 mm BR-471', vehicle: 'IS-2', year: 1944, type: 'apcbc',
+    cfg: { caliber: 0.122, mass: 25.0, velocity: 795, standoff: 1.8 },
+    note: '25 kg of shot. Its virtue is momentum rather than velocity: it defeats armour by breaking it up as much as by piercing it.',
+  },
+
+  // -------------------------------------------------------- Cold War, 1950-79
+  'br412d': {
+    name: '100 mm BR-412D APCBC', vehicle: 'T-54 / T-55', year: 1953, type: 'apcbc',
+    cfg: { caliber: 0.100, mass: 15.88, velocity: 895, standoff: 1.6 },
+    note: 'The standard Soviet full-calibre AP round of the 1950s and 60s.',
+  },
+  'l28-apds': {
+    name: '105 mm L28 APDS', vehicle: 'Centurion / M60 (L7 gun)', year: 1959, type: 'apds',
+    cfg: { caliber: 0.105, coreD: 0.036, coreLd: 4.2, mass: 3.8, velocity: 1478, standoff: SAB },
+    note: 'The round the L7 gun was built around, and the reason every Western tank carried that gun for twenty years.',
+  },
+  '3bm6': {
+    name: '115 mm 3BM6 APFSDS', vehicle: 'T-62', year: 1962, type: 'apfsds',
+    cfg: { caliber: 0.115, rodD: 0.030, rodLd: 12, mass: 5.5, velocity: 1615, core: 'apsteel', standoff: SAB },
+    note: 'The first service fin-stabilised long rod. Steel, short and stubby by modern standards, but it started the line every rod since belongs to.',
+  },
+  'm456-heat': {
+    name: '105 mm M456 HEAT-T', vehicle: 'M60 / Centurion', year: 1962, type: 'heat',
+    cfg: { caliber: 0.105, mass: 10.5, velocity: 1173, standoff: 0.8 },
+    note: 'Chemical energy, so its penetration barely depends on impact velocity. The counter is spaced or reactive armour, not thicker steel.',
+  },
+  '3bm15': {
+    name: '125 mm 3BM15 APFSDS', vehicle: 'T-72 Ural', year: 1972, type: 'apfsds',
+    cfg: { caliber: 0.125, rodD: 0.022, rodLd: 20, mass: 3.9, velocity: 1780, core: 'wha', standoff: SAB },
+    note: 'Tungsten-cored rod with a steel body. The armour it was meant to beat is in the T-72 and Chieftain presets.',
+  },
+  'm735': {
+    name: '105 mm M735 APFSDS', vehicle: 'M60A3 / M1 Abrams', year: 1978, type: 'apfsds',
+    cfg: { caliber: 0.105, rodD: 0.024, rodLd: 15, mass: 3.7, velocity: 1501, core: 'wha', standoff: SAB },
+    note: 'The first US long rod in service, and the round that made the 105 mm gun competitive again.',
+  },
+
+  // ----------------------------------------------------------- Modern, 1980-
+  'm111-hetz': {
+    name: '105 mm M111 Hetz', vehicle: 'Merkava / M60', year: 1979, type: 'apfsds',
+    cfg: { caliber: 0.105, rodD: 0.026, rodLd: 13, mass: 3.7, velocity: 1455, core: 'wha', standoff: SAB },
+    note: 'The Israeli round whose performance against T-72 glacis prompted the move to the 3BM22 and to reactive armour.',
+  },
+  'm833': {
+    name: '105 mm M833 APFSDS (DU)', vehicle: 'M60A3 / M1', year: 1983, type: 'apfsds',
+    cfg: { caliber: 0.105, rodD: 0.023, rodLd: 20, mass: 3.7, velocity: 1494, core: 'du', standoff: SAB },
+    note: 'First US depleted-uranium rod. Watch the nose: DU sheds material in shear bands instead of mushrooming, so it stays sharp.',
+  },
+  '3bm42-mango': {
+    name: '125 mm 3BM42 Mango', vehicle: 'T-72B / T-80U / T-90', year: 1986, type: 'apfsds',
+    cfg: { caliber: 0.125, rodD: 0.021, rodLd: 22, mass: 4.85, velocity: 1700, core: 'wha', standoff: SAB },
+    note: 'Two tungsten slugs in a steel body. Designed for the era when everything it faced had reactive armour on the front.',
+  },
+  'm829a1': {
+    name: '120 mm M829A1 APFSDS (DU)', vehicle: 'M1A1 Abrams', year: 1988, type: 'apfsds',
+    cfg: { caliber: 0.120, rodD: 0.027, rodLd: 24, mass: 4.6, velocity: 1575, core: 'du', standoff: SAB },
+    note: 'The "silver bullet". A long DU rod at high velocity is the reference threat every modern array is designed against.',
+  },
+  'dm53': {
+    name: '120 mm DM53 APFSDS', vehicle: 'Leopard 2A6 (L55)', year: 2000, type: 'apfsds',
+    cfg: { caliber: 0.120, rodD: 0.022, rodLd: 30, mass: 5.0, velocity: 1750, core: 'wha', standoff: SAB },
+    note: 'Tungsten rather than uranium, and very long: it makes up in L/D and muzzle velocity what it gives away in density.',
+  },
+  '3bm46-svinets': {
+    name: '125 mm 3BM46 Svinets', vehicle: 'T-80U / T-90A', year: 1991, type: 'apfsds',
+    cfg: { caliber: 0.125, rodD: 0.022, rodLd: 27, mass: 4.85, velocity: 1700, core: 'du', standoff: SAB },
+    note: 'Longer rod than Mango, uranium core, sized to the full length of the autoloader carousel.',
+  },
+  'm829a3': {
+    name: '120 mm M829A3 APFSDS (DU)', vehicle: 'M1A2 Abrams', year: 2003, type: 'apfsds',
+    cfg: { caliber: 0.120, rodD: 0.025, rodLd: 32, mass: 10.0, velocity: 1555, core: 'du', standoff: SAB },
+    note: 'Heavier and longer than the A1, and specifically shaped to get through heavy reactive armour before the main array. Try it on the T-90 preset with and without the cassette.',
+  },
+  'm830a1-heat': {
+    name: '120 mm M830A1 HEAT-MP', vehicle: 'M1A1 / M1A2 Abrams', year: 1994, type: 'heat',
+    cfg: { caliber: 0.120, mass: 11.4, velocity: 1410, standoff: 0.9 },
+    note: 'Multipurpose shaped charge. Against a modern frontal array it is the wrong tool, which is the point of trying it on one.',
+  },
+};
+
+/** Oldest first: the list reads as a history of the problem. */
+const AMMO_ORDER = Object.keys(AMMO).sort((a, b) => AMMO[a].year - AMMO[b].year);
+
+/** Label for the picker: year, vehicle, round. */
+function ammoLabel(key) {
+  const a = AMMO[key];
+  return `${a.year}  ${a.vehicle} — ${a.name}`;
+}
+
+__exports.__all = {AMMO, AMMO_ORDER, ammoLabel};
 Object.assign(__exports, __exports.__all);
 delete __exports.__all;
 
@@ -7609,6 +7901,7 @@ __def("src/ui/app.js", function (__exports, __req) {
 
 const { el, panel, row, num, select, slider, toggle, kv, clear, panelState } = __req("src/ui/dom.js");
 const { PRESETS, PRESET_ORDER } = __req("src/ui/presets.js");
+const { AMMO, AMMO_ORDER, ammoLabel } = __req("src/ui/ammo.js");
 const { MATERIALS, ARMOUR_KEYS, PENETRATOR_KEYS, getMaterial, registerMaterial } = __req("src/materials/database.js");
 const { PROJECTILE_TYPES, TYPE_ORDER, makeProjectileConfig } = __req("src/sim/projectileTypes.js");
 const { Scene, makeLayer, makeModule, expandEra, MODULE_TYPES } = __req("src/sim/scene.js");
@@ -7724,13 +8017,44 @@ class App {
     const p = panel('Projectile', { tag: t.family });
     p.body.appendChild(row('Type', select(
       TYPE_ORDER.map((k) => ({ value: k, label: PROJECTILE_TYPES[k].name.split(' — ')[0] })),
-      cfg.type, (k) => { w.setProjectile(makeProjectileConfig(k)); this.refreshLeft(); this.refreshRight(); },
+      cfg.type, (k) => {
+        this.ammoKey = '';
+        w.setProjectile(makeProjectileConfig(k));
+        this.refreshLeft(); this.refreshRight();
+      },
     )));
     p.body.appendChild(el('div', { class: 'note' }, t.mechanism));
+
+    // HISTORIC ROUNDS
+    // Separate from the scenario presets on purpose: this replaces the
+    // projectile and leaves the armour alone, so the same target can be shot
+    // with a 1942 capped shot and a modern long rod back to back.
+    p.body.appendChild(row('Historic round', select(
+      [{ value: '', label: '— pick a service round —' },
+        ...AMMO_ORDER.map((k) => ({ value: k, label: ammoLabel(k) }))],
+      this.ammoKey || '',
+      (k) => {
+        if (!k) { this.ammoKey = ''; return; }
+        const a = AMMO[k];
+        this.ammoKey = k;
+        w.setProjectile(makeProjectileConfig(a.type, a.cfg));
+        this.refreshLeft(); this.refreshRight();
+      },
+    )));
+    if (this.ammoKey && AMMO[this.ammoKey]) {
+      p.body.appendChild(el('div', { class: 'note' }, AMMO[this.ammoKey].note));
+      p.body.appendChild(el('div', { class: 'hint' },
+        'Muzzle velocity is used as the STRIKING velocity — there is no exterior '
+        + 'ballistics here, so every round arrives as if fired at point blank. Rod '
+        + 'dimensions for sub-calibre rounds are reconstructed to match the published '
+        + 'mass where the real ones are not public; see src/ui/ammo.js.'));
+    }
 
     const set = (key, v) => {
       const next = { ...w.projectileCfg, [key]: v };
       w.setProjectile(next);
+      // hand-editing a parameter means this is no longer that service round
+      this.ammoKey = '';
       this.refreshLeft(); this.refreshRight();
     };
 
