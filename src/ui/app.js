@@ -348,27 +348,67 @@ export class App {
   panelArray() {
     const w = this.world, sc = w.scene;
     const p = panel('Armour array', { tag: `${sc.activeLayers().length} layers` });
-    const changed = () => { sc.rebuild(); w.reset(); this.refreshRight(); };
+    // The scene rebuild and the world reset are cheap and have to happen at
+    // once - anything reading the scene on the next frame depends on them. The
+    // PANEL rebuild is not urgent: it only re-renders totals that are already
+    // correct in the underlying data. Coalescing it into the next animation
+    // frame lets the browser paint an in-place edit - a description, a colour
+    // swatch - before it spends time recreating several hundred DOM nodes,
+    // including the <select> that was just used. That ordering is what made
+    // switching material feel laggy: the text was queued behind its own
+    // rebuild.
+    let pendingRefresh = 0;
+    const changed = () => {
+      sc.rebuild();
+      w.reset();
+      if (pendingRefresh) return;
+      pendingRefresh = requestAnimationFrame(() => {
+        pendingRefresh = 0;
+        this.refreshRight();
+      });
+    };
 
     sc.layers.forEach((Lr, idx) => {
       const m = getMaterial(Lr.material);
       const open = this.openLayer === Lr.id;
       const box = el('div', { class: `layer${open ? ' open' : ''}${this.renderer.selection && this.renderer.selection.id === Lr.id ? ' sel' : ''}` });
+      const swatchEl = el('span', { class: 'sw', style: `background:${m.color}` });
+      const nameEl = el('span', { class: 'nm' }, Lr.label || m.name);
       const head = el('div', { class: 'lh', onclick: () => { this.openLayer = open ? null : Lr.id; this.renderer.selection = { kind: 'layer', id: Lr.id, obj: Lr }; this.refreshRight(); } },
-        el('span', { class: 'sw', style: `background:${m.color}` }),
-        el('span', { class: 'nm' }, Lr.label || m.name),
+        swatchEl, nameEl,
         el('span', { class: 'th' }, `${(Lr.thickness * 1000).toFixed(0)}mm ${Lr.slope ? `@${Lr.slope}°` : ''}`));
       const b = el('div', { class: 'lb' });
+      // What this material IS, right under the picker rather than buried below
+      // the geometry fields. The first line is generated from the material's
+      // own constants (see describeMaterial); the second is its role.
+      const hintEl = el('div', { class: 'hint' }, describeMaterial(m));
+      const noteEl = el('div', { class: 'note' }, m.notes || '');
       b.appendChild(row('Material', select(
         ARMOUR_KEYS.map((k) => ({
           value: k, label: MATERIALS[k].name, group: MATERIAL_GROUP[armourTier(k)],
         })), Lr.material,
-        (v) => { Lr.material = v; changed(); })));
-      // What this material IS, right under the picker rather than buried below
-      // the geometry fields. The first line is generated from the material's
-      // own constants (see describeMaterial); the second is its role.
-      b.appendChild(el('div', { class: 'hint' }, describeMaterial(m)));
-      if (m.notes) b.appendChild(el('div', { class: 'note' }, m.notes));
+        (v) => {
+          Lr.material = v;
+          // REPAINT THE DESCRIPTION FIRST, THEN DO THE WORK.
+          //
+          // changed() rebuilds this whole panel, which destroys and recreates
+          // the <select> that was just used and only then re-renders the text
+          // underneath it. Everything the reader is looking at therefore waited
+          // behind a scene rebuild, a world reset and a full panel rebuild -
+          // and on a phone that is also competing with the render loop. Writing
+          // the new text in place makes the description update on the same tick
+          // as the choice, whatever the rebuild costs afterwards.
+          const nm = getMaterial(v);
+          hintEl.textContent = describeMaterial(nm);
+          noteEl.textContent = nm.notes || '';
+          noteEl.style.display = nm.notes ? '' : 'none';
+          swatchEl.style.background = nm.color;
+          if (!Lr.label) nameEl.textContent = nm.name;
+          changed();
+        })));
+      b.appendChild(hintEl);
+      b.appendChild(noteEl);
+      if (!m.notes) noteEl.style.display = 'none';
       b.appendChild(row('Thickness (mm)', num(Lr.thickness * 1000, { dp: 1, step: 1, onchange: (v) => { Lr.thickness = Math.max(0.0005, v / 1000); changed(); } })));
       b.appendChild(row('Slope (°)', num(Lr.slope, { dp: 1, step: 5, onchange: (v) => {
         if (Lr.eraId !== undefined) sc.layers.forEach((q) => { if (q.eraId === Lr.eraId) q.slope = v; });
