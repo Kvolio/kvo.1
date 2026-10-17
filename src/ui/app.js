@@ -315,6 +315,7 @@ export class App {
     const tg = el('div', { class: 'grid2' });
     const t = (label, key) => tg.appendChild(toggle(label, o[key], (v) => { o[key] = v; }));
     t('Grid', 'showGrid'); t('2.5-D depth', 'extrude');
+    t('Smooth surface', 'smooth');
     t('Fragments', 'showFragments'); t('Trails', 'showTrails');
     t('Velocity vectors', 'showVectors'); t('Domain bounds', 'showCorridor');
     p.body.appendChild(tg);

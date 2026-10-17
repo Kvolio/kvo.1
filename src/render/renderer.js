@@ -22,7 +22,7 @@
  */
 
 import { UI, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, FIELD_SCALES, rgb, shade, hexToRgb } from './palette.js';
-import { NodeGL } from './nodegl.js';
+import { NodeGL, kernelLatticeSum } from './nodegl.js';
 import { clamp, DEG } from '../core/math.js';
 import { modulePoly, MODULE_TYPES } from '../sim/scene.js';
 import { ROLE } from '../sim/pd/domain.js';
@@ -63,6 +63,7 @@ export class Renderer {
       showFragments: true,
       showTrails: true,
       showFarField: true,
+      smooth: true,
       extrude: true,
       nodeGain: 1.0,
       velScale: FIELD_SCALES.velocity,
@@ -233,9 +234,73 @@ export class Renderer {
     return this.nodePointSize(world) > this.field.maxPointSize;
   }
 
+  /**
+   * Kernel radius in lattice spacings for the smooth surface. 1.6 overlaps each
+   * node with its four edge and four diagonal neighbours, which is the smallest
+   * radius that still gives a flat edge a straight, level contour.
+   */
+  static get SMOOTH_RADIUS() { return 1.6; }
+
+  /** Lattice sum for a kernel of `ratio` spacings, cached by value. */
+  kernelSum(ratio) {
+    const key = Math.round(ratio * 100);
+    if (!this._ksum) this._ksum = new Map();
+    let s = this._ksum.get(key);
+    if (s === undefined) { s = kernelLatticeSum(key / 100); this._ksum.set(key, s); }
+    return s;
+  }
+
+  /**
+   * The corridor's lateral band in screen space, for clipping the extruded
+   * copy of the node surface. Outside the band the far field draws its own back
+   * face; the two meet at this line.
+   */
+  corridorBand(d) {
+    const cam = this.cam;
+    const [cx, cy] = cam.toScreen(d.ox, d.oy);
+    const half = (d.width * 0.5 - this.edgeMargin(d)) * cam.scale;
+    return { cx, cy, lx: d.bx, ly: -d.by, lo: -half, hi: half };
+  }
+
   drawNodesGL(world, frame) {
     const n = this.fillFieldBuffers(world, frame);
     const size = this.nodePointSize(world);
+
+    // Smooth surface: continuum bodies drawn as a contour of the accumulated
+    // node field, not as a grid of squares. Falls back to the discrete path
+    // when the toggle is off, the programs did not build, or the zoom has taken
+    // the kernel past the GPU point-size ceiling.
+    if (this.opts.smooth && this.field.smoothOK) {
+      const cell = world.domain.dx * this.cam.scale;
+      const radiusPx = Math.max(Renderer.SMOOTH_RADIUS * this.opts.nodeGain * cell, 1.6);
+      if (radiusPx * 2 <= this.field.maxPointSize) {
+        const drawn = this.field.drawSmooth({
+          count: n,
+          cam: this.cam,
+          mode: this.opts.field,
+          radiusPx,
+          norm: 1 / this.kernelSum(radiusPx / Math.max(cell, 1e-6)),
+          extrude: this.extrudeVec(),
+          band: this.corridorBand(world.domain),
+          alpha: 1,
+        });
+        if (drawn) {
+          // detached nodes as individual pieces (a lone node is below the
+          // surface threshold and would otherwise vanish)
+          this.field.drawPoints({
+            count: n,
+            cam: this.cam,
+            mode: this.opts.field,
+            pointSize: Math.min(Math.max(size * 0.8, 2), this.field.maxPointSize),
+            extrude: null,
+            alpha: 1,
+            onlyFree: true,
+            skipUpload: true,
+          });
+          return;
+        }
+      }
+    }
     this.field.drawPoints({
       count: n,
       cam: this.cam,
@@ -319,33 +384,50 @@ export class Renderer {
     const ctx = this.ctx;
     const [ex, ey] = this.extrudeVec();
     const dom = world.domain;
-    // The static plate and the corridor punch-out are one decision, not two:
-    // drawing the undeformed plate without removing it inside the corridor
-    // paints intact armour straight over the channel the solver opened, which
-    // is the renderer contradicting the simulation.
+    // The static plate and the corridor are one decision, not two: drawing the
+    // undeformed plate inside the corridor would paint intact armour straight
+    // over the channel the solver opened, which is the renderer contradicting
+    // the simulation. The far field is therefore CLIPPED to lie outside the
+    // corridor, rather than painted and then punched out - a punch-out leaves
+    // an anti-aliased hairline of background along every cut edge, which is
+    // the seam that used to run across the plate.
     if (!this.opts.showFarField) return;
+    ctx.save();
+    if (dom) {
+      // Clip to everything except the corridor's lateral band, pulled in by the
+      // width of the CLAMPED rows at each corridor edge. Those rows are held at
+      // their reference positions by the boundary condition, so inside that
+      // margin the meshed plate is by construction identical to the undeformed
+      // plate: drawing the exact far-field geometry there shows the same thing
+      // the nodes would, with the true face lines instead of a lattice
+      // staircase, and it means the seam between the two never falls on an
+      // anti-aliased node contour. Only the lateral edges are inset: the front
+      // and back faces of the corridor are the real surfaces of the plate and
+      // must stay clear, or an opened channel would have intact armour behind it.
+      ctx.beginPath();
+      ctx.rect(0, 0, this.cam.w, this.cam.h);
+      this.corridorPath(dom, this.edgeMargin(dom), true);
+      ctx.clip('evenodd');
+    }
     for (const L of world.scene.activeLayers()) {
-      const base = this.matColor(L.mat.color);
-      const dark = this.matColor(L.mat.color2 || L.mat.color);
+      const lit = this.farFieldColour(L);
 
-      // back face (extruded depth)
+      // back face (extruded depth): the node surface's own dark copy is the
+      // lit colour at half brightness, so the two must be drawn the same way
       if (this.opts.extrude) {
         ctx.save();
         ctx.translate(ex, ey);
         this.polyPath(L.poly);
-        ctx.fillStyle = shade(dark, 0.55);
+        ctx.fillStyle = shade(lit, 0.5);
         ctx.fill();
         ctx.restore();
       }
 
-      // front face
+      // front face: flat, in exactly the colour an undamaged node is drawn in,
+      // so the corridor and the far field read as one plate
       this.polyPath(L.poly);
-      const b = this.polyGradient(L.poly, base, dark);
-      ctx.fillStyle = b;
+      ctx.fillStyle = rgb(lit.map((v) => Math.round(v)));
       ctx.fill();
-      ctx.lineWidth = 1 * this.dpr;
-      ctx.strokeStyle = shade(base, 1.35);
-      ctx.stroke();
 
       if (this.selection && this.selection.kind === 'layer' && this.selection.id === L.id) {
         ctx.lineWidth = 2.5 * this.dpr;
@@ -353,19 +435,18 @@ export class Renderer {
         ctx.stroke();
       }
     }
+    ctx.restore();
+  }
 
-    // Inside the meshed corridor the plate is drawn from nodes, so the static
-    // version has to be removed there — otherwise an opened channel would have
-    // undeformed plate showing through it. Only the plate is punched out, not
-    // the background, so the corridor itself stays invisible.
-    if (dom) {
-      ctx.save();
-      this.corridorPath(dom);
-      ctx.clip();
-      ctx.fillStyle = UI.bg0;
-      for (const L of world.scene.activeLayers()) { this.polyPath(L.poly); ctx.fill(); }
-      ctx.restore();
-    }
+  /** Width, in metres, of the clamped rows at each lateral corridor edge. */
+  edgeMargin(d) {
+    return Math.min(d.delta * 0.8, d.width * 0.25);
+  }
+
+  /** The colour an undamaged node of this layer's material is drawn in. */
+  farFieldColour(L) {
+    const base = this.matColor(L.mat.color);
+    return [Math.min(255, base[0] * 1.14), Math.min(255, base[1] * 1.14), Math.min(255, base[2] * 1.14)];
   }
 
   polyGradient(poly, base, dark) {
@@ -384,16 +465,21 @@ export class Renderer {
     return g;
   }
 
-  corridorPath(d) {
+  /**
+   * The corridor rectangle. `inset` pulls the two lateral edges in by that many
+   * metres; `append` adds it as a sub-path to whatever path is already open
+   * instead of starting a new one (needed to build an even-odd clip).
+   */
+  corridorPath(d, inset = 0, append = false) {
     const ctx = this.ctx, cam = this.cam;
-    const hw = d.width / 2;
+    const hw = d.width / 2 - inset;
     const pts = [
       [d.ox + d.bx * -hw, d.oy + d.by * -hw],
       [d.ox + d.ax * d.length + d.bx * -hw, d.oy + d.ay * d.length + d.by * -hw],
       [d.ox + d.ax * d.length + d.bx * hw, d.oy + d.ay * d.length + d.by * hw],
       [d.ox + d.bx * hw, d.oy + d.by * hw],
     ];
-    ctx.beginPath();
+    if (!append) ctx.beginPath();
     pts.forEach((p, i) => {
       const [sx, sy] = cam.toScreen(p[0], p[1]);
       if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
