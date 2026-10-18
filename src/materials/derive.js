@@ -60,6 +60,7 @@
  */
 
 import { clamp } from '../core/math.js';
+import { TUNE } from './tuning.js';
 
 /**
  * @param {object} m   material record from the database
@@ -75,7 +76,7 @@ export function derivePD(m, dx, mRatio, h) {
 
   // FAILURE CALIBRATION - see the note below. The bond fails at the material's
   // measured total failure strain, not at the fracture-energy critical stretch.
-  const sf = Math.max(m.epsF, sy * 1.05);
+  const sf = Math.max(m.epsF * (m.class === 'metal' ? TUNE.failMetal : 1), sy * 1.05);
 
   // Limit on the ISOTROPIC (hydrostatic) part of the bond stretch, from the
   // material's tensile strength: sigma_ten / E. A real metal cannot sustain

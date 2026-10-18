@@ -50,8 +50,8 @@
 
 import { SpatialGrid, BOND, ROLE } from './domain.js';
 import { clamp } from '../../core/math.js';
+import { TUNE } from '../../materials/tuning.js';
 
-const COMP_DUCTILITY = 4.0;   // shear/compressive plastic allowance / tensile
 
 /**
  * Contact-damping ramp. Zero at first touch, full at a quarter of the contact
@@ -80,7 +80,7 @@ export class PDSolver {
     // The set is an O(n) scan against a bond loop an order of magnitude larger,
     // so making it exact costs almost nothing.
     this.contactRefresh = 1;
-    this.friction = opts.friction ?? MU_FRICTION;
+    this.friction = opts.friction ?? TUNE.friction ?? MU_FRICTION;
 
     // CONTACT STIFFNESS
     // A contact pair has to transmit the same stress the bulk material does,
@@ -132,7 +132,10 @@ export class PDSolver {
     // dilatation only, so it changes cavity expansion without changing the
     // tensile/spall response. It is a calibration factor, not a derivation:
     // it is exposed in the UI and documented in MODEL.md §3.6.
-    this.confinement = opts.confinement ?? 1.8;
+    this.confinement = opts.confinement ?? TUNE.confinement;
+    this.compDuct = TUNE.compDuct;
+    this.triax = TUNE.triax;
+    this.triaxMax = TUNE.triaxMax;
 
     // contact stiffness also constrains the time step
     const dtC = 0.22 * 2 * Math.sqrt(ratio);
@@ -412,7 +415,15 @@ export class PDSolver {
       //   set of surviving bonds, so the instantaneous split is noisy and
       //   feeds back into more breakage. The plastic accumulator is monotonic
       //   and does not.
-      if (s >= bsf[b] || Math.abs(sp) >= bsf[b] * COMP_DUCTILITY) {
+      // Pressure raises the strain a ductile metal survives (see tuning.js). The
+      // factor is 1 in tension and under no pressure, so ceramics - which fail
+      // elastically, far below yield - are unaffected.
+      let sfe = bsf[b];
+      if (this.triax > 0 && sIso < 0) {
+        const sigStar = 0.76 * (-sIso / Math.max(bsy[b], 1e-6));
+        sfe *= Math.min(Math.exp(this.triax * sigStar), this.triaxMax);
+      }
+      if (s >= sfe || Math.abs(sp) >= sfe * this.compDuct) {
         bstate[b] = BOND.BROKEN;
         nBroken[i]++; nBroken[j]++;
         damage[i] = nBroken[i] / (nBond0[i] || 1);

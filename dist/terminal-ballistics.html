@@ -283,6 +283,94 @@ function __req(id) {
   return m;
 }
 
+__def("src/materials/tuning.js", function (__exports, __req) {
+/**
+ * CALIBRATION KNOBS
+ * =================
+ *
+ * The handful of numbers that map a continuum material onto the 2-D
+ * peridynamic lattice and that are fitted rather than measured. They live in
+ * one place so that tools/validate.mjs and tools/bench can move them without
+ * editing solver code, and so that every departure from "use the handbook value
+ * directly" is visible and explained.
+ *
+ * The defaults are the CALIBRATED values; see docs/MODEL.md for what each one
+ * does and why it is not simply 1.
+ */
+const TUNE = {
+  /**
+   * Multiplier on the failure stretch of metals. The handbook "elongation"
+   * (17 % for RHA) is a uniform-plus-necking engineering strain over a 50 mm
+   * gauge. The strain a small volume of metal reaches locally before it
+   * separates is the TRUE FRACTURE strain, ln(1/(1-RA)), several times larger.
+   * Using the elongation as the local limit makes metal tear at a fraction of
+   * the strain it really survives.
+   */
+  failMetal: 3.0,
+
+  /**
+   * Shear/compression failure allowance, as a multiple of the tensile failure
+   * stretch, applied to the ACCUMULATED PLASTIC stretch of a bond.
+   */
+  compDuct: 4.0,
+
+  /**
+   * Ductile-fracture suppression by pressure. In a Johnson-Cook damage law the
+   * strain to failure rises as exp(-D3 * sigma*), sigma* = mean stress / flow
+   * stress; under the compressive, confined flow of hole growth that is a large
+   * factor, under triaxial tension it is a small one. This is the exponent
+   * applied to the compressive triaxiality (0 = off).
+   */
+  triax: 0.0,
+  triaxMax: 6.0,
+
+  /** Extra stiffness against compressive dilatation (2-D -> 3-D confinement). */
+  confinement: 1.8,
+
+  /**
+   * Obliquity closure. A sloped plate has to be cut along its line of sight, an
+   * elliptical hole in three dimensions, and the surrounding plate then
+   * carries the load in every direction. The 2-D slab has one cut line and a
+   * single strap that can hinge, so beyond ~35 deg it offers little more than
+   * its normal thickness and the shot is turned instead of being stopped
+   * (measured: implied ballistic limit 0.6 x de Marre at 80 mm / 55 deg, and
+   * the T-34's 76 mm round defeating a Panther glacis). The strength of a
+   * sloped layer is raised by sec(slope)^obliquity to supply that missing
+   * resistance; 0 turns it off.
+   */
+  obliquity: 0,
+
+  /** Out-of-plane participation of a sloped layer: slab depth, and so mass and force capacity, scaled by sec(slope)^obliqueDepth. */
+  obliqueDepth: 1.0,
+
+  /**
+   * Half-width of the zone around the shot line in which armour may move, as a
+   * multiple of the penetrator diameter plus a multiple of the line-of-sight
+   * thickness. Armour beyond it is held. A huge value restores the old
+   * behaviour of leaving the whole corridor free.
+   */
+  /**
+   * Effective flow strength of armour METAL in the slice, as a multiple of the
+   * handbook yield. Cylindrical cavity expansion in plane strain needs less
+   * pressure than the spherical expansion of a real hole (about Y*(1+ln(E/3Y))
+   * against Y*(2/3)(1+ln(E/3Y)) with a larger confined constant in 3-D), and the
+   * slice has no hoop stress to fight. Fitted so that bisected ballistic limits
+   * against de Marre at 0 deg land inside +/-25 %.
+   */
+  plateYield: 1.5,
+
+  friction: 0.15,
+
+  freeZoneD: 1.2,
+  freeZoneT: 0.5,
+};
+
+__exports.__all = {TUNE};
+Object.assign(__exports, __exports.__all);
+delete __exports.__all;
+
+});
+
 __def("src/core/math.js", function (__exports, __req) {
 /**
  * Small numeric / geometric helpers shared by every subsystem.
@@ -446,57 +534,6 @@ function ensureCCW(p) {
 }
 
 __exports.__all = {TAU, DEG, clamp, lerp, invLerp, smoothstep, sign, hypot, makeRng, weibullFactor, rot, normalize, polyCentroid, polyArea, pointInPoly, polyBounds, distToPolyEdge, rayPoly, rectPoly, ensureCCW};
-Object.assign(__exports, __exports.__all);
-delete __exports.__all;
-
-});
-
-__def("src/materials/tuning.js", function (__exports, __req) {
-/**
- * CALIBRATION KNOBS
- * =================
- *
- * The handful of numbers that map a continuum material onto the 2-D
- * peridynamic lattice and that are fitted rather than measured. They live in
- * one place so that tools/validate.mjs and tools/bench can move them without
- * editing solver code, and so that every departure from "use the handbook value
- * directly" is visible and explained.
- *
- * The defaults are the CALIBRATED values; see docs/MODEL.md for what each one
- * does and why it is not simply 1.
- */
-const TUNE = {
-  /**
-   * Multiplier on the failure stretch of metals. The handbook "elongation"
-   * (17 % for RHA) is a uniform-plus-necking engineering strain over a 50 mm
-   * gauge. The strain a small volume of metal reaches locally before it
-   * separates is the TRUE FRACTURE strain, ln(1/(1-RA)), several times larger.
-   * Using the elongation as the local limit makes metal tear at a fraction of
-   * the strain it really survives.
-   */
-  failMetal: 1.0,
-
-  /**
-   * Shear/compression failure allowance, as a multiple of the tensile failure
-   * stretch, applied to the ACCUMULATED PLASTIC stretch of a bond.
-   */
-  compDuct: 4.0,
-
-  /**
-   * Ductile-fracture suppression by pressure. In a Johnson-Cook damage law the
-   * strain to failure rises as exp(-D3 * sigma*), sigma* = mean stress / flow
-   * stress; under the compressive, confined flow of hole growth that is a large
-   * factor, under triaxial tension it is a small one. This is the exponent
-   * applied to the compressive triaxiality (0 = off).
-   */
-  triax: 0.0,
-  triaxMax: 6.0,
-
-  /** Extra stiffness against compressive dilatation (2-D -> 3-D confinement). */
-  confinement: 1.8,
-};
-
-__exports.__all = {TUNE};
 Object.assign(__exports, __exports.__all);
 delete __exports.__all;
 
@@ -1844,6 +1881,7 @@ __def("src/sim/pd/domain.js", function (__exports, __req) {
  * comminuted material still push on each other).
  */
 
+const { TUNE } = __req("src/materials/tuning.js");
 const { makeRng, weibullFactor, clamp, pointInPoly, polyBounds } = __req("src/core/math.js");
 const { derivePD, bondPair, stableDt } = __req("src/materials/derive.js");
 const { sampleGradient } = __req("src/materials/database.js");
@@ -2019,6 +2057,7 @@ class PDDomain {
         this.matIndex[n] = this.internMat(m, pd, gradKey);
         // Local strength scatter: flaw density, not outcome dice.
         this.strength[n] = clamp(weibullFactor(this.rng, pd.weibull), 0.45, 1.7);
+        this.ymul[n] = sol.strengthMul ?? 1;
         this.lat_i[n] = i; this.lat_j[n] = j;
         n++;
       }
@@ -2056,6 +2095,7 @@ class PDDomain {
     this.damage = F(n);
     this.body = new Int16Array(n); this.group = new Int16Array(n);
     this.role = new Uint8Array(n); this.layer = new Int16Array(n);
+    this.ymul = new Float32Array(n).fill(1);
     this.matIndex = new Uint16Array(n);
     this.nBond = new Uint16Array(n); this.nBroken = new Uint16Array(n);
     this.flags = new Uint8Array(n);      // bit0 surface, bit1 lateral BC, bit2 clamped, bit3 free
@@ -2142,9 +2182,14 @@ class PDDomain {
         this.bref[b] = r;
         this.bk[b] = k;
         const sScale = 0.5 * (this.strength[i] + this.strength[j]);
-        this.bsy[b] = bp.sy;
-        this.bsf[b] = bp.sf * sScale;
-        this.bsten[b] = bp.sTen;
+        const yMul = Math.sqrt(this.ymul[i] * this.ymul[j]);   // obliquity closure, see tuning.js
+        // Effective flow strength of armour metal: see TUNE.plateYield. Only the
+        // yield stretch moves; the failure stretch is held at least 5 % above it.
+        const plateY = (this.role[i] === ROLE.ARMOUR && this.role[j] === ROLE.ARMOUR
+          && this.matTable[this.matIndex[i]].mat.class === 'metal') ? TUNE.plateYield : 1;
+        this.bsy[b] = bp.sy * yMul * plateY;
+        this.bsf[b] = Math.max(bp.sf * sScale * yMul, this.bsy[b] * 1.05);
+        this.bsten[b] = bp.sTen * yMul;
         this.bepf[b] = bp.epsF * sScale;
         // Kelvin-Voigt bond damping at ~4.5 % of critical for the equivalent
         // linear spring K = k/r0. Keeps the explicit scheme quiet at the
@@ -2180,9 +2225,9 @@ class PDDomain {
   }
 
   /** Mark lateral-boundary particles (absorbing band + clamped outer rows). */
-  applyLateralBC(insideTest) {
+  applyLateralBC(insideTest, freeHalf = Infinity) {
     const band = this.delta * 2.2;
-    const half = this.width * 0.5;
+    const half = Math.min(this.width * 0.5, freeHalf);
     for (let i = 0; i < this.n; i++) {
       const dxp = this.rx[i] - this.ox, dyp = this.ry[i] - this.oy;
       const u = dxp * this.bx + dyp * this.by;
@@ -2199,6 +2244,33 @@ class PDDomain {
       const f = 1 - clamp(dEdge / band, 0, 1);
       this.bcRate[i] = 4.0e5 * f * f;
       if (dEdge < this.delta * 0.8) this.flags[i] |= 4;   // clamped
+    }
+
+    // THE CORRIDOR'S TWO END FACES
+    // A plate square to the shot meets only the side walls above. A SLOPED
+    // plate also runs out through the front and rear faces of the corridor, and
+    // left alone those cut ends are free surfaces: the strap of plate between
+    // the side clamp and a free end is a cantilever, the shot lifts it like a
+    // flap and slides underneath, and a perfectly intact plate is then
+    // reported as perforated. Armour that continues past either end is
+    // supported exactly like armour that continues past the sides. The
+    // projectile is not touched - it has to be free to leave through the rear.
+    const len = this.length;
+    for (let i = 0; i < this.n; i++) {
+      if (this.role[i] !== ROLE.ARMOUR) continue;
+      const dxp = this.rx[i] - this.ox, dyp = this.ry[i] - this.oy;
+      const s = dxp * this.ax + dyp * this.ay;
+      const u = dxp * this.bx + dyp * this.by;
+      const dEnd = Math.min(s, len - s);
+      if (dEnd > band) continue;
+      const sOut = s < len * 0.5 ? -this.dx * 2 : len + this.dx * 2;
+      const outX = this.ox + this.ax * sOut + this.bx * u;
+      const outY = this.oy + this.ay * sOut + this.by * u;
+      if (!insideTest(outX, outY)) continue;
+      this.flags[i] |= 2;
+      const f = 1 - clamp(dEnd / band, 0, 1);
+      this.bcRate[i] = Math.max(this.bcRate[i], 4.0e5 * f * f);
+      if (dEnd < this.delta * 0.8) this.flags[i] |= 4;
     }
   }
 
@@ -2374,7 +2446,7 @@ class PDSolver {
     // The set is an O(n) scan against a bond loop an order of magnitude larger,
     // so making it exact costs almost nothing.
     this.contactRefresh = 1;
-    this.friction = opts.friction ?? MU_FRICTION;
+    this.friction = opts.friction ?? TUNE.friction ?? MU_FRICTION;
 
     // CONTACT STIFFNESS
     // A contact pair has to transmit the same stress the bulk material does,
@@ -5327,6 +5399,19 @@ const { Recorder } = __req("src/core/recorder.js");
 const { getMaterial } = __req("src/materials/database.js");
 const { clamp, pointInPoly, distToPolyEdge, normalize } = __req("src/core/math.js");
 const { analyticPanel } = __req("src/sim/analytics.js");
+const { TUNE } = __req("src/materials/tuning.js");
+
+/** Out-of-plane participation of a layer sloped `slopeDeg`: see TUNE.obliqueDepth. */
+function obliquityDepth(slopeDeg) {
+  const c = Math.max(0.25, Math.cos(Math.min(Math.abs(slopeDeg), 75) * Math.PI / 180));
+  return Math.pow(1 / c, TUNE.obliqueDepth);
+}
+
+/** Strength multiplier for a layer sloped `slopeDeg` from the plate normal: see TUNE.obliquity. */
+function obliquityStrength(slopeDeg) {
+  const c = Math.max(0.25, Math.cos(Math.min(Math.abs(slopeDeg), 75) * Math.PI / 180));
+  return Math.pow(1 / c, TUNE.obliquity);
+}
 
 /**
  * Discretisation presets. `budget` is the node count the mesher aims for,
@@ -5719,7 +5804,16 @@ class World {
     }
     plan.width = width;
     dom.build();
-    dom.applyLateralBC((x, y) => !!this.scene.isSolid(x, y));
+    // THE PLATE DOES NOT HINGE OVER THE WHOLE CORRIDOR
+    // A real plate is held by the hull around it in every direction, and a
+    // local hit deflects only the few thicknesses nearest the shot. The slice
+    // has no such support, so left free across the corridor it behaves as a
+    // 400 mm strap: it dishes like taffy, tears from its clamps and flaps open
+    // while the shot slips through the gap. Everything beyond a free zone sized
+    // to the penetrator and the line-of-sight thickness is held instead.
+    const freeHalf = plan.chemical ? Infinity
+      : TUNE.freeZoneD * plan.refD + TUNE.freeZoneT * this.scene.losTotal;
+    dom.applyLateralBC((x, y) => !!this.scene.isSolid(x, y), freeHalf);
 
     this.domain = dom;
     this.solver = new PDSolver(dom);
@@ -5805,6 +5899,8 @@ class World {
       dom.addSolid({
         poly: L.poly, material: L.mat, bodyId: 100 + idx, bondGroup: g,
         role: ROLE.ARMOUR, layerIdx: idx, label: L.label || L.mat.name,
+        strengthMul: obliquityStrength(L.slope || 0),
+        scale: obliquityDepth(L.slope || 0),
         gradientAxis: (x, y) => ((x - front) * n[0] + y * n[1]) / L.thickness,
       });
     });
@@ -5872,8 +5968,17 @@ class World {
       this.lastActivity = this.simTime;
     }
     const armourKE = s.kineticOf(ROLE.ARMOUR);
+    // QUIET MUST OUTLAST A GLANCING FIRST TOUCH
+    // On a sloped plate the nose can brush the face and register contact for a
+    // step or two, then register none for a few microseconds while the next
+    // part of the nose reaches the surface. A fixed 4 us of silence closed the
+    // run in that gap - four microseconds after first contact, with the round
+    // still in flight - and reported "no penetration, depth 0". The silence has
+    // to last for the round to cross a few lattice spacings at its own speed.
+    const vApproach = Math.max(this.projectile.speed || 0, 50);
+    const quietGap = Math.max(4e-6, 3 * d.dx / vApproach);
     const quiet = this.contactSeen && s.maxContactForce === 0 && s.brokenThisStep === 0
-      && (this.simTime - (this.lastActivity ?? 0)) > 4e-6;
+      && (this.simTime - (this.lastActivity ?? 0)) > quietGap;
     // WHEN THE RESOLVED WINDOW CLOSES
     //
     // This used to be a fixed clock: `elapsed > maxEventTime` and the run was
@@ -6595,7 +6700,7 @@ class World {
 
 
 
-__exports.__all = {PROJECTILE_TYPES, QUALITY, World};
+__exports.__all = {PROJECTILE_TYPES, obliquityDepth, obliquityStrength, QUALITY, World};
 Object.assign(__exports, __exports.__all);
 delete __exports.__all;
 

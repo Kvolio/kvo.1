@@ -42,6 +42,19 @@ import { Recorder } from '../core/recorder.js';
 import { getMaterial } from '../materials/database.js';
 import { clamp, pointInPoly, distToPolyEdge, normalize } from '../core/math.js';
 import { analyticPanel } from './analytics.js';
+import { TUNE } from '../materials/tuning.js';
+
+/** Out-of-plane participation of a layer sloped `slopeDeg`: see TUNE.obliqueDepth. */
+export function obliquityDepth(slopeDeg) {
+  const c = Math.max(0.25, Math.cos(Math.min(Math.abs(slopeDeg), 75) * Math.PI / 180));
+  return Math.pow(1 / c, TUNE.obliqueDepth);
+}
+
+/** Strength multiplier for a layer sloped `slopeDeg` from the plate normal: see TUNE.obliquity. */
+export function obliquityStrength(slopeDeg) {
+  const c = Math.max(0.25, Math.cos(Math.min(Math.abs(slopeDeg), 75) * Math.PI / 180));
+  return Math.pow(1 / c, TUNE.obliquity);
+}
 
 /**
  * Discretisation presets. `budget` is the node count the mesher aims for,
@@ -434,7 +447,16 @@ export class World {
     }
     plan.width = width;
     dom.build();
-    dom.applyLateralBC((x, y) => !!this.scene.isSolid(x, y));
+    // THE PLATE DOES NOT HINGE OVER THE WHOLE CORRIDOR
+    // A real plate is held by the hull around it in every direction, and a
+    // local hit deflects only the few thicknesses nearest the shot. The slice
+    // has no such support, so left free across the corridor it behaves as a
+    // 400 mm strap: it dishes like taffy, tears from its clamps and flaps open
+    // while the shot slips through the gap. Everything beyond a free zone sized
+    // to the penetrator and the line-of-sight thickness is held instead.
+    const freeHalf = plan.chemical ? Infinity
+      : TUNE.freeZoneD * plan.refD + TUNE.freeZoneT * this.scene.losTotal;
+    dom.applyLateralBC((x, y) => !!this.scene.isSolid(x, y), freeHalf);
 
     this.domain = dom;
     this.solver = new PDSolver(dom);
@@ -520,6 +542,8 @@ export class World {
       dom.addSolid({
         poly: L.poly, material: L.mat, bodyId: 100 + idx, bondGroup: g,
         role: ROLE.ARMOUR, layerIdx: idx, label: L.label || L.mat.name,
+        strengthMul: obliquityStrength(L.slope || 0),
+        scale: obliquityDepth(L.slope || 0),
         gradientAxis: (x, y) => ((x - front) * n[0] + y * n[1]) / L.thickness,
       });
     });
@@ -587,8 +611,17 @@ export class World {
       this.lastActivity = this.simTime;
     }
     const armourKE = s.kineticOf(ROLE.ARMOUR);
+    // QUIET MUST OUTLAST A GLANCING FIRST TOUCH
+    // On a sloped plate the nose can brush the face and register contact for a
+    // step or two, then register none for a few microseconds while the next
+    // part of the nose reaches the surface. A fixed 4 us of silence closed the
+    // run in that gap - four microseconds after first contact, with the round
+    // still in flight - and reported "no penetration, depth 0". The silence has
+    // to last for the round to cross a few lattice spacings at its own speed.
+    const vApproach = Math.max(this.projectile.speed || 0, 50);
+    const quietGap = Math.max(4e-6, 3 * d.dx / vApproach);
     const quiet = this.contactSeen && s.maxContactForce === 0 && s.brokenThisStep === 0
-      && (this.simTime - (this.lastActivity ?? 0)) > 4e-6;
+      && (this.simTime - (this.lastActivity ?? 0)) > quietGap;
     // WHEN THE RESOLVED WINDOW CLOSES
     //
     // This used to be a fixed clock: `elapsed > maxEventTime` and the run was

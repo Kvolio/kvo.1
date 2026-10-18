@@ -221,6 +221,41 @@ shear/compression  |s_p| ≥ 4 ε_f       (accumulated plastic stretch)</code></
 <p>only**, so it stiffens cavity expansion without touching the tensile/spall</p>
 <p>response. It is a calibration constant, not a derivation. It is exposed in the</p>
 <p>Simulation panel precisely so that it is visible rather than buried.</p>
+<h3 id="3-6a-sloped-plates-ductile-failure-and-the-free-zone-calibration-notes">3.6a Sloped plates, ductile failure and the free zone — calibration notes</h3>
+<p>All of these live in <code>src/materials/tuning.js</code>, each with its reasoning.</p>
+<ul>
+<li><strong>Metal failure stretch (<code>failMetal</code> = 3).</strong> The handbook elongation (17 % for</li>
+</ul>
+<p>  RHA) is a gauge-length average. The strain a small volume reaches before it</p>
+<p>  separates is the true fracture strain, several times larger. At 1.0 the plug</p>
+<p>  and the hole rim dissolve into loose nodes ("snapping like pasta"); at 3.0 the</p>
+<p>  plug stays a coherent, sheared body.</p>
+<ul>
+<li><strong>Free zone (<code>freeZoneD</code>, <code>freeZoneT</code>).</strong> Armour beyond ~1.2 penetrator</li>
+</ul>
+<p>  diameters + 0.5 line-of-sight thicknesses from the shot line is held. Left</p>
+<p>  free across the whole corridor the slice is a 400 mm strap that dishes,</p>
+<p>  tears from its clamps and flaps open. Ballistic limits at normal incidence</p>
+<p>  moved by less than 5 % when this was introduced; the plate simply stays flat.</p>
+<ul>
+<li><strong>Corridor end faces.</strong> A sloped plate runs out through the front/rear faces</li>
+</ul>
+<p>  of the corridor, not only the sides. Those cut ends are now clamped like the</p>
+<p>  side walls; before, they were free and the plate swung up as a cantilever.</p>
+<ul>
+<li><strong>Sloped-layer depth (<code>obliqueDepth</code> = 1.4).</strong> A 2-D slab has one cut line</li>
+</ul>
+<p>  and no out-of-plane participation, so beyond ~35 deg it offered little more</p>
+<p>  than its normal thickness. A sloped layer's slab depth (mass and force</p>
+<p>  capacity) is scaled by sec(slope)^1.4. Measured against de Marre this moved</p>
+<p>  implied ballistic limits at 30–60 deg from 0.56–0.89x to 0.93–1.01x, and the</p>
+<p>  T-34's 76 mm BR-350A no longer defeats the Panther 80 mm / 55 deg glacis.</p>
+<ul>
+<li><strong>End of the resolved window.</strong> The run used to close after 4 us of contact</li>
+</ul>
+<p>  silence; a glancing first touch on a sloped plate tripped it with the round</p>
+<p>  still in flight ("No penetration, depth 0"). The silence must now last for</p>
+<p>  the round to cross three lattice spacings at its own speed.</p>
 <h3 id="3-7-local-strength-scatter">3.7 Local strength scatter</h3>
 <p>Failure strain is scaled per node by a Weibull-distributed factor whose modulus</p>
 <p>is a material property (low for cast armour and ceramics, high for wrought</p>

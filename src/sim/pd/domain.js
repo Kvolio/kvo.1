@@ -31,6 +31,7 @@
  * comminuted material still push on each other).
  */
 
+import { TUNE } from '../../materials/tuning.js';
 import { makeRng, weibullFactor, clamp, pointInPoly, polyBounds } from '../../core/math.js';
 import { derivePD, bondPair, stableDt } from '../../materials/derive.js';
 import { sampleGradient } from '../../materials/database.js';
@@ -206,6 +207,7 @@ export class PDDomain {
         this.matIndex[n] = this.internMat(m, pd, gradKey);
         // Local strength scatter: flaw density, not outcome dice.
         this.strength[n] = clamp(weibullFactor(this.rng, pd.weibull), 0.45, 1.7);
+        this.ymul[n] = sol.strengthMul ?? 1;
         this.lat_i[n] = i; this.lat_j[n] = j;
         n++;
       }
@@ -243,6 +245,7 @@ export class PDDomain {
     this.damage = F(n);
     this.body = new Int16Array(n); this.group = new Int16Array(n);
     this.role = new Uint8Array(n); this.layer = new Int16Array(n);
+    this.ymul = new Float32Array(n).fill(1);
     this.matIndex = new Uint16Array(n);
     this.nBond = new Uint16Array(n); this.nBroken = new Uint16Array(n);
     this.flags = new Uint8Array(n);      // bit0 surface, bit1 lateral BC, bit2 clamped, bit3 free
@@ -329,9 +332,14 @@ export class PDDomain {
         this.bref[b] = r;
         this.bk[b] = k;
         const sScale = 0.5 * (this.strength[i] + this.strength[j]);
-        this.bsy[b] = bp.sy;
-        this.bsf[b] = bp.sf * sScale;
-        this.bsten[b] = bp.sTen;
+        const yMul = Math.sqrt(this.ymul[i] * this.ymul[j]);   // obliquity closure, see tuning.js
+        // Effective flow strength of armour metal: see TUNE.plateYield. Only the
+        // yield stretch moves; the failure stretch is held at least 5 % above it.
+        const plateY = (this.role[i] === ROLE.ARMOUR && this.role[j] === ROLE.ARMOUR
+          && this.matTable[this.matIndex[i]].mat.class === 'metal') ? TUNE.plateYield : 1;
+        this.bsy[b] = bp.sy * yMul * plateY;
+        this.bsf[b] = Math.max(bp.sf * sScale * yMul, this.bsy[b] * 1.05);
+        this.bsten[b] = bp.sTen * yMul;
         this.bepf[b] = bp.epsF * sScale;
         // Kelvin-Voigt bond damping at ~4.5 % of critical for the equivalent
         // linear spring K = k/r0. Keeps the explicit scheme quiet at the
@@ -367,9 +375,9 @@ export class PDDomain {
   }
 
   /** Mark lateral-boundary particles (absorbing band + clamped outer rows). */
-  applyLateralBC(insideTest) {
+  applyLateralBC(insideTest, freeHalf = Infinity) {
     const band = this.delta * 2.2;
-    const half = this.width * 0.5;
+    const half = Math.min(this.width * 0.5, freeHalf);
     for (let i = 0; i < this.n; i++) {
       const dxp = this.rx[i] - this.ox, dyp = this.ry[i] - this.oy;
       const u = dxp * this.bx + dyp * this.by;
@@ -386,6 +394,33 @@ export class PDDomain {
       const f = 1 - clamp(dEdge / band, 0, 1);
       this.bcRate[i] = 4.0e5 * f * f;
       if (dEdge < this.delta * 0.8) this.flags[i] |= 4;   // clamped
+    }
+
+    // THE CORRIDOR'S TWO END FACES
+    // A plate square to the shot meets only the side walls above. A SLOPED
+    // plate also runs out through the front and rear faces of the corridor, and
+    // left alone those cut ends are free surfaces: the strap of plate between
+    // the side clamp and a free end is a cantilever, the shot lifts it like a
+    // flap and slides underneath, and a perfectly intact plate is then
+    // reported as perforated. Armour that continues past either end is
+    // supported exactly like armour that continues past the sides. The
+    // projectile is not touched - it has to be free to leave through the rear.
+    const len = this.length;
+    for (let i = 0; i < this.n; i++) {
+      if (this.role[i] !== ROLE.ARMOUR) continue;
+      const dxp = this.rx[i] - this.ox, dyp = this.ry[i] - this.oy;
+      const s = dxp * this.ax + dyp * this.ay;
+      const u = dxp * this.bx + dyp * this.by;
+      const dEnd = Math.min(s, len - s);
+      if (dEnd > band) continue;
+      const sOut = s < len * 0.5 ? -this.dx * 2 : len + this.dx * 2;
+      const outX = this.ox + this.ax * sOut + this.bx * u;
+      const outY = this.oy + this.ay * sOut + this.by * u;
+      if (!insideTest(outX, outY)) continue;
+      this.flags[i] |= 2;
+      const f = 1 - clamp(dEnd / band, 0, 1);
+      this.bcRate[i] = Math.max(this.bcRate[i], 4.0e5 * f * f);
+      if (dEnd < this.delta * 0.8) this.flags[i] |= 4;
     }
   }
 

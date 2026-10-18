@@ -240,6 +240,34 @@ only**, so it stiffens cavity expansion without touching the tensile/spall
 response. It is a calibration constant, not a derivation. It is exposed in the
 Simulation panel precisely so that it is visible rather than buried.
 
+### 3.6a Sloped plates, ductile failure and the free zone — calibration notes
+
+All of these live in `src/materials/tuning.js`, each with its reasoning.
+
+* **Metal failure stretch (`failMetal` = 3).** The handbook elongation (17 % for
+  RHA) is a gauge-length average. The strain a small volume reaches before it
+  separates is the true fracture strain, several times larger. At 1.0 the plug
+  and the hole rim dissolve into loose nodes ("snapping like pasta"); at 3.0 the
+  plug stays a coherent, sheared body.
+* **Free zone (`freeZoneD`, `freeZoneT`).** Armour beyond ~1.2 penetrator
+  diameters + 0.5 line-of-sight thicknesses from the shot line is held. Left
+  free across the whole corridor the slice is a 400 mm strap that dishes,
+  tears from its clamps and flaps open. Ballistic limits at normal incidence
+  moved by less than 5 % when this was introduced; the plate simply stays flat.
+* **Corridor end faces.** A sloped plate runs out through the front/rear faces
+  of the corridor, not only the sides. Those cut ends are now clamped like the
+  side walls; before, they were free and the plate swung up as a cantilever.
+* **Sloped-layer depth (`obliqueDepth` = 1.4).** A 2-D slab has one cut line
+  and no out-of-plane participation, so beyond ~35 deg it offered little more
+  than its normal thickness. A sloped layer's slab depth (mass and force
+  capacity) is scaled by sec(slope)^1.4. Measured against de Marre this moved
+  implied ballistic limits at 30–60 deg from 0.56–0.89x to 0.93–1.01x, and the
+  T-34's 76 mm BR-350A no longer defeats the Panther 80 mm / 55 deg glacis.
+* **End of the resolved window.** The run used to close after 4 us of contact
+  silence; a glancing first touch on a sloped plate tripped it with the round
+  still in flight ("No penetration, depth 0"). The silence must now last for
+  the round to cross three lattice spacings at its own speed.
+
 ### 3.7 Local strength scatter
 
 Failure strain is scaled per node by a Weibull-distributed factor whose modulus
