@@ -165,8 +165,16 @@ void main() {
     if (t < uBandT.x || t > uBandT.y) discard;
   }
   vec2 p = gl_FragCoord.xy - vec2(uShift.x, -uShift.y);
-  vec4 a = texture2D(uAccum, p / uViewport);
-  float cov = smoothstep(uLo, uHi, a.a);
+  vec2 px = 1.0 / uViewport;
+  vec4 a = texture2D(uAccum, p * px);
+  if (a.a < 0.05) discard;   // empty space: skip the gradient taps
+  // Anti-aliased iso-contour: the coverage ramps over one screen pixel,
+  // measured from the field's own gradient, so the edge is as sharp as the
+  // display allows however steep or shallow the field is there.
+  float gx = texture2D(uAccum, (p + vec2(1.0, 0.0)) * px).a - texture2D(uAccum, (p - vec2(1.0, 0.0)) * px).a;
+  float gy = texture2D(uAccum, (p + vec2(0.0, 1.0)) * px).a - texture2D(uAccum, (p - vec2(0.0, 1.0)) * px).a;
+  float g = max(0.5 * (abs(gx) + abs(gy)), 1e-3);
+  float cov = clamp((a.a - 0.5 * (uLo + uHi)) / g + 0.5, 0.0, 1.0);
   vec3 c = clamp(a.rgb / max(a.a, 1e-3), 0.0, 1.0) * (1.0 - uDark);
   gl_FragColor = vec4(c * cov * uAlpha, cov * uAlpha);
 }
@@ -341,7 +349,18 @@ export class NodeGL {
     if (this.fbo) gl.deleteFramebuffer(this.fbo);
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    // Half-float where the context can render to it: thousands of small
+    // overlapping weights lose their low bits in an 8-bit target and show as
+    // mottled, smeared colour.
+    const isGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+    let floatOK = false;
+    if (isGL2 && (gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'))) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+      floatOK = true;
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
+    this.accumFloat = floatOK;
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -349,7 +368,13 @@ export class NodeGL {
     const fbo = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    let ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    if (!ok && floatOK) {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      this.accumFloat = false;
+      ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     if (!ok) {
       gl.deleteTexture(tex); gl.deleteFramebuffer(fbo);

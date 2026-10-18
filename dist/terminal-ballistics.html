@@ -451,6 +451,57 @@ delete __exports.__all;
 
 });
 
+__def("src/materials/tuning.js", function (__exports, __req) {
+/**
+ * CALIBRATION KNOBS
+ * =================
+ *
+ * The handful of numbers that map a continuum material onto the 2-D
+ * peridynamic lattice and that are fitted rather than measured. They live in
+ * one place so that tools/validate.mjs and tools/bench can move them without
+ * editing solver code, and so that every departure from "use the handbook value
+ * directly" is visible and explained.
+ *
+ * The defaults are the CALIBRATED values; see docs/MODEL.md for what each one
+ * does and why it is not simply 1.
+ */
+const TUNE = {
+  /**
+   * Multiplier on the failure stretch of metals. The handbook "elongation"
+   * (17 % for RHA) is a uniform-plus-necking engineering strain over a 50 mm
+   * gauge. The strain a small volume of metal reaches locally before it
+   * separates is the TRUE FRACTURE strain, ln(1/(1-RA)), several times larger.
+   * Using the elongation as the local limit makes metal tear at a fraction of
+   * the strain it really survives.
+   */
+  failMetal: 1.0,
+
+  /**
+   * Shear/compression failure allowance, as a multiple of the tensile failure
+   * stretch, applied to the ACCUMULATED PLASTIC stretch of a bond.
+   */
+  compDuct: 4.0,
+
+  /**
+   * Ductile-fracture suppression by pressure. In a Johnson-Cook damage law the
+   * strain to failure rises as exp(-D3 * sigma*), sigma* = mean stress / flow
+   * stress; under the compressive, confined flow of hole growth that is a large
+   * factor, under triaxial tension it is a small one. This is the exponent
+   * applied to the compressive triaxiality (0 = off).
+   */
+  triax: 0.0,
+  triaxMax: 6.0,
+
+  /** Extra stiffness against compressive dilatation (2-D -> 3-D confinement). */
+  confinement: 1.8,
+};
+
+__exports.__all = {TUNE};
+Object.assign(__exports, __exports.__all);
+delete __exports.__all;
+
+});
+
 __def("src/materials/derive.js", function (__exports, __req) {
 /**
  * PERIDYNAMIC CONSTITUTIVE CALIBRATION
@@ -514,6 +565,7 @@ __def("src/materials/derive.js", function (__exports, __req) {
  */
 
 const { clamp } = __req("src/core/math.js");
+const { TUNE } = __req("src/materials/tuning.js");
 
 /**
  * @param {object} m   material record from the database
@@ -529,7 +581,7 @@ function derivePD(m, dx, mRatio, h) {
 
   // FAILURE CALIBRATION - see the note below. The bond fails at the material's
   // measured total failure strain, not at the fracture-energy critical stretch.
-  const sf = Math.max(m.epsF, sy * 1.05);
+  const sf = Math.max(m.epsF * (m.class === 'metal' ? TUNE.failMetal : 1), sy * 1.05);
 
   // Limit on the ISOTROPIC (hydrostatic) part of the bond stretch, from the
   // material's tensile strength: sigma_ten / E. A real metal cannot sustain
@@ -2292,8 +2344,8 @@ __def("src/sim/pd/solver.js", function (__exports, __req) {
 
 const { SpatialGrid, BOND, ROLE } = __req("src/sim/pd/domain.js");
 const { clamp } = __req("src/core/math.js");
+const { TUNE } = __req("src/materials/tuning.js");
 
-const COMP_DUCTILITY = 4.0;   // shear/compressive plastic allowance / tensile
 
 /**
  * Contact-damping ramp. Zero at first touch, full at a quarter of the contact
@@ -2374,7 +2426,10 @@ class PDSolver {
     // dilatation only, so it changes cavity expansion without changing the
     // tensile/spall response. It is a calibration factor, not a derivation:
     // it is exposed in the UI and documented in MODEL.md §3.6.
-    this.confinement = opts.confinement ?? 1.8;
+    this.confinement = opts.confinement ?? TUNE.confinement;
+    this.compDuct = TUNE.compDuct;
+    this.triax = TUNE.triax;
+    this.triaxMax = TUNE.triaxMax;
 
     // contact stiffness also constrains the time step
     const dtC = 0.22 * 2 * Math.sqrt(ratio);
@@ -2654,7 +2709,15 @@ class PDSolver {
       //   set of surviving bonds, so the instantaneous split is noisy and
       //   feeds back into more breakage. The plastic accumulator is monotonic
       //   and does not.
-      if (s >= bsf[b] || Math.abs(sp) >= bsf[b] * COMP_DUCTILITY) {
+      // Pressure raises the strain a ductile metal survives (see tuning.js). The
+      // factor is 1 in tension and under no pressure, so ceramics - which fail
+      // elastically, far below yield - are unaffected.
+      let sfe = bsf[b];
+      if (this.triax > 0 && sIso < 0) {
+        const sigStar = 0.76 * (-sIso / Math.max(bsy[b], 1e-6));
+        sfe *= Math.min(Math.exp(this.triax * sigStar), this.triaxMax);
+      }
+      if (s >= sfe || Math.abs(sp) >= sfe * this.compDuct) {
         bstate[b] = BOND.BROKEN;
         nBroken[i]++; nBroken[j]++;
         damage[i] = nBroken[i] / (nBond0[i] || 1);
@@ -6803,8 +6866,16 @@ void main() {
     if (t < uBandT.x || t > uBandT.y) discard;
   }
   vec2 p = gl_FragCoord.xy - vec2(uShift.x, -uShift.y);
-  vec4 a = texture2D(uAccum, p / uViewport);
-  float cov = smoothstep(uLo, uHi, a.a);
+  vec2 px = 1.0 / uViewport;
+  vec4 a = texture2D(uAccum, p * px);
+  if (a.a < 0.05) discard;   // empty space: skip the gradient taps
+  // Anti-aliased iso-contour: the coverage ramps over one screen pixel,
+  // measured from the field's own gradient, so the edge is as sharp as the
+  // display allows however steep or shallow the field is there.
+  float gx = texture2D(uAccum, (p + vec2(1.0, 0.0)) * px).a - texture2D(uAccum, (p - vec2(1.0, 0.0)) * px).a;
+  float gy = texture2D(uAccum, (p + vec2(0.0, 1.0)) * px).a - texture2D(uAccum, (p - vec2(0.0, 1.0)) * px).a;
+  float g = max(0.5 * (abs(gx) + abs(gy)), 1e-3);
+  float cov = clamp((a.a - 0.5 * (uLo + uHi)) / g + 0.5, 0.0, 1.0);
   vec3 c = clamp(a.rgb / max(a.a, 1e-3), 0.0, 1.0) * (1.0 - uDark);
   gl_FragColor = vec4(c * cov * uAlpha, cov * uAlpha);
 }
@@ -6979,7 +7050,18 @@ class NodeGL {
     if (this.fbo) gl.deleteFramebuffer(this.fbo);
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    // Half-float where the context can render to it: thousands of small
+    // overlapping weights lose their low bits in an 8-bit target and show as
+    // mottled, smeared colour.
+    const isGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+    let floatOK = false;
+    if (isGL2 && (gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'))) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+      floatOK = true;
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
+    this.accumFloat = floatOK;
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -6987,7 +7069,13 @@ class NodeGL {
     const fbo = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    let ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    if (!ok && floatOK) {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      this.accumFloat = false;
+      ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     if (!ok) {
       gl.deleteTexture(tex); gl.deleteFramebuffer(fbo);
