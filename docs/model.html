@@ -256,6 +256,34 @@ shear/compression  |s_p| ≥ 4 ε_f       (accumulated plastic stretch)</code></
 <p>  silence; a glancing first touch on a sloped plate tripped it with the round</p>
 <p>  still in flight ("No penetration, depth 0"). The silence must now last for</p>
 <p>  the round to cross three lattice spacings at its own speed.</p>
+<ul>
+<li><strong>Plate strength (<code>plateYield</code> = 1.5, <code>softMetalExp</code> = 0.42).</strong> Cylindrical</li>
+</ul>
+<p>  cavity expansion in a plane-strain slice needs less pressure than a real hole,</p>
+<p>  so armour metal's effective flow strength is raised 1.5x. Soft metals are</p>
+<p>  pulled towards RHA (Y_eff ~ Y^0.42): their rate hardening is stronger, so mild</p>
+<p>  steel's limit against AP is ~0.7 of RHA, not the 0.45 its static yield implies.</p>
+<p>  Titanium carries <code>plateScale</code> 0.75 (adiabatic-shear plugging). Checked with</p>
+<p>  <code>tools/validate-materials.mjs</code> against published mass-efficiency bands</p>
+<p>  (mild 0.71, cast 0.90, HHA 1.07, Al 1.3-1.5, Ti 1.39 relative to RHA).</p>
+<ul>
+<li><strong>Ceramics (<code>ceramicYield</code> = 1.8, per-ceramic <code>plateScale</code>).</strong> Ceramic-faced</li>
+</ul>
+<p>  panels at equal areal density: alumina 1.64, SiC 1.85, B4C 1.92 against RHA</p>
+<p>  (<code>tools/validate-ceramics.mjs</code>; published bands are 1.3-2.5 / 1.5-3.0 /</p>
+<p>  1.5-3.2). The ordering is right but SiC and B4C are closer together than in</p>
+<p>  reality, and the bands themselves are wide.</p>
+<ul>
+<li><strong>Long rods.</strong> The corridor width is capped at ten penetrator diameters of</li>
+</ul>
+<p>  plate; an 850 mm plate used to give a 0.8 m corridor and a lattice only two</p>
+<p>  nodes across the rod. The rod's failure stretch is raised (<code>rodDuctility</code> 3)</p>
+<p>  so it flows instead of shattering, and a long rod sees less armour strength</p>
+<p>  than a shell does (<code>rodTargetYield</code>, easing in from L/D 6 to 30) because in the</p>
+<p>  slice a long rod upsets into a blob where in 3-D it erodes out of its channel.</p>
+<p>  <code>tools/validate-rods.mjs</code> compares depth into thick RHA with Tate</p>
+<p>  (R_t = 5 GPa): 0.7-1.1 for most rods, with m735 over and L28 APDS under.</p>
+<p>  Not resolved: the slice still cannot reproduce radial erosion flow.</p>
 <h3 id="3-7-local-strength-scatter">3.7 Local strength scatter</h3>
 <p>Failure strain is scaled per node by a Weibull-distributed factor whose modulus</p>
 <p>is a material property (low for cast armour and ceramics, high for wrought</p>

@@ -208,6 +208,7 @@ export class PDDomain {
         // Local strength scatter: flaw density, not outcome dice.
         this.strength[n] = clamp(weibullFactor(this.rng, pd.weibull), 0.45, 1.7);
         this.ymul[n] = sol.strengthMul ?? 1;
+        this.fmul[n] = sol.failMul ?? 1;
         this.lat_i[n] = i; this.lat_j[n] = j;
         n++;
       }
@@ -246,6 +247,8 @@ export class PDDomain {
     this.body = new Int16Array(n); this.group = new Int16Array(n);
     this.role = new Uint8Array(n); this.layer = new Int16Array(n);
     this.ymul = new Float32Array(n).fill(1);
+    this.plateRatio = this.plateRatio ?? 1;
+    this.fmul = new Float32Array(n).fill(1);
     this.matIndex = new Uint16Array(n);
     this.nBond = new Uint16Array(n); this.nBroken = new Uint16Array(n);
     this.flags = new Uint8Array(n);      // bit0 surface, bit1 lateral BC, bit2 clamped, bit3 free
@@ -336,9 +339,10 @@ export class PDDomain {
         // Effective flow strength of armour metal: see TUNE.plateYield. Only the
         // yield stretch moves; the failure stretch is held at least 5 % above it.
         const plateY = (this.role[i] === ROLE.ARMOUR && this.role[j] === ROLE.ARMOUR
-          && this.matTable[this.matIndex[i]].mat.class === 'metal') ? TUNE.plateYield : 1;
+          && ['metal', 'ceramic'].includes(this.matTable[this.matIndex[i]].mat.class))
+          ? plateStrengthFactor(this.matTable[this.matIndex[i]].mat) * this.plateRatio : 1;
         this.bsy[b] = bp.sy * yMul * plateY;
-        this.bsf[b] = Math.max(bp.sf * sScale * yMul, this.bsy[b] * 1.05);
+        this.bsf[b] = Math.max(bp.sf * sScale * yMul * Math.sqrt(this.fmul[i] * this.fmul[j]), this.bsy[b] * 1.05);
         this.bsten[b] = bp.sTen * yMul;
         this.bepf[b] = bp.epsF * sScale;
         // Kelvin-Voigt bond damping at ~4.5 % of critical for the equivalent
@@ -449,6 +453,22 @@ export class PDDomain {
     }
     return { ke, mArm, mPen, mFree, dmgMean: this.n ? dmgSum / this.n : 0, tmax };
   }
+}
+
+/**
+ * Effective-strength factor for an armour metal (TUNE.plateYield and friends).
+ * Soft metals are pulled towards RHA: their rate hardening is stronger than
+ * RHA's, so the dynamic flow stress they offer is a much smaller fraction below
+ * RHA's than the quasi-static yield ratio says (mild steel is ~0.25 of RHA
+ * statically, but its limit against AP shot is ~0.65-0.9 of it). A material may
+ * also carry its own `plateScale`.
+ */
+function plateStrengthFactor(m) {
+  if (m.class === 'ceramic') return TUNE.ceramicYield * (m.plateScale ?? 1);
+  const yRef = 1.05e9;
+  let f = TUNE.plateYield;
+  if (m.Y < yRef) f *= Math.pow(m.Y / yRef, TUNE.softMetalExp - 1);
+  return f * (m.plateScale ?? 1);
 }
 
 // ---------------------------------------------------------------------------

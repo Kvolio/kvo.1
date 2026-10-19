@@ -123,13 +123,14 @@ uniform sampler2D uRamp;
 uniform float uRow;
 uniform float uMaterialMode;
 uniform float uNorm;
+uniform float uPow;
 
 void main() {
   vec2 q = gl_PointCoord * 2.0 - 1.0;
   float r2 = dot(q, q);
   if (r2 >= 1.0) discard;
   float k = 1.0 - r2;
-  float w = k * k * uNorm;
+  float w = pow(k, uPow) * uNorm;
   vec3 ramp = texture2D(uRamp, vec2(vVal, uRow)).rgb;
   vec3 mat  = vCol * (1.14 - 0.72 * vVal);
   vec3 c = mix(ramp, mat, uMaterialMode);
@@ -147,6 +148,7 @@ void main() { gl_Position = vec4(aQuad, 0.0, 1.0); }
 const COMP_FRAG = `
 precision highp float;
 uniform sampler2D uAccum;
+uniform sampler2D uAccumC;   // tight-kernel colour: sharp material and damage boundaries
 uniform vec2  uViewport;
 uniform vec2  uShift;      // screen-space shift in pixels (x right, y down)
 uniform float uDark;
@@ -175,7 +177,12 @@ void main() {
   float gy = texture2D(uAccum, (p + vec2(0.0, 1.0)) * px).a - texture2D(uAccum, (p - vec2(0.0, 1.0)) * px).a;
   float g = max(0.5 * (abs(gx) + abs(gy)), 1e-3);
   float cov = clamp((a.a - 0.5 * (uLo + uHi)) / g + 0.5, 0.0, 1.0);
-  vec3 c = clamp(a.rgb / max(a.a, 1e-3), 0.0, 1.0) * (1.0 - uDark);
+  // Colour comes from a much tighter kernel than the silhouette: blending
+  // colour over the silhouette's 1.6-spacing kernel smeared every boundary
+  // between parts and every damage front by more than a node.
+  vec4 cc = texture2D(uAccumC, p * px);
+  vec3 col = cc.a > 1e-4 ? cc.rgb / cc.a : a.rgb / max(a.a, 1e-3);
+  vec3 c = clamp(col, 0.0, 1.0) * (1.0 - uDark);
   gl_FragColor = vec4(c * cov * uAlpha, cov * uAlpha);
 }
 `;
@@ -299,10 +306,12 @@ export class NodeGL {
         uRow: gl.getUniformLocation(splat, 'uRow'),
         uMaterialMode: gl.getUniformLocation(splat, 'uMaterialMode'),
         uNorm: gl.getUniformLocation(splat, 'uNorm'),
+        uPow: gl.getUniformLocation(splat, 'uPow'),
       };
       this.comp = {
         prog: comp,
         uAccum: gl.getUniformLocation(comp, 'uAccum'),
+        uAccumC: gl.getUniformLocation(comp, 'uAccumC'),
         uViewport: gl.getUniformLocation(comp, 'uViewport'),
         uShift: gl.getUniformLocation(comp, 'uShift'),
         uDark: gl.getUniformLocation(comp, 'uDark'),
@@ -341,17 +350,13 @@ export class NodeGL {
     return prog;
   }
 
-  /** Offscreen accumulation target, rebuilt whenever the canvas size changes. */
-  ensureAccum(w, h) {
+  /** One offscreen accumulation target: half-float where the context can render to it. */
+  makeTarget(w, h) {
     const gl = this.gl;
-    if (this.accum && this.accumW === w && this.accumH === h) return true;
-    if (this.accum) gl.deleteTexture(this.accum);
-    if (this.fbo) gl.deleteFramebuffer(this.fbo);
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    // Half-float where the context can render to it: thousands of small
-    // overlapping weights lose their low bits in an 8-bit target and show as
-    // mottled, smeared colour.
+    // Half-float: thousands of small overlapping weights lose their low bits in
+    // an 8-bit target and show as mottled, smeared colour.
     const isGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
     let floatOK = false;
     if (isGL2 && (gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'))) {
@@ -360,7 +365,6 @@ export class NodeGL {
     } else {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     }
-    this.accumFloat = floatOK;
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -372,17 +376,30 @@ export class NodeGL {
     if (!ok && floatOK) {
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      this.accumFloat = false;
+      floatOK = false;
       ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    if (!ok) {
-      gl.deleteTexture(tex); gl.deleteFramebuffer(fbo);
-      this.accum = null; this.fbo = null;
+    if (!ok) { gl.deleteTexture(tex); gl.deleteFramebuffer(fbo); return null; }
+    return { tex, fbo, float: floatOK };
+  }
+
+  /** Silhouette and colour targets, rebuilt whenever the canvas size changes. */
+  ensureAccum(w, h) {
+    const gl = this.gl;
+    if (this.accum && this.accumW === w && this.accumH === h) return true;
+    for (const t of [this.accum, this.accumC]) if (t) gl.deleteTexture(t);
+    for (const f of [this.fbo, this.fboC]) if (f) gl.deleteFramebuffer(f);
+    this.accum = this.accumC = this.fbo = this.fboC = null;
+    const A = this.makeTarget(w, h), B = A && this.makeTarget(w, h);
+    if (!A || !B) {
+      if (A) { gl.deleteTexture(A.tex); gl.deleteFramebuffer(A.fbo); }
       this.smoothOK = false;
       return false;
     }
-    this.accum = tex; this.fbo = fbo; this.accumW = w; this.accumH = h;
+    this.accum = A.tex; this.fbo = A.fbo; this.accumFloat = A.float;
+    this.accumC = B.tex; this.fboC = B.fbo;
+    this.accumW = w; this.accumH = h;
     return true;
   }
 
@@ -530,7 +547,20 @@ export class NodeGL {
     gl.uniform1f(S.uRow, this.rowFor(o.mode));
     gl.uniform1f(S.uMaterialMode, o.mode === 'material' ? 1 : 0);
     gl.uniform1f(S.uNorm, o.norm);
+    gl.uniform1f(S.uPow, 2);
     gl.blendFunc(gl.ONE, gl.ONE);
+    gl.drawArrays(gl.POINTS, 0, o.count);
+
+    // pass 1b: the colour target. A tight, steep kernel, so each pixel takes its
+    // colour from the nodes nearest to it and boundaries stay about half a node
+    // wide instead of the silhouette kernel's two.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboC);
+    gl.viewport(0, 0, W, H);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.uniform1f(S.uPointSize, Math.max(o.radiusPx * (o.colourRatio ?? 0.62) * 2, 2));
+    gl.uniform1f(S.uNorm, 1);
+    gl.uniform1f(S.uPow, 5);
     gl.drawArrays(gl.POINTS, 0, o.count);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, W, H);
@@ -545,6 +575,10 @@ export class NodeGL {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.accum);
     gl.uniform1i(C.uAccum, 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.accumC);
+    gl.uniform1i(C.uAccumC, 1);
+    gl.activeTexture(gl.TEXTURE0);
     gl.uniform2f(C.uViewport, W, H);
     gl.uniform1f(C.uLo, o.lo ?? 0.42);
     gl.uniform1f(C.uHi, o.hi ?? 0.58);

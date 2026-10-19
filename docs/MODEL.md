@@ -267,6 +267,28 @@ All of these live in `src/materials/tuning.js`, each with its reasoning.
   silence; a glancing first touch on a sloped plate tripped it with the round
   still in flight ("No penetration, depth 0"). The silence must now last for
   the round to cross three lattice spacings at its own speed.
+* **Plate strength (`plateYield` = 1.5, `softMetalExp` = 0.42).** Cylindrical
+  cavity expansion in a plane-strain slice needs less pressure than a real hole,
+  so armour metal's effective flow strength is raised 1.5x. Soft metals are
+  pulled towards RHA (Y_eff ~ Y^0.42): their rate hardening is stronger, so mild
+  steel's limit against AP is ~0.7 of RHA, not the 0.45 its static yield implies.
+  Titanium carries `plateScale` 0.75 (adiabatic-shear plugging). Checked with
+  `tools/validate-materials.mjs` against published mass-efficiency bands
+  (mild 0.71, cast 0.90, HHA 1.07, Al 1.3-1.5, Ti 1.39 relative to RHA).
+* **Ceramics (`ceramicYield` = 1.8, per-ceramic `plateScale`).** Ceramic-faced
+  panels at equal areal density: alumina 1.64, SiC 1.85, B4C 1.92 against RHA
+  (`tools/validate-ceramics.mjs`; published bands are 1.3-2.5 / 1.5-3.0 /
+  1.5-3.2). The ordering is right but SiC and B4C are closer together than in
+  reality, and the bands themselves are wide.
+* **Long rods.** The corridor width is capped at ten penetrator diameters of
+  plate; an 850 mm plate used to give a 0.8 m corridor and a lattice only two
+  nodes across the rod. The rod's failure stretch is raised (`rodDuctility` 3)
+  so it flows instead of shattering, and a long rod sees less armour strength
+  than a shell does (`rodTargetYield`, easing in from L/D 6 to 30) because in the
+  slice a long rod upsets into a blob where in 3-D it erodes out of its channel.
+  `tools/validate-rods.mjs` compares depth into thick RHA with Tate
+  (R_t = 5 GPa): 0.7-1.1 for most rods, with m735 over and L28 APDS under.
+  Not resolved: the slice still cannot reproduce radial erosion flow.
 
 ### 3.7 Local strength scatter
 

@@ -372,7 +372,14 @@ export class World {
     // widening it enlarges the part of the plate that can actually crater,
     // crack and spall. At a fixed node budget a wider corridor means a coarser
     // lattice, which is the trade the user is making with this control.
-    const width = Math.max(corridorCal * (chemical ? cal : refD), 0.95 * this.scene.losTotal, 0.05)
+    // The plate term is capped at ten penetrator diameters. Disturbance from a
+    // hit reaches a few diameters, not the whole plate thickness; uncapped, a
+    // 30 mm rod into 850 mm of RHA got a 0.8 m wide corridor and, at a fixed
+    // node budget, a lattice 13 mm coarse - two nodes across the rod, which
+    // eroded as a ragged chain and penetrated at 0.4 of Tate. Shells are
+    // unaffected: ten of their diameters is wider than any plate they face.
+    const plateTerm = chemical ? this.scene.losTotal : Math.min(this.scene.losTotal, 10 * refD);
+    const width = Math.max(corridorCal * (chemical ? cal : refD), 0.95 * plateTerm, 0.05)
       * (this.settings.corridorScale ?? 1);
     return { dx0, refD, width, chemical, budget: q.budget, mRatio: q.mRatio };
   }
@@ -446,6 +453,7 @@ export class World {
       count = dom.countSites();
     }
     plan.width = width;
+    dom.plateRatio = this.targetStrengthRatio();
     dom.build();
     // THE PLATE DOES NOT HINGE OVER THE WHOLE CORRIDOR
     // A real plate is held by the hull around it in every direction, and a
@@ -528,6 +536,9 @@ export class World {
         role: part.role === 1 ? ROLE.PENETRATOR : part.role === 3 ? ROLE.FILLER : ROLE.PROJ_AUX,
         vel: [p.vx, p.vy],
         scale: part.scale,
+        // a slender kinetic rod's material has to flow, not shatter, to erode
+        failMul: (part.role === 1 && ['apds', 'apfsds'].includes(p.cfg.type)) ? TUNE.rodDuctility : 1,
+        strengthMul: (part.role === 1 && ['apds', 'apfsds'].includes(p.cfg.type)) ? TUNE.rodStrength : 1,
         label: part.label,
         partRef: part,
       });
@@ -1257,6 +1268,23 @@ export class World {
       }
     }
     st.contactTime = this.simTime - (this.trueContactTime ?? this.impactStartTime);
+  }
+
+  /**
+   * Armour flow strength seen by a ROD relative to the strength seen by a shell
+   * (TUNE.plateYield). A shell opens its hole by plugging and shear; a rod by
+   * erosion, a regime in which the plane-strain slice over-resists as the rod
+   * gets longer (the rod body upsets instead of flowing out of the channel).
+   * The factor eases from 1 for a stubby rod to rodTargetYield/plateYield by
+   * L/D = 30.
+   */
+  targetStrengthRatio() {
+    const p = this.projectile;
+    if (!['apds', 'apfsds'].includes(p.cfg.type)) return 1;
+    const d = p.describe();
+    const ld = d.length / Math.max(d.penDiameter, 1e-6);
+    const k = Math.min(1, Math.max(0, (ld - 6) / 24));
+    return 1 + k * (TUNE.rodTargetYield / TUNE.plateYield - 1);
   }
 
   penetratorMass0() {

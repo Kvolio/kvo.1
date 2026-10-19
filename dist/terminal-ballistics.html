@@ -359,6 +359,21 @@ const TUNE = {
    */
   plateYield: 1.5,
 
+  /** Exponent compressing the dynamic strength of metals softer than RHA: Y_eff ~ Y^softMetalExp (1 = no compression). */
+  softMetalExp: 0.42,
+
+  /** Failure-stretch multiplier on the penetrating rod of APDS/APFSDS rounds; a rod that fails early mushrooms into a blob instead of eroding. */
+  rodDuctility: 3.0,
+
+  /** Flow-strength multiplier on the rod of APDS/APFSDS rounds (dynamic strength of WHA/DU at rod strain rates, and plane-strain squash). */
+  rodStrength: 1.0,
+
+  /** Armour flow strength a very long rod (L/D >= 30) sees, as a multiple of handbook yield; eases from plateYield at L/D = 6. */
+  rodTargetYield: 0.7,
+
+  /** Multiplier on the compressive flow limit of ceramics (see plateYield). */
+  ceramicYield: 1.8,
+
   friction: 0.15,
 
   freeZoneD: 1.2,
@@ -852,7 +867,7 @@ const MATERIALS = {
     key: 'ti64', name: 'Titanium Ti-6Al-4V', class: 'metal',
     rho: 4430, E: 114e9, nu: 0.34, Y: 0.95e9, UTS: 1.05e9, epsF: 0.14,
     G0: 49e3, BHN: 334, jcC: 0.034, Tm: 1933, cp: 526, jcM: 0.8,
-    brittle: 0.10, weibull: 24, erosionResist: 1.0,
+    brittle: 0.10, weibull: 24, erosionResist: 1.0, plateScale: 0.75,
     color: '#8e8a86', color2: '#565351',
     source: 'MIL-DTL-46077; K_IC ~75 MPa*m^0.5',
     notes: 'Strongly adiabatic-shear prone (low jcM): forms shear bands and plugs at high rate.',
@@ -870,7 +885,7 @@ const MATERIALS = {
     key: 'sic', name: 'Silicon carbide ceramic', class: 'ceramic',
     rho: 3150, E: 410e9, nu: 0.16, Y: 4.4e9, UTS: 0.35e9, epsF: 0.001,
     G0: 52, BHN: 2800, jcC: 0.0, Tm: 3003, cp: 750, jcM: 1.0,
-    brittle: 1.0, weibull: 10, erosionResist: 2.9,
+    plateScale: 1.35, brittle: 1.0, weibull: 10, erosionResist: 2.9,
     color: '#4a5057', color2: '#292d31',
     source: 'Hexoloy SA; K_IC ~4.6 MPa*m^0.5',
     notes: 'Harder than alumina and lighter, with much better shock impedance matching to a steel backing. The usual mid-price armour ceramic.',
@@ -879,7 +894,7 @@ const MATERIALS = {
     key: 'b4c', name: 'Boron carbide ceramic', class: 'ceramic',
     rho: 2510, E: 460e9, nu: 0.17, Y: 5.2e9, UTS: 0.30e9, epsF: 0.001,
     G0: 26, BHN: 3200, jcC: 0.0, Tm: 2723, cp: 950, jcM: 1.0,
-    brittle: 1.0, weibull: 8, erosionResist: 3.0,
+    plateScale: 1.2, brittle: 1.0, weibull: 8, erosionResist: 3.0,
     color: '#3b3f45', color2: '#22252a',
     source: 'K_IC ~3.5 MPa*m^0.5; known to lose strength above ~20 GPa impact stress',
     notes: 'Lightest common armour ceramic; the model does not include its amorphisation/strength collapse at very high pressure.',
@@ -1375,7 +1390,7 @@ const MATERIALS = {
     key: 'b4chp', name: 'Hot-pressed boron carbide', class: 'ceramic',
     rho: 2520, E: 462e9, nu: 0.17, Y: 5.9e9, UTS: 0.35e9, epsF: 0.001,
     G0: 40, BHN: 3100, jcC: 0.0, Tm: 2743, cp: 950, jcM: 1.0,
-    brittle: 1.0, weibull: 11, erosionResist: 3.2,
+    plateScale: 1.2, brittle: 1.0, weibull: 11, erosionResist: 3.2,
     color: '#33363a', color2: '#1c1e20',
     source: 'Hot-pressed B4C, >99 % theoretical density; K_IC ~4.3 MPa*m^0.5',
     notes: 'Fully dense boron carbide: the hardest and lightest of the common armour ceramics. Known to lose strength abruptly above a threshold impact stress, which is NOT modelled here.',
@@ -1384,7 +1399,7 @@ const MATERIALS = {
     key: 'si3n4', name: 'Silicon nitride (Si3N4)', class: 'ceramic',
     rho: 3200, E: 310e9, nu: 0.27, Y: 3.4e9, UTS: 0.60e9, epsF: 0.0015,
     G0: 116, BHN: 1600, jcC: 0.0, Tm: 2173, cp: 700, jcM: 1.0,
-    brittle: 0.92, weibull: 15, erosionResist: 2.2,
+    plateScale: 1.1, brittle: 0.92, weibull: 15, erosionResist: 2.2,
     color: '#6b6f66', color2: '#3f423c',
     source: 'Gas-pressure-sintered Si3N4; K_IC ~6.0 MPa*m^0.5',
     notes: 'The tough one. Much less hard than boron carbide but several times its fracture toughness, so it survives multiple hits far better.',
@@ -2058,6 +2073,7 @@ class PDDomain {
         // Local strength scatter: flaw density, not outcome dice.
         this.strength[n] = clamp(weibullFactor(this.rng, pd.weibull), 0.45, 1.7);
         this.ymul[n] = sol.strengthMul ?? 1;
+        this.fmul[n] = sol.failMul ?? 1;
         this.lat_i[n] = i; this.lat_j[n] = j;
         n++;
       }
@@ -2096,6 +2112,8 @@ class PDDomain {
     this.body = new Int16Array(n); this.group = new Int16Array(n);
     this.role = new Uint8Array(n); this.layer = new Int16Array(n);
     this.ymul = new Float32Array(n).fill(1);
+    this.plateRatio = this.plateRatio ?? 1;
+    this.fmul = new Float32Array(n).fill(1);
     this.matIndex = new Uint16Array(n);
     this.nBond = new Uint16Array(n); this.nBroken = new Uint16Array(n);
     this.flags = new Uint8Array(n);      // bit0 surface, bit1 lateral BC, bit2 clamped, bit3 free
@@ -2186,9 +2204,10 @@ class PDDomain {
         // Effective flow strength of armour metal: see TUNE.plateYield. Only the
         // yield stretch moves; the failure stretch is held at least 5 % above it.
         const plateY = (this.role[i] === ROLE.ARMOUR && this.role[j] === ROLE.ARMOUR
-          && this.matTable[this.matIndex[i]].mat.class === 'metal') ? TUNE.plateYield : 1;
+          && ['metal', 'ceramic'].includes(this.matTable[this.matIndex[i]].mat.class))
+          ? plateStrengthFactor(this.matTable[this.matIndex[i]].mat) * this.plateRatio : 1;
         this.bsy[b] = bp.sy * yMul * plateY;
-        this.bsf[b] = Math.max(bp.sf * sScale * yMul, this.bsy[b] * 1.05);
+        this.bsf[b] = Math.max(bp.sf * sScale * yMul * Math.sqrt(this.fmul[i] * this.fmul[j]), this.bsy[b] * 1.05);
         this.bsten[b] = bp.sTen * yMul;
         this.bepf[b] = bp.epsF * sScale;
         // Kelvin-Voigt bond damping at ~4.5 % of critical for the equivalent
@@ -2299,6 +2318,22 @@ class PDDomain {
     }
     return { ke, mArm, mPen, mFree, dmgMean: this.n ? dmgSum / this.n : 0, tmax };
   }
+}
+
+/**
+ * Effective-strength factor for an armour metal (TUNE.plateYield and friends).
+ * Soft metals are pulled towards RHA: their rate hardening is stronger than
+ * RHA's, so the dynamic flow stress they offer is a much smaller fraction below
+ * RHA's than the quasi-static yield ratio says (mild steel is ~0.25 of RHA
+ * statically, but its limit against AP shot is ~0.65-0.9 of it). A material may
+ * also carry its own `plateScale`.
+ */
+function plateStrengthFactor(m) {
+  if (m.class === 'ceramic') return TUNE.ceramicYield * (m.plateScale ?? 1);
+  const yRef = 1.05e9;
+  let f = TUNE.plateYield;
+  if (m.Y < yRef) f *= Math.pow(m.Y / yRef, TUNE.softMetalExp - 1);
+  return f * (m.plateScale ?? 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -5729,7 +5764,14 @@ class World {
     // widening it enlarges the part of the plate that can actually crater,
     // crack and spall. At a fixed node budget a wider corridor means a coarser
     // lattice, which is the trade the user is making with this control.
-    const width = Math.max(corridorCal * (chemical ? cal : refD), 0.95 * this.scene.losTotal, 0.05)
+    // The plate term is capped at ten penetrator diameters. Disturbance from a
+    // hit reaches a few diameters, not the whole plate thickness; uncapped, a
+    // 30 mm rod into 850 mm of RHA got a 0.8 m wide corridor and, at a fixed
+    // node budget, a lattice 13 mm coarse - two nodes across the rod, which
+    // eroded as a ragged chain and penetrated at 0.4 of Tate. Shells are
+    // unaffected: ten of their diameters is wider than any plate they face.
+    const plateTerm = chemical ? this.scene.losTotal : Math.min(this.scene.losTotal, 10 * refD);
+    const width = Math.max(corridorCal * (chemical ? cal : refD), 0.95 * plateTerm, 0.05)
       * (this.settings.corridorScale ?? 1);
     return { dx0, refD, width, chemical, budget: q.budget, mRatio: q.mRatio };
   }
@@ -5803,6 +5845,7 @@ class World {
       count = dom.countSites();
     }
     plan.width = width;
+    dom.plateRatio = this.targetStrengthRatio();
     dom.build();
     // THE PLATE DOES NOT HINGE OVER THE WHOLE CORRIDOR
     // A real plate is held by the hull around it in every direction, and a
@@ -5885,6 +5928,9 @@ class World {
         role: part.role === 1 ? ROLE.PENETRATOR : part.role === 3 ? ROLE.FILLER : ROLE.PROJ_AUX,
         vel: [p.vx, p.vy],
         scale: part.scale,
+        // a slender kinetic rod's material has to flow, not shatter, to erode
+        failMul: (part.role === 1 && ['apds', 'apfsds'].includes(p.cfg.type)) ? TUNE.rodDuctility : 1,
+        strengthMul: (part.role === 1 && ['apds', 'apfsds'].includes(p.cfg.type)) ? TUNE.rodStrength : 1,
         label: part.label,
         partRef: part,
       });
@@ -6616,6 +6662,23 @@ class World {
     st.contactTime = this.simTime - (this.trueContactTime ?? this.impactStartTime);
   }
 
+  /**
+   * Armour flow strength seen by a ROD relative to the strength seen by a shell
+   * (TUNE.plateYield). A shell opens its hole by plugging and shear; a rod by
+   * erosion, a regime in which the plane-strain slice over-resists as the rod
+   * gets longer (the rod body upsets instead of flowing out of the channel).
+   * The factor eases from 1 for a stubby rod to rodTargetYield/plateYield by
+   * L/D = 30.
+   */
+  targetStrengthRatio() {
+    const p = this.projectile;
+    if (!['apds', 'apfsds'].includes(p.cfg.type)) return 1;
+    const d = p.describe();
+    const ld = d.length / Math.max(d.penDiameter, 1e-6);
+    const k = Math.min(1, Math.max(0, (ld - 6) / 24));
+    return 1 + k * (TUNE.rodTargetYield / TUNE.plateYield - 1);
+  }
+
   penetratorMass0() {
     if (this._penMass0 !== undefined && this._penMass0Domain === this.domain) return this._penMass0;
     let m = 0;
@@ -6929,13 +6992,14 @@ uniform sampler2D uRamp;
 uniform float uRow;
 uniform float uMaterialMode;
 uniform float uNorm;
+uniform float uPow;
 
 void main() {
   vec2 q = gl_PointCoord * 2.0 - 1.0;
   float r2 = dot(q, q);
   if (r2 >= 1.0) discard;
   float k = 1.0 - r2;
-  float w = k * k * uNorm;
+  float w = pow(k, uPow) * uNorm;
   vec3 ramp = texture2D(uRamp, vec2(vVal, uRow)).rgb;
   vec3 mat  = vCol * (1.14 - 0.72 * vVal);
   vec3 c = mix(ramp, mat, uMaterialMode);
@@ -6953,6 +7017,7 @@ void main() { gl_Position = vec4(aQuad, 0.0, 1.0); }
 const COMP_FRAG = `
 precision highp float;
 uniform sampler2D uAccum;
+uniform sampler2D uAccumC;   // tight-kernel colour: sharp material and damage boundaries
 uniform vec2  uViewport;
 uniform vec2  uShift;      // screen-space shift in pixels (x right, y down)
 uniform float uDark;
@@ -6981,7 +7046,12 @@ void main() {
   float gy = texture2D(uAccum, (p + vec2(0.0, 1.0)) * px).a - texture2D(uAccum, (p - vec2(0.0, 1.0)) * px).a;
   float g = max(0.5 * (abs(gx) + abs(gy)), 1e-3);
   float cov = clamp((a.a - 0.5 * (uLo + uHi)) / g + 0.5, 0.0, 1.0);
-  vec3 c = clamp(a.rgb / max(a.a, 1e-3), 0.0, 1.0) * (1.0 - uDark);
+  // Colour comes from a much tighter kernel than the silhouette: blending
+  // colour over the silhouette's 1.6-spacing kernel smeared every boundary
+  // between parts and every damage front by more than a node.
+  vec4 cc = texture2D(uAccumC, p * px);
+  vec3 col = cc.a > 1e-4 ? cc.rgb / cc.a : a.rgb / max(a.a, 1e-3);
+  vec3 c = clamp(col, 0.0, 1.0) * (1.0 - uDark);
   gl_FragColor = vec4(c * cov * uAlpha, cov * uAlpha);
 }
 `;
@@ -7105,10 +7175,12 @@ class NodeGL {
         uRow: gl.getUniformLocation(splat, 'uRow'),
         uMaterialMode: gl.getUniformLocation(splat, 'uMaterialMode'),
         uNorm: gl.getUniformLocation(splat, 'uNorm'),
+        uPow: gl.getUniformLocation(splat, 'uPow'),
       };
       this.comp = {
         prog: comp,
         uAccum: gl.getUniformLocation(comp, 'uAccum'),
+        uAccumC: gl.getUniformLocation(comp, 'uAccumC'),
         uViewport: gl.getUniformLocation(comp, 'uViewport'),
         uShift: gl.getUniformLocation(comp, 'uShift'),
         uDark: gl.getUniformLocation(comp, 'uDark'),
@@ -7147,17 +7219,13 @@ class NodeGL {
     return prog;
   }
 
-  /** Offscreen accumulation target, rebuilt whenever the canvas size changes. */
-  ensureAccum(w, h) {
+  /** One offscreen accumulation target: half-float where the context can render to it. */
+  makeTarget(w, h) {
     const gl = this.gl;
-    if (this.accum && this.accumW === w && this.accumH === h) return true;
-    if (this.accum) gl.deleteTexture(this.accum);
-    if (this.fbo) gl.deleteFramebuffer(this.fbo);
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    // Half-float where the context can render to it: thousands of small
-    // overlapping weights lose their low bits in an 8-bit target and show as
-    // mottled, smeared colour.
+    // Half-float: thousands of small overlapping weights lose their low bits in
+    // an 8-bit target and show as mottled, smeared colour.
     const isGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
     let floatOK = false;
     if (isGL2 && (gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'))) {
@@ -7166,7 +7234,6 @@ class NodeGL {
     } else {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     }
-    this.accumFloat = floatOK;
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -7178,17 +7245,30 @@ class NodeGL {
     if (!ok && floatOK) {
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      this.accumFloat = false;
+      floatOK = false;
       ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    if (!ok) {
-      gl.deleteTexture(tex); gl.deleteFramebuffer(fbo);
-      this.accum = null; this.fbo = null;
+    if (!ok) { gl.deleteTexture(tex); gl.deleteFramebuffer(fbo); return null; }
+    return { tex, fbo, float: floatOK };
+  }
+
+  /** Silhouette and colour targets, rebuilt whenever the canvas size changes. */
+  ensureAccum(w, h) {
+    const gl = this.gl;
+    if (this.accum && this.accumW === w && this.accumH === h) return true;
+    for (const t of [this.accum, this.accumC]) if (t) gl.deleteTexture(t);
+    for (const f of [this.fbo, this.fboC]) if (f) gl.deleteFramebuffer(f);
+    this.accum = this.accumC = this.fbo = this.fboC = null;
+    const A = this.makeTarget(w, h), B = A && this.makeTarget(w, h);
+    if (!A || !B) {
+      if (A) { gl.deleteTexture(A.tex); gl.deleteFramebuffer(A.fbo); }
       this.smoothOK = false;
       return false;
     }
-    this.accum = tex; this.fbo = fbo; this.accumW = w; this.accumH = h;
+    this.accum = A.tex; this.fbo = A.fbo; this.accumFloat = A.float;
+    this.accumC = B.tex; this.fboC = B.fbo;
+    this.accumW = w; this.accumH = h;
     return true;
   }
 
@@ -7336,7 +7416,20 @@ class NodeGL {
     gl.uniform1f(S.uRow, this.rowFor(o.mode));
     gl.uniform1f(S.uMaterialMode, o.mode === 'material' ? 1 : 0);
     gl.uniform1f(S.uNorm, o.norm);
+    gl.uniform1f(S.uPow, 2);
     gl.blendFunc(gl.ONE, gl.ONE);
+    gl.drawArrays(gl.POINTS, 0, o.count);
+
+    // pass 1b: the colour target. A tight, steep kernel, so each pixel takes its
+    // colour from the nodes nearest to it and boundaries stay about half a node
+    // wide instead of the silhouette kernel's two.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboC);
+    gl.viewport(0, 0, W, H);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.uniform1f(S.uPointSize, Math.max(o.radiusPx * (o.colourRatio ?? 0.62) * 2, 2));
+    gl.uniform1f(S.uNorm, 1);
+    gl.uniform1f(S.uPow, 5);
     gl.drawArrays(gl.POINTS, 0, o.count);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, W, H);
@@ -7351,6 +7444,10 @@ class NodeGL {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.accum);
     gl.uniform1i(C.uAccum, 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.accumC);
+    gl.uniform1i(C.uAccumC, 1);
+    gl.activeTexture(gl.TEXTURE0);
     gl.uniform2f(C.uViewport, W, H);
     gl.uniform1f(C.uLo, o.lo ?? 0.42);
     gl.uniform1f(C.uHi, o.hi ?? 0.58);

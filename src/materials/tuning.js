@@ -73,6 +73,21 @@ export const TUNE = {
    */
   plateYield: 1.5,
 
+  /** Exponent compressing the dynamic strength of metals softer than RHA: Y_eff ~ Y^softMetalExp (1 = no compression). */
+  softMetalExp: 0.42,
+
+  /** Failure-stretch multiplier on the penetrating rod of APDS/APFSDS rounds; a rod that fails early mushrooms into a blob instead of eroding. */
+  rodDuctility: 3.0,
+
+  /** Flow-strength multiplier on the rod of APDS/APFSDS rounds (dynamic strength of WHA/DU at rod strain rates, and plane-strain squash). */
+  rodStrength: 1.0,
+
+  /** Armour flow strength a very long rod (L/D >= 30) sees, as a multiple of handbook yield; eases from plateYield at L/D = 6. */
+  rodTargetYield: 0.7,
+
+  /** Multiplier on the compressive flow limit of ceramics (see plateYield). */
+  ceramicYield: 1.8,
+
   friction: 0.15,
 
   freeZoneD: 1.2,
