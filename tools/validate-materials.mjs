@@ -35,16 +35,32 @@ const BANDS = {
   mild: { me: [0.65, 0.95], note: 'soft steel: thickness efficiency ~0.65-0.9' },
   cast: { me: [0.85, 1.05], note: 'cast armour ~0.9-1.0 of RHA' },
   hha: { me: [1.05, 1.5], note: 'high-hardness steel beats RHA against AP by 10-40 %' },
-  hha430: { me: [1.0, 1.4], note: '' },
-  hha550: { me: [1.05, 1.5], note: '' },
+  armox440: { me: [0.95, 1.35], note: '420-480 HB' },
+  armox500: { me: [1.0, 1.45], note: '480-540 HB' },
+  armox600: { me: [1.0, 1.5], note: '570-640 HB' },
+  hy80: { me: [0.6, 0.95], note: 'naval steel: soft and tough, below RHA against AP' },
+  hy100: { me: [0.7, 1.0], note: '' },
+  hy130: { me: [0.8, 1.1], note: '' },
+  steel4340: { me: [0.8, 1.1], note: 'tempered to ~30 HRC: RHA-like' },
+  steel300m: { me: [1.0, 1.5], note: '~53 HRC' },
+  hadfield: { me: [0.55, 1.0], note: 'soft as struck; work hardening not modelled' },
+  ss304: { me: [0.5, 0.95], note: 'austenitic stainless: poor against AP' },
+  al2519: { me: [1.0, 1.6], note: '' },
+  al6061: { me: [0.85, 1.45], note: '' },
+  al7050: { me: [1.0, 1.6], note: '' },
+  mgaz31b: { me: [0.9, 1.8], note: 'magnesium: mass-efficient, thick' },
+  ti64eli: { me: [0.9, 1.5], note: '' },
+  wha90: { me: [0.6, 1.2], note: 'sintered tungsten alloy: dense, only moderate strength' },
+  wha93: { me: [0.6, 1.2], note: '' },
+  wha95: { me: [0.6, 1.2], note: '' },
   uhh600: { me: [1.0, 1.5], note: 'very hard steel: gains fall off as it becomes brittle' },
   fha: { me: [1.0, 1.4], note: '' },
   al5083: { me: [0.9, 1.5], note: 'aluminium: mass efficiency ~1.0-1.5 vs AP, thickness efficiency ~0.35-0.5' },
   al7039: { me: [1.0, 1.6], note: '' },
   al7075: { me: [1.0, 1.6], note: '' },
-  al2024: { me: [0.9, 1.5], note: '' },
+  al2024: { me: [0.9, 1.6], note: '' },
   ti64: { me: [0.95, 1.5], note: 'Ti-6Al-4V: ME ~1.1-1.4 vs AP' },
-  uhmwpe: { me: [0.8, 2.0], note: 'UHMWPE alone vs medium-calibre AP: wide spread in the literature' },
+  uhmwpe: { me: [0.8, 3.0], note: 'UHMWPE vs medium-calibre AP: wide spread; unidirectional laminates run 2-4 at equal areal density' },
   grp: { me: [0.5, 1.3], note: 'glass-reinforced plastic: ME below 1 to ~1.2 vs AP' },
   aramid: { me: [0.6, 1.6], note: '' },
 };
@@ -65,7 +81,7 @@ function shoot(mat, T) {
 }
 
 function limit(mat, guess) {
-  let lo = 0.004, hi = Math.max(0.03, guess * 1.8);
+  let lo = 0.008, hi = Math.max(0.03, guess * 1.8);
   if (!shoot(mat, lo)) return 0;
   let runs = 1;
   while (shoot(mat, hi) && hi < 1.2) { lo = hi; hi *= 1.5; runs++; }

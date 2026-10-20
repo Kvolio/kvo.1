@@ -43,6 +43,7 @@ import { getMaterial } from '../materials/database.js';
 import { clamp, pointInPoly, distToPolyEdge, normalize } from '../core/math.js';
 import { analyticPanel } from './analytics.js';
 import { TUNE } from '../materials/tuning.js';
+import { flowStress } from '../materials/derive.js';
 
 /** Out-of-plane participation of a layer sloped `slopeDeg`: see TUNE.obliqueDepth. */
 export function obliquityDepth(slopeDeg) {
@@ -267,6 +268,8 @@ export class World {
         want = Math.max(want, (hit.t / Math.max(pf.speed, 1)) / frames);
       }
       this.flightPhase(want);
+    } else if (this.state === 'debris') {
+      this.debrisPhase(want);
     } else if (this.state === 'impact' || this.state === 'settle') {
       const maxSteps = this.paused ? budgetSteps : this.adaptiveSubsteps(q);
       this.impactPhase(want, maxSteps);
@@ -538,7 +541,8 @@ export class World {
         scale: part.scale,
         // a slender kinetic rod's material has to flow, not shatter, to erode
         failMul: (part.role === 1 && ['apds', 'apfsds'].includes(p.cfg.type)) ? TUNE.rodDuctility : 1,
-        strengthMul: (part.role === 1 && ['apds', 'apfsds'].includes(p.cfg.type)) ? TUNE.rodStrength : 1,
+        strengthMul: (part.role === 1 && ['apds', 'apfsds'].includes(p.cfg.type))
+          ? TUNE.rodStrength * flowStress(part.mat, TUNE.rodHardening) / flowStress(part.mat) : 1,
         label: part.label,
         partRef: part,
       });
@@ -700,8 +704,8 @@ export class World {
         const sp = Math.hypot(d.vx[i], d.vy[i]);
         if (sp < 120) { d.vx[i] *= 0.90; d.vy[i] *= 0.90; }
       }
-      if (this.simTime - this.settleTime > 4e-5 && this.fragments.liveCount === 0) this.finish('settled');
-      else if (this.simTime - this.settleTime > 1.2e-4) this.finish('settled');
+      if (this.simTime - this.settleTime > 4e-5 && this.fragments.liveCount === 0) this.beginDebris('settled');
+      else if (this.simTime - this.settleTime > 1.2e-4) this.beginDebris('settled');
     }
   }
 
@@ -915,28 +919,73 @@ export class World {
    * Material that has left the meshed corridor is promoted to a ballistic
    * fragment. It keeps its mass, velocity and energy; the continuum solver
    * has nothing left to say about it.
+   *
+   * WHAT COUNTS AS "LEFT"
+   * The corridor is a window cut out of a larger plate, so its side walls are
+   * NOT free space: the plate continues beyond them, and the outermost rows
+   * are clamped or absorbing boundary nodes standing in for it. This used to
+   * test a threshold one lattice spacing INSIDE the wall, which every boundary
+   * node started beyond. The clamped rows were deleted as "slow debris", and
+   * any boundary node the shock set trembling above 12 m/s was launched as a
+   * ballistic fragment - a spray of fake spall coming off the edges of the
+   * window. It also let material that really did leave sideways fly on through
+   * the surrounding plate as if it were air.
+   *
+   * Now:
+   *   - nodes still bonded into the lattice (not free, not projectile) and
+   *     every boundary node stay where they are;
+   *   - beyond the walls, material that ends up INSIDE a plate is stopped by
+   *     that plate and is retired, with its momentum kept on the books if it
+   *     was projectile;
+   *   - only material that emerges into open space becomes a fragment.
+   * Front and rear exits are open space by construction.
    */
-  promoteEscapees() {
+  promoteEscapees(force = false) {
     const d = this.domain;
-    const halfW = d.width * 0.5 - d.dx;
+    const halfW = d.width * 0.5 + d.dx;
+    const layers = this.scene.activeLayers();
     for (let i = 0; i < d.n; i++) {
       if (!d.alive[i]) continue;
+      const fl = d.flags[i];
+      if (fl & 4) continue;                       // clamped: part of the wall, never debris
       const dx = d.px[i] - d.ox, dy = d.py[i] - d.oy;
       const s = dx * d.ax + dy * d.ay;
       const u = dx * d.bx + dy * d.by;
-      if (s > -d.dx && s < d.length + d.dx && Math.abs(u) < halfW) continue;
+      const lateral = Math.abs(u) >= halfW;
+      const ends = s <= -d.dx || s >= d.length + d.dx;
+      const pen = d.role[i] !== ROLE.ARMOUR && d.role[i] !== ROLE.MODULE;
+      const free = pen || (fl & 8) !== 0;
       const v = Math.hypot(d.vx[i], d.vy[i]);
-      // slow debris and, past a cap, the long tail of small fragments are
-      // retired rather than transported: they carry negligible energy and the
-      // ballistic layer stays cheap. Their mass is still accounted for.
-      if (v < 12 || this.fragments.count >= 1400) {
+      if (force) {
+        // end of the continuum phase: loose, moving material that is not
+        // sitting inside a plate goes ballistic; everything else rests
+        if (!free || v < 12) continue;
+        if (layers.some((L) => pointInPoly(L.poly, d.px[i], d.py[i]))) continue;
+      } else {
+        if (!lateral && !ends) continue;
+        // lattice material still attached to its neighbours is not debris,
+        // unless it has left through the front or rear of the array
+        if (!ends && !free) continue;
+      }
+      const inPlate = lateral && !ends && layers.some((L) => pointInPoly(L.poly, d.px[i], d.py[i]));
+      // slow debris, material that has run into the plate beside the window,
+      // and (past the cap) the unimportant tail are retired rather than
+      // transported. Their mass is still accounted for.
+      const ke = 0.5 * d.mass[i] * v * v;
+      // Detonation products and loose explosive are gas and dust, not
+      // fragments. Carrying them as steel-like pieces made a functioning
+      // reactive cassette "fire" hundreds of grams of fake shrapnel through the
+      // hull at 600 m/s, and punched them into the crew compartment as
+      // fragment hits. Their mass is still accounted for as retired.
+      const gas = (fl & 16) !== 0 || d.matTable[d.matIndex[i]].mat.class === 'explosive';
+      if (v < 12 || inPlate || gas || !this.fragments.accepts(ke)) {
         d.alive[i] = 0;
         this.stats.retiredMass = (this.stats.retiredMass || 0) + d.mass[i];
         this.stats.retiredCount = (this.stats.retiredCount || 0) + 1;
         // Keep its momentum on the books if it was part of the projectile.
         // Dropping a slow piece silently RAISES the reported remnant speed,
         // which is one of the ways the round appears to accelerate.
-        if (d.role[i] !== ROLE.ARMOUR && d.role[i] !== ROLE.MODULE) {
+        if (pen) {
           this.retiredProjM = (this.retiredProjM || 0) + d.mass[i];
           this.retiredProjPX = (this.retiredProjPX || 0) + d.vx[i] * d.mass[i];
           this.retiredProjPY = (this.retiredProjPY || 0) + d.vy[i] * d.mass[i];
@@ -953,6 +1002,56 @@ export class World {
       });
       d.alive[i] = 0;
     }
+  }
+
+  /**
+   * THE LAST OF THE CONTINUUM, THEN THE DEBRIS
+   * The resolved window ends when the penetrator and the plate have stopped
+   * interacting - but anything thrown out of it is still flying. The run used
+   * to be declared finished at that instant and the world frozen, so spall and
+   * remnant pieces hung motionless in the air a few centimetres from the plate
+   * and never reached the crew compartment, the ammunition or the next layer
+   * of an array that sits a metre behind. Component damage was therefore
+   * decided by what happened to be in range at the moment of the freeze.
+   *
+   * Now the loose material that is still moving is handed to the ballistic
+   * transport and the world keeps flying it until everything has stopped or
+   * left. The verdict is issued after that, so it includes what the debris did.
+   */
+  beginDebris(reason) {
+    this.finishReason = reason;
+    this.promoteEscapees(true);
+    this.state = 'debris';
+    this.debrisStart = this.simTime;
+    this.log.add(this.simTime, 'debris',
+      `Continuum resolved - ${this.fragments.liveCount} pieces of debris still in flight`, SEV.NOTE);
+    if (this.fragments.liveCount === 0) this.endDebris();
+  }
+
+  debrisPhase(wantDt) {
+    const vmax = this.fragments.fastest();
+    // a frame moves the fastest piece about 2 cm, so it is seen to travel
+    let dt = clamp(0.02 / Math.max(vmax, 1), 5e-6, 6e-4);
+    dt = Math.min(dt, Math.max(wantDt, 5e-6) * 4);
+    for (let k = 0; k < 4 && this.fragments.liveCount > 0; k++) {
+      this.simTime += dt;
+      this.fragments.step(dt, this.scene, this.simTime, this.internals);
+      if (this.simTime - this.debrisStart > (this.settings.debrisTime ?? 0.015)) break;
+    }
+    this.updateStats();
+    if (this.fragments.liveCount === 0 || this.simTime - this.debrisStart > (this.settings.debrisTime ?? 0.015)) {
+      this.endDebris();
+    }
+  }
+
+  endDebris() {
+    const F = this.fragments;
+    if (F.stoppedInPlate || F.stoppedByCasing || F.impacts.length) {
+      this.log.add(this.simTime, 'debris-end',
+        `Debris settled: ${F.stoppedInPlate} pieces embedded in plate, ${F.impacts.length} reached components`
+        + `${F.stoppedByCasing ? `, ${F.stoppedByCasing} stopped by casings` : ''}`, SEV.NOTE);
+    }
+    this.finish(this.finishReason || 'settled');
   }
 
   // ---------------------------------------------------------------- stats

@@ -12,14 +12,8 @@
 import { el, panel, row, num, select, slider, toggle, kv, clear, panelState } from './dom.js';
 import { PRESETS, PRESET_ORDER } from './presets.js';
 import { AMMO, AMMO_ORDER, ammoLabel } from './ammo.js';
-import { MATERIALS, ARMOUR_KEYS, armourTier, describeMaterial, PENETRATOR_KEYS, getMaterial, registerMaterial } from '../materials/database.js';
+import { MATERIALS, ARMOUR_KEYS, materialGroup, gradeText, keysFor, describeMaterial, PENETRATOR_KEYS, getMaterial, registerMaterial } from '../materials/database.js';
 
-/** Headings for the two armour tiers in the material dropdown. */
-const MATERIAL_GROUP = {
-  basic: 'Basic — steels, light alloys, commodity laminates, interlayers',
-  advanced: 'Advanced — ceramics, high-performance fibres, specified grades, heavy alloys',
-  custom: 'Custom / edited',
-};
 import { PROJECTILE_TYPES, TYPE_ORDER, makeProjectileConfig } from '../sim/projectileTypes.js';
 import { Scene, makeLayer, makeModule, expandEra, MODULE_TYPES } from '../sim/scene.js';
 import { QUALITY } from '../sim/world.js';
@@ -54,13 +48,19 @@ const FIELDS = {
 
 const MAT_FIELDS = {
   core: ['Core material', PENETRATOR_KEYS],
-  cap: ['Cap material', ['softcap', 'mild', 'rha', 'al7075']],
-  body: ['Body material', ['al7075', 'mild', 'al5083']],
-  shell: ['Casing material', ['mild', 'rha', 'cast']],
+  cap: ['Cap material', keysFor('cap')],
+  body: ['Body material', keysFor('body')],
+  shell: ['Casing material', keysFor('shell')],
   filler: ['Filler', ['compb', 'tnt', 'octol', 'hesh']],
-  liner: ['Liner material', ['copper', 'ti64', 'mild']],
-  sabot: ['Sabot material', ['al7075', 'grp', 'mild']],
+  liner: ['Liner material', keysFor('liner')],
+  sabot: ['Sabot material', keysFor('sabot')],
 };
+
+/** Where a material's numbers come from: data grade, then the references. */
+function dataLine(m) {
+  const refs = (m.refs && m.refs.length) ? m.refs.join(' · ') : (m.source || '');
+  return `Data: ${gradeText(m)}${refs ? ` — ${refs}` : ''}`;
+}
 
 export class App {
   constructor(world, renderer, camera) {
@@ -185,13 +185,14 @@ export class App {
     for (const [key, [label, opts]] of Object.entries(MAT_FIELDS)) {
       if (!(key in cfg)) continue;
       p.body.appendChild(row(label, select(
-        opts.map((k) => ({ value: k, label: MATERIALS[k].name })), cfg[key], (v) => set(key, v),
+        opts.map((k) => ({ value: k, label: MATERIALS[k].name, group: materialGroup(k) })), cfg[key], (v) => set(key, v),
       )));
       // same descriptor the armour layers get, so a core is not just a name
       const pm = MATERIALS[cfg[key]];
       if (pm) {
         p.body.appendChild(el('div', { class: 'hint' }, describeMaterial(pm)));
         if (pm.notes) p.body.appendChild(el('div', { class: 'note' }, pm.notes));
+        p.body.appendChild(el('div', { class: 'hint' }, dataLine(pm)));
       }
     }
 
@@ -384,9 +385,17 @@ export class App {
       // own constants (see describeMaterial); the second is its role.
       const hintEl = el('div', { class: 'hint' }, describeMaterial(m));
       const noteEl = el('div', { class: 'note' }, m.notes || '');
-      b.appendChild(row('Material', select(
-        ARMOUR_KEYS.map((k) => ({
-          value: k, label: MATERIALS[k].name, group: MATERIAL_GROUP[armourTier(k)],
+      const dataEl = el('div', { class: 'hint' }, dataLine(m));
+      // The charge of an ERA cassette is chosen from fillers, not from armour
+      // plate: an armour list does not contain the explosive at all, so the
+      // picker used to show the first plate in the list for a live cassette.
+      // The inert fillers are there as the control experiment: same geometry
+      // and mass, nothing to detonate.
+      const pickKeys = Lr.eraPart === 'charge' ? keysFor('eracharge') : ARMOUR_KEYS;
+      b.appendChild(row(Lr.eraPart === 'charge' ? 'Charge' : 'Material', select(
+        pickKeys.map((k) => ({
+          value: k, label: MATERIALS[k].name + (MATERIALS[k].detVel ? '' : (Lr.eraPart === 'charge' ? ' (inert control)' : '')),
+          group: Lr.eraPart === 'charge' ? (MATERIALS[k].detVel ? 'Explosive filler' : 'Inert filler') : materialGroup(k),
         })), Lr.material,
         (v) => {
           Lr.material = v;
@@ -403,12 +412,14 @@ export class App {
           hintEl.textContent = describeMaterial(nm);
           noteEl.textContent = nm.notes || '';
           noteEl.style.display = nm.notes ? '' : 'none';
+          dataEl.textContent = dataLine(nm);
           swatchEl.style.background = nm.color;
           if (!Lr.label) nameEl.textContent = nm.name;
           changed();
         })));
       b.appendChild(hintEl);
       b.appendChild(noteEl);
+      b.appendChild(dataEl);
       if (!m.notes) noteEl.style.display = 'none';
       b.appendChild(row('Thickness (mm)', num(Lr.thickness * 1000, { dp: 1, step: 1, onchange: (v) => { Lr.thickness = Math.max(0.0005, v / 1000); changed(); } })));
       b.appendChild(row('Slope (°)', num(Lr.slope, { dp: 1, step: 5, onchange: (v) => {
@@ -553,9 +564,14 @@ export class App {
     if (w.cassettes && w.cassettes.length) {
       for (const c of w.cassettes) {
         const done = c.firedColumns >= c.columns.length;
+        // "inert" was the wrong word for a cassette that was struck below its
+        // threshold: it is a live charge that did not go off. Functioning is the
+        // defender's good outcome, so it is not drawn in the warning colour.
         p.body.appendChild(kv([
-          [`${c.label}`, c.initiated ? (done ? 'functioned' : 'detonating') : 'inert',
-            c.initiated ? 'bad' : 'good'],
+          [`${c.label}`, c.initiated ? (done ? 'functioned' : 'detonating') : 'did not function',
+            c.initiated ? 'good' : 'hi'],
+          ['— initiation v\u00b2d', `${c.peakHeld.toFixed(0)} of ${c.heldV2d} (km/s)\u00b2\u00b7mm`],
+          c.initiated ? ['— initiated at', `${(c.initT * 1e6).toFixed(0)} \u00b5s`] : null,
           c.initiated ? ['— front plate', U.vel(c.vFront)] : null,
           c.initiated ? ['— back plate', U.vel(c.vBack)] : null,
           c.initiated ? ['— plate driven', U.mass(c.drivenMass)] : null,

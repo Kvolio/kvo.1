@@ -30,6 +30,7 @@
  */
 
 import { clamp, DEG } from '../core/math.js';
+import { flowStress } from '../materials/derive.js';
 
 /**
  * Tate/Alekseevskii long-rod penetration, integrated numerically.
@@ -154,8 +155,8 @@ export function analyticPanel({ projectile, scene, rha }) {
   const pen = projectile.parts.find((p) => p.role === 1) || projectile.parts[0];
   const penMat = pen.mat;
 
-  const Rt = cavityResistance(tgt.Y, tgt.E);
-  const Yp = 1.7 * penMat.Y;
+  const Rt = cavityResistance(flowStress(tgt), tgt.E);
+  const Yp = 1.7 * flowStress(penMat);
   const tate = tatePenetration({
     rhoP: penMat.rho, rhoT: tgt.rho, Yp, Rt,
     L0: d.length, v0: projectile.speed, obliquity: obl,

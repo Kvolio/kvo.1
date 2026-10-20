@@ -19,8 +19,9 @@ import { PROJECTILE_TYPES, TYPE_ORDER } from '../src/sim/projectileTypes.js';
 import { PRESETS, PRESET_ORDER } from '../src/ui/presets.js';
 import { AMMO, AMMO_ORDER, ammoLabel } from '../src/ui/ammo.js';
 import { sandwichFlyerVelocity } from '../src/sim/era.js';
-import { MATERIALS, ARMOUR_KEYS, BASIC_ARMOUR_KEYS, ADVANCED_ARMOUR_KEYS, armourTier,
-  PENETRATOR_KEYS, sampleGradient, describeMaterial } from '../src/materials/database.js';
+import { FragmentSystem, clipLine, perforate } from '../src/sim/fragments.js';
+import { MATERIALS, ARMOUR_KEYS, PENETRATOR_KEYS, GROUPS, sampleGradient, describeMaterial,
+  getMaterial, keysFor } from '../src/materials/database.js';
 import { BOND } from '../src/sim/pd/domain.js';
 
 let failures = 0;
@@ -482,13 +483,20 @@ for (const k of ARMOUR_KEYS) {
 
 console.log('\n== the material library ==');
 {
-  check(ARMOUR_KEYS.length === BASIC_ARMOUR_KEYS.length + ADVANCED_ARMOUR_KEYS.length,
-    `every armour key is in exactly one tier (${BASIC_ARMOUR_KEYS.length} basic `
-    + `+ ${ADVANCED_ARMOUR_KEYS.length} advanced = ${ARMOUR_KEYS.length})`);
   const dupes = ARMOUR_KEYS.filter((k, i) => ARMOUR_KEYS.indexOf(k) !== i);
-  check(dupes.length === 0, `no key appears twice${dupes.length ? ` (${dupes})` : ''}`);
+  check(dupes.length === 0, `no armour key appears twice (${ARMOUR_KEYS.length} armour materials)${dupes.length ? ` (${dupes})` : ''}`);
   check(ARMOUR_KEYS.every((k) => MATERIALS[k]), 'every key resolves to a material');
-  check(ARMOUR_KEYS.every((k) => armourTier(k) !== 'custom'), 'every key reports its tier');
+  const groupIds = new Set(GROUPS.map((g) => g.id));
+  const orphans = Object.values(MATERIALS).filter((m) => !groupIds.has(m.group)).map((m) => m.key);
+  check(orphans.length === 0, `every material belongs to a known family${orphans.length ? ` (${orphans})` : ''}`);
+  const noData = Object.values(MATERIALS).filter((m) => !['A', 'B', 'C'].includes(m.grade) || !m.refs || !m.refs.length).map((m) => m.key);
+  check(noData.length === 0, `every material carries a data grade and at least one reference${noData.length ? ` (${noData})` : ''}`);
+  check(['mil12560', 'mil46100', 'mars240', 'hha430', 'ths', 'b4chp'].every((k) => getMaterial(k)),
+    'keys of merged duplicates still resolve (old scenarios load)');
+  check(!ARMOUR_KEYS.includes('mil12560') && !Object.keys(MATERIALS).includes('mil12560'),
+    'and the merged duplicates are not listed twice');
+  check(keysFor('cap').length >= 4 && keysFor('sabot').includes('al7075') && keysFor('liner').includes('copper'),
+    'projectile material pick-lists are generated from the uses tags');
 
   // Property sanity across the whole library. The bar wave speed floor is
   // class-dependent on purpose: an unfilled silicone at E = 2 MPa really does
@@ -587,6 +595,55 @@ for (const k of PENETRATOR_KEYS) {
       && r.w.domain && r.w.domain.n > 200,
       `${k}: exit ${r.stats.residualVelocity.toFixed(0)} m/s`);
   } catch (e) { fail(`${k}: threw — ${e.message}`); }
+}
+
+console.log('\n== fragments ==');
+{
+  const stubBus = { emit() {}, on() {} };
+  const log = { add() {} };
+  const mkScene = (thick) => {
+    const sc = new Scene();
+    sc.setLayers([makeLayer({ material: 'rha', thickness: thick, slope: 0, height: 1.0 })]);
+    return sc;
+  };
+  const sc = mkScene(0.002);
+  const L = sc.activeLayers()[0];
+  let x0 = Infinity, x1 = -Infinity, ymid = 0;
+  for (let i = 0; i < L.poly.length; i += 2) { x0 = Math.min(x0, L.poly[i]); x1 = Math.max(x1, L.poly[i]); ymid += L.poly[i + 1] / (L.poly.length / 2); }
+  const internals = { applyHit() {} };
+
+  // a 6 mm step across a 2 mm plate: the old end-point test stepped straight over it
+  const F = new FragmentSystem(stubBus, log);
+  F.add({ x: x0 - 0.002, y: ymid, vx: 1500, vy: 0, mass: 0.004, matKey: 'rha' });
+  F.step(4e-6, sc, 0, internals);
+  check(F.perforations + F.stoppedInPlate === 1,
+    `a fragment cannot step over a thin plate inside one frame (${F.perforations} through, ${F.stoppedInPlate} stopped)`);
+
+  // quadratic drag integrated exactly: a light fragment given a huge step slows, never reverses
+  const F2 = new FragmentSystem(stubBus, log);
+  const g = F2.add({ x: -5, y: 5, vx: 2000, vy: 0, mass: 0.0005, matKey: 'rha' });
+  F2.step(5e-2, mkScene(0.002), 0, internals);
+  check(g.vx > 0 && g.vx < 2000, `drag slows a light fragment over a long step without reversing it (${g.vx.toFixed(0)} m/s)`);
+
+  // chord length, not nominal thickness: crossing a plate obliquely costs more
+  const f1 = { vx: 900, vy: 0, mass: 0.004, dia: 0.006, size: 0.006 };
+  const thin = perforate(f1, 0.005, MATERIALS.rha), thick = perforate(f1, 0.010, MATERIALS.rha);
+  check(thin.vbl < thick.vbl && thin.through && thick.vbl / thin.vbl > 1.5,
+    `a longer chord is harder to punch (limit ${thin.vbl.toFixed(0)} m/s for 5 mm, ${thick.vbl.toFixed(0)} for 10 mm)`);
+  check(thin.plugMass > 0 && Math.abs(thin.mass - f1.mass) < 1e-12, 'the plug leaves as its own piece and the striker keeps its mass');
+  const cl = clipLine(L.poly, x0 - 0.01, ymid, 1, 0);
+  check(cl && Math.abs((cl.tOut - cl.tIn) - (x1 - x0)) < 1e-9, 'a segment through a plate is clipped to its true chord');
+
+  // detonation products are gas: a cassette that functions sheds no fragments made of its charge
+  const era = run({ type: 'heat', proj: { standoff: 0.6 },
+    layers: [{ kind: 'era', label: 'ERA', plate: 'hha', slope: 60, height: 0.7,
+      frontThickness: 0.003, chargeThickness: 0.006, backThickness: 0.003 },
+    { material: 'rha', thickness: 0.09, gap: 0.10, slope: 60, height: 1.0 }] });
+  const gas = era.w.fragments.list.filter((q) => q.matKey === 'era4s20').length;
+  check(era.w.cassettes[0] && era.w.cassettes[0].initiated && gas === 0,
+    `detonation products are not turned into shrapnel (${gas} charge fragments)`);
+  check(era.w.state === 'done' && era.w.fragments.liveCount === 0,
+    'the run ends only once the debris has stopped or left the scene');
 }
 
 console.log('\n== aiming ==');

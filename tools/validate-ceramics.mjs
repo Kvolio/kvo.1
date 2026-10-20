@@ -29,7 +29,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (argv[i] === '--backing') opt.backing = argv[++i];
   else keys.push(argv[i]);
 }
-const BANDS = { alumina: [1.3, 2.5], alumina85: [1.2, 2.3], sic: [1.5, 3.0], b4c: [1.5, 3.2], b4chp: [1.5, 3.2], si3n4: [1.3, 2.6] };
+const BANDS = { alumina: [1.3, 2.5], alumina85: [1.2, 2.3], alumina96: [1.2, 2.4], sic: [1.5, 3.0], rbsic: [1.4, 2.8], b4c: [1.5, 3.2], si3n4: [1.3, 2.6], alon: [1.1, 2.3], sapphire: [1.2, 2.5], spinel: [1.0, 2.2] };
 const todo = keys.length ? keys : ['alumina', 'sic', 'b4c'];
 const a = AMMO[opt.round];
 

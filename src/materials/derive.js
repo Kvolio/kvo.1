@@ -63,6 +63,17 @@ import { clamp } from '../core/math.js';
 import { TUNE } from './tuning.js';
 
 /**
+ * Flow stress the plastic bond works at: the yield plus the share of the
+ * Y-to-UTS interval that strain hardening has delivered at ballistic strains
+ * (TUNE.hardening). Metals only; a ceramic's `Y` is already its confined
+ * compressive flow stress.
+ */
+export function flowStress(m, hardening = TUNE.hardening) {
+  if (m.class === 'metal' && m.UTS > m.Y) return m.Y + hardening * (m.UTS - m.Y);
+  return m.Y;
+}
+
+/**
  * @param {object} m   material record from the database
  * @param {number} dx  lattice spacing (m)
  * @param {number} mRatio horizon / lattice spacing (typically 3.015)
@@ -72,7 +83,8 @@ export function derivePD(m, dx, mRatio, h) {
   const delta = mRatio * dx;
   const c = (9 * m.E) / (Math.PI * h * delta * delta * delta);
   const s0 = Math.sqrt((4 * Math.PI * m.G0) / (9 * m.E * delta));
-  const sy = m.Y / m.E;
+  const flow = flowStress(m);
+  const sy = flow / m.E;
 
   // FAILURE CALIBRATION - see the note below. The bond fails at the material's
   // measured total failure strain, not at the fracture-energy critical stretch.
@@ -109,7 +121,7 @@ export function derivePD(m, dx, mRatio, h) {
     cp: m.cp || 477,
     rho: m.rho,
     E: m.E,
-    Y: m.Y,
+    Y: flow,
     cWave,
     erosionResist: m.erosionResist,
     selfSharpening: !!m.selfSharpening,

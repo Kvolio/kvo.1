@@ -224,8 +224,19 @@ high-hardness steel, and the tendency of depleted uranium (low `m`) to shed
 material from the nose flanks instead of mushrooming. None of that is
 special-cased.
 
-Strain hardening (`A + Bεⁿ`) is folded into the quasi-static yield of the
-database entry; the bond is perfectly plastic past `s_y`.
+Strain hardening (`A + Bεⁿ`) is folded into the bond's yield, which is perfectly
+plastic. The database stores the honest quasi-static yield `Y` and ultimate
+strength `UTS`; the solver's yield stretch is built from the **flow stress**
+
+```
+Y_flow = Y + h · (UTS - Y)         h = TUNE.hardening = 0.4   (metals only)
+```
+
+the share of the yield-to-ultimate interval a steel has hardened through at the
+5–10 % strains of penetration. Ceramics, which have no tensile hardening, are
+used as stored. (Before this the database `Y` values were quietly inflated to
+stand in for hardening, so the numbers in the Inspector were not the numbers
+in the handbook.)
 
 ### 3.6 Out-of-plane confinement — a calibration factor
 
@@ -267,19 +278,38 @@ All of these live in `src/materials/tuning.js`, each with its reasoning.
   silence; a glancing first touch on a sloped plate tripped it with the round
   still in flight ("No penetration, depth 0"). The silence must now last for
   the round to cross three lattice spacings at its own speed.
+* **Flow stress (`hardening` = 0.4).** The database holds the honest handbook
+  yield `Y` and tensile strength `UTS`; the plastic bond works at
+  `Y_flow = Y + 0.4 (UTS - Y)`, the share of the hardening interval a metal has
+  delivered at ballistic strains. RHA (950 MPa / 1.2 GPa) flows at 1.05 GPa, the
+  value the earlier calibration used, so the plate and shell calibrations carried
+  over; the many materials whose `Y` was a made-up flow figure now carry their
+  real strengths. Ceramics are not touched (their `Y` is already a confined
+  compressive flow stress), and rods use the handbook yield (`rodHardening` = 0).
 * **Plate strength (`plateYield` = 1.5, `softMetalExp` = 0.42).** Cylindrical
   cavity expansion in a plane-strain slice needs less pressure than a real hole,
   so armour metal's effective flow strength is raised 1.5x. Soft metals are
   pulled towards RHA (Y_eff ~ Y^0.42): their rate hardening is stronger, so mild
   steel's limit against AP is ~0.7 of RHA, not the 0.45 its static yield implies.
   Titanium carries `plateScale` 0.75 (adiabatic-shear plugging). Checked with
-  `tools/validate-materials.mjs` against published mass-efficiency bands
-  (mild 0.71, cast 0.90, HHA 1.07, Al 1.3-1.5, Ti 1.39 relative to RHA).
+  `tools/validate-materials.mjs` (75 mm KwK 40 APCBC at 790 m/s, normal incidence, mass
+  efficiency relative to RHA; bands are published ranges, not point values):
+  mild 0.67, cast 0.90, HHA 1.24, 300M 1.39, UHH 1.07, FHA 1.31, HY-80 0.83,
+  HY-100 0.98, 4340 0.90, Hadfield 0.80, 304 0.63, Al 5083 1.33, Al 7075 1.58,
+  Al 2519 1.32, Mg AZ31B 1.78, Ti-6Al-4V 1.25, UHMWPE 2.4, GRP 0.84, aramid
+  1.34, all inside their bands. Known misses: ARMOX 500 and 600 come out equal
+  (both 1.07) because above ~500 HB the shell is the limit, not the plate;
+  tungsten heavy alloys read 0.45-0.54 against a 0.6-1.2 band (sintered WHA is
+  dense but weak and brittle, so per kilogramme it is poor armour; the band is
+  generous). The 4 mm plates the validator once started from are a single
+  lattice node thick at `low` quality and are not meaningful.
+  De Marre ratios of the shell catalogue (`tools/validate.mjs`, tolerance
+  +/-25 %): 0.82-1.20 across 17 rounds, all inside.
 * **Ceramics (`ceramicYield` = 1.8, per-ceramic `plateScale`).** Ceramic-faced
-  panels at equal areal density: alumina 1.64, SiC 1.85, B4C 1.92 against RHA
+  panels at equal areal density: alumina 1.55, SiC 1.74, B4C 1.73 against RHA
   (`tools/validate-ceramics.mjs`; published bands are 1.3-2.5 / 1.5-3.0 /
-  1.5-3.2). The ordering is right but SiC and B4C are closer together than in
-  reality, and the bands themselves are wide.
+  1.5-3.2). SiC and B4C now come out level (they differ by 10-20 % in the references)
+  and below the older figures; the ordering against alumina is right, and the bands themselves are wide.
 * **Long rods.** The corridor width is capped at ten penetrator diameters of
   plate; an 850 mm plate used to give a 0.8 m corridor and a lattice only two
   nodes across the rod. The rod's failure stretch is raised (`rodDuctility` 3)
@@ -287,8 +317,14 @@ All of these live in `src/materials/tuning.js`, each with its reasoning.
   than a shell does (`rodTargetYield`, easing in from L/D 6 to 30) because in the
   slice a long rod upsets into a blob where in 3-D it erodes out of its channel.
   `tools/validate-rods.mjs` compares depth into thick RHA with Tate
-  (R_t = 5 GPa): 0.7-1.1 for most rods, with m735 over and L28 APDS under.
-  Not resolved: the slice still cannot reproduce radial erosion flow.
+  (R_t = 5 GPa). The spread is wide, 0.3-1.6, and small input changes move a
+  round between the ends of it: a rod either keeps eroding through the plate or
+  stalls, and the slice cannot reproduce radial erosion flow. The tall modern
+  rods (DM53, 3BM42, 3BM46) sit at 0.3-0.6 and are low; this was already so at
+  the previous commit. Carbide-cored APDS (17-pdr, L28) over-penetrate on the
+  ballistic-limit test (L28: 1.0 m of RHA against 0.36 m by Tate) because the
+  comminuted carbide keeps ploughing through the plate as rigid debris. Neither
+  is tuned here: that needs a better erosion model, not another knob.
 
 ### 3.7 Local strength scatter
 
@@ -715,14 +751,48 @@ meshed corridor, carrying the mass, velocity and energy it had at that moment.
 Inside the corridor, spall is simply peridynamic material and can still collide
 with the penetrator and the channel walls.
 
-A promoted fragment striking a thin plate or a component casing is resolved
-with a plugging-work model rather than a fresh continuum run:
+**What leaves the window.** The corridor is a cut-out of a bigger plate, so its
+side walls are not free space: clamped and absorbing boundary rows stand in for
+the plate beyond them and are never debris, and material that runs into the
+plate beside the window is stopped by it and retired. Only material that
+emerges into open space (the front and rear faces) becomes a fragment.
+Detonation products and loose explosive are gas, not shrapnel, and are retired
+with their mass accounted for: a functioning reactive cassette used to "fire"
+hundreds of grams of fake steel-like fragments into the hull.
+
+**What a fragment is.** The 2-D slab gives a node a mass but no depth, so the
+drawn square is not the size of the piece. Drag area and plug diameter use the
+diameter of a compact body of that mass and material, `d = (6m/πρ)^⅓`, about
+twice the lattice spacing for steel.
+
+**Motion.** Quadratic drag has a closed form, `v(t) = v₀/(1 + k v₀ t)`, so a
+frame's step is integrated exactly; one explicit Euler step reverses the
+velocity of a light fragment at large `k·dt`. Gravity is applied alongside.
+
+**Hits are swept.** A frame moves a kilometre-per-second fragment several
+millimetres, more than a thin plate or a casing is thick, so testing only the
+end points let it step over the plate. Each step is a segment clipped against
+every (convex) plate and component, and the crossings are resolved in order.
+
+**After the continuum.** When the penetrator and the plate stop interacting the
+run no longer freezes: the loose, moving material is handed to this ballistic
+transport and flown until it has stopped or left, so spall and remnant pieces
+reach the crew compartment, the ammunition or the next layer of an array a
+metre behind. The verdict is issued after that. Pieces below 5 J, or already
+past everything in the scene and heading away, do not hold the run open.
+
+A fragment striking a plate or a component casing is resolved with a
+plugging-work model rather than a fresh continuum run:
 
 ```
 E_perf = k · π · d · t² · τ                (shear-out of a plug, τ ≈ 0.6 UTS)
 v_bl   = √(2 E_perf / m)
 v_r    = m/(m + m_plug) · √(v² - v_bl²)    (Recht & Ipson 1963)
 ```
+
+`t` is the length of the chord the fragment actually cuts, so a fragment
+crossing a sloped plate obliquely sees the longer path. The plug leaves as a
+separate piece; mass and momentum are conserved.
 
 Components are resolved analytically: the striker must beat the casing, then
 the surviving energy is compared with a component toughness scale. **Those
@@ -857,50 +927,66 @@ only have concealed this. Cause not yet established.
 
 ## 8. Material data provenance
 
-Every entry in `src/materials/database.js` carries a `source` and/or `notes`
-field naming the specification or the class of material it represents, and the
-Inspector panel shows it. Fracture energies are computed as `G₀ = K_IC²/E` from
-representative toughness values. Gurney velocities and detonation velocities
-are from the standard explosives-handbook range for each composition.
+Every material is one record in `src/materials/data/<family>.js` (steels,
+light metals, dense and non-ferrous metals, ceramics/glass/concrete,
+composites, polymers, fillers), assembled by `src/materials/database.js`.
+Each record carries a family `group`, the `uses` it can play in the simulator
+(armour, penetrator, cap, body, shell, sabot, liner, casing, filler), a data
+`grade` and its `refs`; the Inspector shows the grade and references under the
+material description. Fracture energies are `G₀ = K_IC²/E`.
 
-These are handbook figures for a class of material. Real armour plate varies
-substantially with heat treatment, thickness and lot.
+**Data grades.**
 
-### 8.0 Two tiers: basic and advanced
+| Grade | Meaning |
+|---|---|
+| A | taken from a manufacturer datasheet or a published standard (Armox 440T/500T, MARS 500, Hexoloy SA, CoorsTek AD-85/96/995, RBSiC, ZTA, Si₃N₄, AlN, Y-PSZ, ALON) |
+| B | handbook / open-literature typical value for the named alloy or ceramic |
+| C | class-representative figure for a family with a wide spread (laminates, elastomers, cores, cast products, heat-treated families) |
 
-The 81 armour materials are split into two groups in the UI. The split is
-about what a material **is**, not how well it performs:
+None of it is certified lot data, and the grade says how firmly the numbers are
+pinned, not how good the material is. Real armour plate varies substantially
+with heat treatment, thickness and lot. For ceramics `Y` is the effective
+**confined compressive flow stress** the solver uses (about 1.2 times the
+datasheet compressive strength, between it and the dynamic strength the Hugoniot
+elastic limit implies) and is fixed by `TUNE.ceramicYield` and the per-material
+`plateScale`; it is a model parameter, not a handbook yield.
 
-- **Basic** (40) — ordinary armour and structural stock: the homogeneous and
-  hardened steels, wrought light alloys, commodity laminates, soft interlayers
-  and crushable cores.
-- **Advanced** (41) — anything needing a controlled process or an engineered
-  microstructure: sintered ceramics, high-performance fibre laminates,
-  specified armour grades, superalloys, heavy and refractory alloys.
+### 8.0 Families, merged duplicates and what was corrected
 
-**Advanced does not mean better.** Rolled homogeneous armour beats most of the
-advanced list per millimetre, and several advanced entries are in the database
-because a fragment may have to pass through them, not because anyone would
-armour a vehicle with them — the superalloys are engine and turbine materials,
-and diamond is there to bound what hardness alone can do rather than as a
-proposal.
+The pick-list is grouped by family, not by an "advanced" tier: steel (rolled and
+cast armour; high- and ultra-hard plate; face-hardened and dual-hardness;
+naval, structural and stainless; ordnance, maraging and penetrator steels),
+aluminium, magnesium, titanium, dense and refractory metals, copper/lead/nickel
+superalloys, oxide ceramics, carbide/boride/nitride ceramics, glass and
+transparent ceramics, fibre composites, laminates and liners, cores, elastomers,
+rigid plastics, concrete and fillers.
 
-Measured ordering at equal thickness (60 mm, 88 mm APCBC at 800 m/s, by exit
-velocity) comes out as: tungsten heavy alloys and depleted uranium, then
-tantalum and maraging steel, then the hardened steels in hardness order
-(600 BHN → 430 BHN), then RHA and the soft steels, then ceramics, then
-aluminium, then the fibre laminates, then polymers, and finally the honeycomb
-cores, which stop essentially nothing. Per unit **mass** the order is very
-different — boron carbide at 151 kg/m² is beaten only by materials several
-times its areal density.
+An audit against datasheets found and fixed:
 
-**A cost that is easy to miss:** very stiff materials integrate more slowly.
-The stable time step scales with the lattice wave speed, so boron carbide
-(13 500 m/s) runs at an 18 ns step against RHA's 47 ns, and diamond
-(17 300 m/s) is worse. A diamond or B₄C plate needs roughly twice the frames
-of a steel one to reach the same simulated time. Nothing is wrong when that
-happens — it is the CFL condition doing its job — but it is why those runs
-feel slow.
+- **Industeel MARS 240 is a 500 HB high-hardness steel**, not the soft 240 HB
+  steel the database had; it is now the same material as the 500 HB class entry.
+- Armox 440T hardness is 420–480 HBW, not 370–430.
+- Near-duplicates with no distinguishing data were merged (`mil12560`→RHA,
+  `mil46100` and `mars240`→high-hardness 500 HB, `hha430`/`hha550` →Armox
+  440T/500T, `mil46177`→RHA, `ths`→dual-hardness, `steel4330v`→4340,
+  `whanicu`→90W, `b4chp`→B₄C, `s2advanced`→S-2 glass, `pboepoxy`→PBO). The old
+  keys still resolve, so saved scenarios load. `al7075` was defined twice.
+- Mis-stated grades: the 93 % tungsten alloy was labelled ASTM B777 class 3 with
+  swaged-rod strength; sintered B777 grades (90, 93, 95 %W) are now separate from
+  swaged long-rod stock. Tantalum had cold-worked strengths; it is annealed
+  now. Composite entries that used unidirectional-tape strengths (UHMWPE,
+  S-2 glass, carbon/epoxy) now use cross-ply / woven / quasi-isotropic values.
+  B₄C toughness was over-stated (3.0, not 4.3 MPa·m^½); ALON, AlN, ZTA, zirconia,
+  AD-85 and silicon carbide now carry the datasheet values.
+
+New: HY-80/100/130, 4340, 300M, Hadfield manganese steel, 304 stainless,
+magnesium AZ31B, aluminium 2519, 90 % and 95 % tungsten alloys, lead, AD-96
+alumina, reaction-bonded SiC, sapphire, ALON, spinel, float and borosilicate
+glass, concrete and UHPFRC, HDPE and nylon 6/6.
+
+The measured efficiency of the armour materials against published bands is
+checked by `tools/validate-materials.mjs` and `tools/validate-ceramics.mjs`
+(results in §3.6a).
 
 ### 8.1 Textolite and the Soviet laminate glacis
 

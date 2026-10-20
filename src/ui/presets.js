@@ -142,7 +142,7 @@ export const PRESETS = {
   },
   'era-insensitive': {
     name: 'ERA under fragment attack',
-    note: 'The same cassette hit by something it is designed to shrug off. An ERA filler is deliberately insensitive: it has to survive splinters, small arms and its own vehicle firing. Whether it functions here is decided by the Walker-Wasley shock integral on the simulated stress, not by what is hitting it.',
+    note: 'The same cassette hit by something it is designed to shrug off. An ERA filler is deliberately insensitive: it has to survive splinters, small arms and its own vehicle firing. Whether it functions here is decided by Held\u2019s v²d criterion on the filler the strike actually drives (speed squared times width of driven filler), not by what is hitting it.',
     projectile: { type: 'ap', caliber: 0.0145, mass: 0.064, velocity: 1000, standoff: 0.5 },
     scene: {
       layers: [

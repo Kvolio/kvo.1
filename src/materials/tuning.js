@@ -13,6 +13,21 @@
  */
 export const TUNE = {
   /**
+   * Strain hardening, folded into the perfectly-plastic bond. A real metal
+   * flows at its 0.2 % yield only at the very start; by the 5-10 % strains of
+   * penetration it is working at something between yield and ultimate. The
+   * database stores the honest yield (Y) and ultimate (UTS), and the solver's
+   * bond yield stretch is the flow stress
+   *
+   *     Y_flow = Y + hardening * (UTS - Y)
+   *
+   * for metals. 0.4 is the fraction of the Y-to-UTS interval reached at ~5 %
+   * strain for a steel with a typical hardening exponent. Ceramics, which have
+   * no tensile hardening, are not touched.
+   */
+  hardening: 0.4,
+
+  /**
    * Multiplier on the failure stretch of metals. The handbook "elongation"
    * (17 % for RHA) is a uniform-plus-necking engineering strain over a 50 mm
    * gauge. The strain a small volume of metal reaches locally before it
@@ -81,6 +96,14 @@ export const TUNE = {
 
   /** Flow-strength multiplier on the rod of APDS/APFSDS rounds (dynamic strength of WHA/DU at rod strain rates, and plane-strain squash). */
   rodStrength: 1.0,
+
+  /**
+   * Share of the Y-to-UTS interval a ROD's material works at (compare `hardening`, which governs plate
+   * and shell metal). A long rod sheds its work-hardened nose as it erodes, and a stronger rod penetrates
+   * LESS (Tate: Y_p resists the rod's own flow), so the rod calibration (rodDuctility, rodTargetYield)
+   * was made at the handbook yield. 0 keeps it there.
+   */
+  rodHardening: 0.0,
 
   /** Armour flow strength a very long rod (L/D >= 30) sees, as a multiple of handbook yield; eases from plateYield at L/D = 6. */
   rodTargetYield: 0.7,

@@ -33,7 +33,7 @@
 
 import { TUNE } from '../../materials/tuning.js';
 import { makeRng, weibullFactor, clamp, pointInPoly, polyBounds } from '../../core/math.js';
-import { derivePD, bondPair, stableDt } from '../../materials/derive.js';
+import { derivePD, bondPair, stableDt, flowStress } from '../../materials/derive.js';
 import { sampleGradient } from '../../materials/database.js';
 
 export const ROLE = {
@@ -467,7 +467,8 @@ function plateStrengthFactor(m) {
   if (m.class === 'ceramic') return TUNE.ceramicYield * (m.plateScale ?? 1);
   const yRef = 1.05e9;
   let f = TUNE.plateYield;
-  if (m.Y < yRef) f *= Math.pow(m.Y / yRef, TUNE.softMetalExp - 1);
+  const flow = flowStress(m);
+  if (flow < yRef) f *= Math.pow(flow / yRef, TUNE.softMetalExp - 1);
   return f * (m.plateScale ?? 1);
 }
 
