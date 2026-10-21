@@ -771,26 +771,29 @@ export class Renderer {
     const st = frame ? frame.proj : p;
     const [ex, ey] = this.extrudeVec();
 
-    const saveX = p.x, saveY = p.y, saveA = p.ang;
-    p.x = st.x; p.y = st.y; p.ang = st.ang;
-    const parts = p.parts.filter((q) => !(q.sabot && !st.sabot));
+    const sabotAttached = frame ? st.sabot : p.sabotAttached;
+    const parts = p.parts.filter((q) => !(q.sabot && !sabotAttached));
+    // The mesher gives the first part ownership of overlaps. APHE is always
+    // a section view: draw its outer body first and its existing cavity last.
+    if (p.type.key === 'aphe') parts.reverse();
     for (const pass of (this.opts.extrude ? [0, 1] : [1])) {
       ctx.save();
-      if (pass === 0) ctx.translate(ex, ey);
-      for (const q of parts) {
+      try {
+        if (pass === 0) ctx.translate(ex, ey);
+        for (const q of parts) {
         const c = this.matColor(q.mat.color);
-        this.polyPath(p.worldPoly(q.poly));
-        ctx.fillStyle = pass === 0 ? shade(c, 0.35) : this.polyGradient(p.worldPoly(q.poly), c, this.matColor(q.mat.color2 || q.mat.color));
+        const poly = p.worldPoly(q.poly, st);
+        this.polyPath(poly);
+        ctx.fillStyle = pass === 0 ? shade(c, 0.35) : this.polyGradient(poly, c, this.matColor(q.mat.color2 || q.mat.color));
         ctx.fill();
         if (pass === 1) {
           ctx.lineWidth = 1 * this.dpr;
           ctx.strokeStyle = shade(c, 1.4);
           ctx.stroke();
         }
-      }
-      ctx.restore();
+        }
+      } finally { ctx.restore(); }
     }
-    p.x = saveX; p.y = saveY; p.ang = saveA;
   }
 
   // ---------------------------------------------------------------- overlays
