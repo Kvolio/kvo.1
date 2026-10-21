@@ -172,7 +172,8 @@ test('explicit debris budget reports an incomplete result without inventing part
 test('contact-phase duration stops growing during debris playback and final reporting',()=>{
   const w=new World(),scene=new Scene();scene.setLayers([makeLayer({material:'rha',thickness:.05})]);w.setScene(scene);
   w.domain={n:0,ax:1,ay:0,bx:0,by:1,ox:0,oy:0};w.solver={totalBroken:0};
-  w.trueContactTime=1;w.simTime=1.002;w.state='impact';w.updateStats();
+  w.trueContactTime=1;w.simTime=1.002;w.state='impact';w.updateStats();assert.equal(w.stats.contactTime,0,'meshing ahead of contact started the readout clock');
+  w.contactSeen=true;w.updateStats();
   const duration=w.stats.contactTime;assert(Math.abs(duration-.002)<1e-12);
   for(const state of ['debris','done']) {w.state=state;w.simTime=2;w.updateStats();assert.equal(w.stats.contactTime,duration);}
 });
