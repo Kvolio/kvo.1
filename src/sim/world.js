@@ -1424,7 +1424,7 @@ export class World {
     // Debris playback advances world time after the continuum has stopped.
     // Keep that playback duration out of the reported contact-phase clock.
     if (this.state === 'impact' || this.state === 'settle') {
-      st.contactTime = this.simTime - (this.trueContactTime ?? this.impactStartTime);
+      st.contactTime = this.contactSeen ? this.simTime - this.trueContactTime : 0;
     }
   }
 
