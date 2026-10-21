@@ -14,7 +14,7 @@ validate real ammunition performance or infer classified characteristics.
 | Conventional shell event clocks started before contact | APHE, HE and HESH could start their delay clock merely because the continuum mesh existed ahead of the target. | Start the existing delay from the first resolved contact timestamp; repeated checks dispatch once. No delay values or activation thresholds were calibrated. |
 | HEAT reported a fictitious conventional-shell dud | HEAT's existing liner-only model was later sent through a path requiring filler nodes which it never meshed. | Mark the imposed formation event as functioned once and keep it out of the conventional-shell detonation path. The imposed formation model and its velocity parameters are unchanged. |
 | Attached sabot was invisible live | The live renderer read the replay-only `sabot` field instead of `sabotAttached`. Replay and live views disagreed. | Use the appropriate state in each view; keep actual discard and mass bookkeeping unchanged. |
-| APHE filler was hidden | The opaque body was drawn after the cavity, covering it. | Always show APHE in section by drawing its existing body first and filler last. There is no toggle and no new internal geometry. Impact frames continue to show actual damaged material. |
+| APHE filler was hidden and the shell looked crude | The opaque body covered the cavity; the old blunt body and coarse rounded cap gave a stubby silhouette. | Always show the section, use a smoother pointed ogive shared by flight rendering and meshing, and add illustrative driving-band, base-plug, fuze, booster and casing-section details. There is no toggle. Impact frames continue to show actual damaged material. |
 | Rendering modified live state | Drawing a recorded pose temporarily assigned it to the live projectile, leaving it there if drawing failed. | Transform polygons using an explicit pose without assigning to the projectile; restore canvas state even on failure. |
 | Reset retained old outcome state | A miss could leave `finishReason` and other clocks/counters behind for the next run. | Clear event, completion, coast and progress state on reset. |
 | Checkpoints retained state from the future | Positions were rewound while projectile events, roles, fragment counters, module hits, cassette state, log sequence and result fields could remain from later frames. Recomputing forces also advanced history and energy accounting. | Snapshot mutable state, forces, bond-contact references and accumulators; replace future result objects and restore the saved forces without another force evaluation. |
@@ -39,7 +39,7 @@ than increasing penetration or reducing ricochet until a result looks right.
 
 ## Verification
 
-- `node tools/ammunition-checks.mjs`: 33 software checks. Includes all ten types,
+- `node tools/ammunition-checks.mjs`: 35 software checks. Includes all ten types,
   a bonded-domain checkpoint continuation, and a generic two-particle elastic
   collision at two timesteps. The collision uses a declared 1% final energy
   tolerance; measured drift was approximately 0.037% and 0.012%, respectively,
@@ -51,8 +51,17 @@ than increasing penetration or reducing ricochet until a result looks right.
   overlay regardless of which node-field backend is available.
 - Real UI: each of the 12 additions loads, displays its provenance and generic
   settings notice, and preserves the armor setup.
-- The full `tools/checks.mjs` suite includes completion assertions for the ten
-  types and all 39 catalog entries. Its final result is recorded in the PR.
+- `node tools/ammunition-checks.mjs --aphe-runs`: 39 passing checks, including
+  the revised default APHE and all three APHE catalog entries running to completion.
+- The full `tools/checks.mjs` suite passes the ten-type and 39-entry completion
+  checks, but finishes with **two failures**. Both reproduce on the unchanged
+  base revision `bc223a3f4881ef9f3c226b51a64befa39f722aeb`:
+  the hardness-ordering case reports 290 / 320 / 295 m/s for UHH / RHA / mild
+  steel in both versions, and the debris case ends at its existing 15 ms budget
+  with moving fragments (4 on the base, 3 on the candidate). These are existing
+  model/completion-contract limitations, not passing results or tuned-away tests.
+  The full suite preceded the final APHE shape revision; the focused APHE runs
+  above validate that revision separately.
 - Standalone build and `git diff --check`.
 
 No `.game-dev/adapter.json` exists in this repository. Visual evidence uses
@@ -86,6 +95,12 @@ a compressible blast/gas solver. The simulation remains a 2D section, and no
 new destructive-performance calibration, classified estimates, or force-law
 changes are included. Numerical consistency in controlled fixtures is not
 evidence of real-world ammunition accuracy.
+
+The APHE outer profile is a generic pointed game shell, not a reconstruction of
+each named service round. Its silhouette is shared with the mesher. The visible
+band and fuze hardware are decorative section details fitted inside that
+silhouette; they do not add materials, change the filler boundary, or define
+fuze mechanisms in the solver. Existing mass targets and event settings remain.
 
 Resume continues from the nearest stored keyframe. The checkpoint tests verify
 exact solver continuation for their controlled fixtures, not every possible
