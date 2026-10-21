@@ -162,10 +162,18 @@ export const PROJECTILE_TYPES = {
     build(c) {
       const R = c.caliber / 2, L = c.ld * c.caliber, nl = L * c.noseFrac;
       const capLen = L * 0.18;
-      const body = profilePoly(bodyProfile('blunt', R, L, nl, R * 0.5), L, 30, -capLen * 0.5);
+      // A tangent ogive gives the shell a pointed nose and a smooth shoulder,
+      // rather than the old hemisphere on a blunt-ended cylinder. The renderer
+      // and mesher share these polygons; this is a generic game shell profile.
+      const ogive = (radius, noseLength) => {
+        const rho=(radius*radius+noseLength*noseLength)/(2*radius);
+        return x => x <= -noseLength ? radius
+          : Math.max(0,Math.sqrt(Math.max(0,rho*rho-(x+noseLength)**2))+radius-rho);
+      };
+      const body = profilePoly(ogive(R,nl), L, 48, -capLen * 0.5);
       const cavR = R * 0.55, cavX1 = -L * (1 - c.fillFrac) - capLen * 0.5, cavX0 = -L + L * 0.1 - capLen * 0.5;
       const cav = box(cavX0, cavX1, cavR);
-      const cap = profilePoly(bodyProfile('round', R * 0.98, capLen * 1.5, capLen * 1.4, R * 0.55), capLen * 1.5, 18, 0);
+      const cap = profilePoly(ogive(R * 0.98,capLen * 1.4), capLen * 1.5, 40, 0);
       return {
         refDiameter: c.caliber, penDiameter: c.caliber, length: L + capLen * 0.5,
         fillerCentre: [(cavX0 + cavX1) / 2, 0],
