@@ -132,11 +132,49 @@ for (const type of ['aphe','he','hesh']) test(`${type}: contact-triggered events
 test('HEAT imposed formation runs once without a conventional-shell dud', () => {
   const w=new World();w.setProjectile(makeProjectileConfig('heat'));
   let formations=0,bursts=0;
-  w.formJet=()=>{formations++;};w.detonateShell=()=>{bursts++;};
+  w.formJet=()=>{formations++;return true;};w.detonateShell=()=>{bursts++;};
   for(let i=0;i<10;i++){w.simTime=i;w.checkFuze();}
   assert.equal(formations,1);assert.equal(bursts,0);
   assert.equal(w.projectile.fuzeState,'functioned');
   assert.equal(w.log.has('fuze-dud'),false);
+});
+for(const type of ['aphe','he','hesh']) test(`${type}: missing filler reports an unavailable event once`,()=>{
+  const w=new World();w.setProjectile(makeProjectileConfig(type,{fuzeDelay:0}));
+  w.domain={n:0};w.contactSeen=true;w.trueContactTime=0;
+  for(let i=0;i<3;i++) w.checkFuze();
+  assert.equal(w.projectile.fuzeState,'dud');assert.equal(w.projectile.detonated,true);
+  assert.equal(w.log.entries.filter(e=>e.type==='fuze-dud').length,1);
+});
+test('HEAT with no available liner does not falsely report successful formation',()=>{
+  const w=new World();w.setProjectile(makeProjectileConfig('heat'));w.domain={n:0};
+  for(let i=0;i<3;i++) w.checkFuze();
+  assert.equal(w.projectile.fuzeState,'dud');assert.equal(w.log.has('jet-formed'),false);
+  assert.equal(w.log.entries.filter(e=>e.type==='jet-unavailable').length,1);
+});
+test('active debris continues after the former 15 ms cutoff, then finishes naturally',()=>{
+  const w=new World();w.state='debris';w.simTime=.02;w.debrisStart=0;
+  let active=1;
+  w.fragments={get liveCount(){return active;},fastest:()=>100,step(){},list:[],impacts:[]};
+  w.debrisPhase(.001);assert.equal(w.state,'debris');assert.equal(w.stats.debrisTruncated,false);
+  active=0;w.debrisPhase(.001);assert.equal(w.state,'done');assert.equal(w.verdict().incomplete,false);
+});
+test('explicit debris budget reports an incomplete result without inventing particle changes',()=>{
+  const w=new World();w.state='debris';w.simTime=.02;w.debrisStart=0;w.settings.debrisTime=.015;
+  const fragments=w.fragments;
+  const particle={x:1,y:2,vx:3,vy:4};
+  w.fragments={liveCount:1,fastest:()=>100,step(){},list:[particle],impacts:[]};
+  const before=structuredClone(particle);w.debrisPhase(.001);
+  assert.equal(w.state,'done');assert.equal(w.verdict().incomplete,true);
+  assert.deepEqual(particle,before);assert(w.log.has('debris-truncated'));
+  assert(w.log.get('debris-truncated').severity>=2,'time-budget warning was silently downgraded');
+  w.fragments=fragments;w.reset();assert.equal(w.stats.debrisTruncated,false);
+});
+test('contact-phase duration stops growing during debris playback and final reporting',()=>{
+  const w=new World(),scene=new Scene();scene.setLayers([makeLayer({material:'rha',thickness:.05})]);w.setScene(scene);
+  w.domain={n:0,ax:1,ay:0,bx:0,by:1,ox:0,oy:0};w.solver={totalBroken:0};
+  w.trueContactTime=1;w.simTime=1.002;w.state='impact';w.updateStats();
+  const duration=w.stats.contactTime;assert(Math.abs(duration-.002)<1e-12);
+  for(const state of ['debris','done']) {w.state=state;w.simTime=2;w.updateStats();assert.equal(w.stats.contactTime,duration);}
 });
 test('short contact pulses are latched before later solver steps clear them', () => {
   const w=new World(), {d,s}=contactFixture([8,4]);
