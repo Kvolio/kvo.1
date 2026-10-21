@@ -3,12 +3,14 @@ import { PROJECTILE_TYPES, TYPE_ORDER, makeProjectileConfig } from '../src/sim/p
 import { Projectile } from '../src/sim/projectile.js';
 import { World } from '../src/sim/world.js';
 import { Recorder } from '../src/core/recorder.js';
-import { Renderer } from '../src/render/renderer.js';
+import { Renderer, apheSectionDetails } from '../src/render/renderer.js';
 import { AMMO, AMMO_ORDER, ammoLabel } from '../src/ui/ammo.js';
 import { contactFixture } from './fixtures/contact-scene.js';
 import { PDDomain } from '../src/sim/pd/domain.js';
 import { PDSolver } from '../src/sim/pd/solver.js';
 import { getMaterial } from '../src/materials/database.js';
+import { pointInPoly } from '../src/core/math.js';
+import { Scene, makeLayer } from '../src/sim/scene.js';
 
 // Software contracts, not reference ammunition performance or calibration.
 let checks = 0, failures = 0;
@@ -50,10 +52,48 @@ test('APHE cutaway draws filler over casing and never draws an intact shell afte
   const p = new Projectile(makeProjectileConfig('aphe'));
   const {r, draws} = view();
   r.drawProjectile({projectile:p,state:'idle'}, null);
-  assert.equal(draws.at(-1), p.parts.find(q=>q.role===3).mat.color);
+  assert(draws.includes(p.parts.find(q=>q.role===3).mat.color));
   draws.length=0; r.drawProjectile({projectile:p,state:'impact'},null);
   assert.equal(draws.length,0);
 });
+test('APHE section model fits scaled shell geometry without changing simulation parts', () => {
+  for (const mass of [2,10.2,30]) {
+    const p=new Projectile(makeProjectileConfig('aphe',{mass}));
+    const before=JSON.stringify(p.parts), details=apheSectionDetails(p);
+    for (const name of ['driving band','base plug','base fuze housing','booster','exposed filler']) assert(details.some(q=>q.label===name));
+    const body=p.parts.find(q=>q.role===1).poly;
+    for (const q of details) for (let i=0;i<q.poly.length;i+=2) {
+      assert(Number.isFinite(q.poly[i])&&Number.isFinite(q.poly[i+1]));
+      assert(pointInPoly(body,q.poly[i],q.poly[i+1]),`${q.label} escaped the shell silhouette`);
+    }
+    assert.equal(JSON.stringify(p.parts),before);
+    assert.equal(apheSectionDetails(p),details,'static view geometry should be cached');
+  }
+});
+test('APHE pointed nose uses the same detailed outline for flight and meshing', () => {
+  const p=new Projectile(makeProjectileConfig('aphe'));
+  const cap=p.parts.find(q=>q.role===2), R=p.cfg.caliber/2;
+  assert(cap.poly.length>100,'nose still has coarse facets');
+  const tip=[];
+  for(let i=0;i<cap.poly.length;i+=2) if(Math.abs(cap.poly[i])<1e-12) tip.push(Math.abs(cap.poly[i+1]));
+  assert(tip.length===2&&tip.every(r=>r<R*.01),'nose reverted to a blunt meplat');
+  assert(p.meshParts().includes(cap));
+});
+
+// Optional focused rerun after a change limited to the APHE geometry. The full
+// checks.mjs suite also exercises these catalog entries against 100 mm RHA.
+if(process.argv.includes('--aphe-runs')) {
+  const cases=[['default APHE',makeProjectileConfig('aphe',{standoff:.6}),.05],
+    ...AMMO_ORDER.filter(k=>AMMO[k].type==='aphe').map(k=>[k,makeProjectileConfig('aphe',AMMO[k].cfg),.10])];
+  for(const [label,cfg,thickness] of cases) test(`${label}: revised model meshes and completes`,()=>{
+    const w=new World(); w.settings.deterministic=true; w.settings.quality='low';w.settings.recordFrames=false;
+    const scene=new Scene();scene.setLayers([makeLayer({material:'rha',thickness})]);
+    w.setScene(scene);w.setProjectile(cfg);w.fire();
+    let frames=0;while(w.state!=='done'&&frames++<9000) w.update(1/60);
+    assert.equal(w.state,'done');assert(w.domain?.n>200);
+    assert(Number.isFinite(w.stats.maxDepth)&&Number.isFinite(w.stats.residualVelocity));
+  });
+}
 for (const type of ['apds','apfsds']) test(`${type}: live and replay sabot visibility agrees`, () => {
   const p = new Projectile(makeProjectileConfig(type)), {r,draws}=view();
   r.drawProjectile({projectile:p,state:'flight'},null);

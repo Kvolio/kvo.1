@@ -3,7 +3,7 @@
 <title>Ammunition presentation regressions</title>
 <style>body{margin:24px;background:#101820;color:#e5edf4;font:16px system-ui}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:20px}section{min-width:0}canvas{width:100%;max-width:600px;background:#18232f;border:1px solid #53687c}h2{font-size:18px}pre{white-space:pre-wrap}p{max-width:1000px}</style>
 <h1>Ammunition presentation checks</h1>
-<p>APHE always shows its existing filler cavity. Replaying a flight frame produces the same picture without modifying the live projectile. Attached sabot parts remain visible until discard. Impact frames use simulated material, not an intact-shell overlay.</p>
+<p>APHE has a smoother pointed shell profile and an always-visible cutaway: thick steel casing, copper driving band, filler cavity, base plug, fuze and booster. Interior hardware is a stylized game illustration. Replaying a flight frame produces the same picture without modifying the live projectile. Impact frames use simulated material.</p>
 <main id="views"></main><pre id="result">Running…</pre>
 <script type="module">
 import {Renderer} from '../src/render/renderer.js';
@@ -39,6 +39,12 @@ const pixel=flat.base.getContext('2d').getImageData(Math.round(px),Math.round(py
 check('cutaway exposes the filler rather than the shell color',pixel[0]>pixel[2]+30&&pixel[1]>pixel[2]+20);
 const impact=view('APHE — no intact overlay after impact',aphe,null,'impact');
 check('impact draws no intact projectile',impact.pixels().every((v,i)=>i%4===3||v===0));
+for(const angle of [Math.PI/3,Math.PI]){
+  const p=new Projectile(makeProjectileConfig('aphe'));p.ang=angle;
+  const a=view(`APHE — rotated ${Math.round(angle*180/Math.PI)}°`,p);
+  const b=view(`APHE — recorded ${Math.round(angle*180/Math.PI)}°`,p,{proj:{x:p.x,y:p.y,ang:p.ang,sabot:false}},'done');
+  const pixels=a.pixels(),recorded=b.pixels();check(`rotated ${angle}: live and replay details agree`,pixels.every((v,i)=>v===recorded[i]));
+}
 for(const type of ['apds','apfsds']){
   const p=new Projectile(makeProjectileConfig(type));
   view(`${type.toUpperCase()} — sabot attached`,p);
