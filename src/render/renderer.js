@@ -679,20 +679,43 @@ export class Renderer {
     const list = frame ? frame.frags : world.fragments.list;
     if (!list || !list.length) return;
 
-    if (this.opts.showTrails && !frame) {
-      ctx.strokeStyle = 'rgba(220,160,90,0.22)';
-      ctx.lineWidth = 1 * this.dpr;
-      ctx.beginPath();
-      for (const f of world.fragments.list) {
-        if (!f.alive || f.trail.length < 4) continue;
-        const [x0, y0] = cam.toScreen(f.trail[0], f.trail[1]);
-        ctx.moveTo(x0, y0);
-        for (let k = 2; k < f.trail.length; k += 2) {
-          const [sx, sy] = cam.toScreen(f.trail[k], f.trail[k + 1]);
-          ctx.lineTo(sx, sy);
-        }
+    // MOTION STREAKS
+    // A fragment's trail used to be drawn as the polyline of its last dozen
+    // recorded positions. Once loose material is flown ballistically a
+    // fragment covers metres per step, so those polylines became long straight
+    // needles with no fragment at the end of them (it was already off the
+    // screen), and in replay nothing was drawn at all. A streak is now a short
+    // tail along the fragment's own velocity: the length is the distance flown
+    // in a fixed 0.4 ms of exposure, capped in screen pixels, and it always
+    // ends on the fragment. Live and replay draw it the same way.
+    if (this.opts.showTrails) {
+      const cap = 26 * this.dpr, expo = 4e-4;
+      const buckets = [[], [], []];                       // faint, mid, bright
+      for (const f of list) {
+        if (!frame && !f.alive) continue;
+        const vx = frame ? f[2] : f.vx, vy = frame ? f[3] : f.vy;
+        const v = Math.hypot(vx, vy);
+        if (v < 60) continue;                             // resting or sliding: no streak
+        const [sx, sy] = cam.toScreen(frame ? f[0] : f.x, frame ? f[1] : f.y);
+        if (sx < -cap || sy < -cap || sx > cam.w + cap || sy > cam.h + cap) continue;
+        const len = Math.min(cap, v * expo * cam.scale);
+        if (len < 2) continue;
+        const ux = vx / v, uy = -vy / v;                  // screen y points down
+        const bk = v > 900 ? 2 : v > 350 ? 1 : 0;
+        buckets[bk].push(sx, sy, sx - ux * len, sy - uy * len);
       }
-      ctx.stroke();
+      ctx.lineCap = 'round';
+      ctx.lineWidth = 1.1 * this.dpr;
+      const style = ['rgba(220,160,90,0.16)', 'rgba(230,170,100,0.30)', 'rgba(255,200,130,0.48)'];
+      for (let bk = 0; bk < 3; bk++) {
+        const q = buckets[bk];
+        if (!q.length) continue;
+        ctx.strokeStyle = style[bk];
+        ctx.beginPath();
+        for (let k = 0; k < q.length; k += 4) { ctx.moveTo(q[k], q[k + 1]); ctx.lineTo(q[k + 2], q[k + 3]); }
+        ctx.stroke();
+      }
+      ctx.lineCap = 'butt';
     }
 
     for (const f of list) {
