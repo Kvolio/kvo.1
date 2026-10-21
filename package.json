@@ -8,7 +8,7 @@
     "start": "python3 -m http.server 8080",
     "serve": "node tools/serve.mjs",
     "build": "node tools/build.mjs",
-    "check": "node tools/debris-lifecycle-checks.mjs && node tools/contact-checks.mjs && node tools/fragment-checks.mjs && node tools/checks.mjs",
+    "check": "node tools/ammunition-checks.mjs && node tools/debris-lifecycle-checks.mjs && node tools/contact-checks.mjs && node tools/fragment-checks.mjs && node tools/checks.mjs",
     "smoke": "node tools/smoke.mjs",
     "audit": "node tools/audit.mjs"
   },

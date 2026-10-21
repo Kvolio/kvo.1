@@ -3999,10 +3999,18 @@ const PROJECTILE_TYPES = {
     build(c) {
       const R = c.caliber / 2, L = c.ld * c.caliber, nl = L * c.noseFrac;
       const capLen = L * 0.18;
-      const body = profilePoly(bodyProfile('blunt', R, L, nl, R * 0.5), L, 30, -capLen * 0.5);
+      // A tangent ogive gives the shell a pointed nose and a smooth shoulder,
+      // rather than the old hemisphere on a blunt-ended cylinder. The renderer
+      // and mesher share these polygons; this is a generic game shell profile.
+      const ogive = (radius, noseLength) => {
+        const rho=(radius*radius+noseLength*noseLength)/(2*radius);
+        return x => x <= -noseLength ? radius
+          : Math.max(0,Math.sqrt(Math.max(0,rho*rho-(x+noseLength)**2))+radius-rho);
+      };
+      const body = profilePoly(ogive(R,nl), L, 48, -capLen * 0.5);
       const cavR = R * 0.55, cavX1 = -L * (1 - c.fillFrac) - capLen * 0.5, cavX0 = -L + L * 0.1 - capLen * 0.5;
       const cav = box(cavX0, cavX1, cavR);
-      const cap = profilePoly(bodyProfile('round', R * 0.98, capLen * 1.5, capLen * 1.4, R * 0.55), capLen * 1.5, 18, 0);
+      const cap = profilePoly(ogive(R * 0.98,capLen * 1.4), capLen * 1.5, 40, 0);
       return {
         refDiameter: c.caliber, penDiameter: c.caliber, length: L + capLen * 0.5,
         fillerCentre: [(cavX0 + cavX1) / 2, 0],
@@ -4179,9 +4187,9 @@ function makeProjectileConfig(typeKey, overrides = {}) {
   // parameter: aimY moves the impact point up or down the plate, attack turns
   // the velocity vector, and yaw turns the body independently of it (the
   // difference between the two is the angle of attack at impact).
-  return Object.assign({ type: typeKey }, structuredClone(t.defaults), {
+  return Object.assign({
     yaw: 0, spin: 0, standoff: 1.8, attack: 0, aimY: 0,
-  }, overrides);
+  }, structuredClone(t.defaults), overrides, { type: typeKey });
 }
 
 /**
@@ -4412,12 +4420,12 @@ class Projectile {
   }
 
   /** Local -> world transform of a polygon. */
-  worldPoly(poly) {
-    const c = Math.cos(this.ang), s = Math.sin(this.ang);
+  worldPoly(poly, pose = this) {
+    const c = Math.cos(pose.ang), s = Math.sin(pose.ang);
     const out = new Float64Array(poly.length);
     for (let i = 0; i < poly.length; i += 2) {
-      out[i] = this.x + poly[i] * c - poly[i + 1] * s;
-      out[i + 1] = this.y + poly[i] * s + poly[i + 1] * c;
+      out[i] = pose.x + poly[i] * c - poly[i + 1] * s;
+      out[i + 1] = pose.y + poly[i] * s + poly[i + 1] * c;
     }
     return out;
   }
@@ -5709,6 +5717,39 @@ __def("src/core/recorder.js", function (__exports, __req) {
 
 const { FIELD_SCALES } = __req("src/render/palette.js");
 
+// A checkpoint must preserve the force left for Verlet's next half kick and
+// every accumulator that affects later steps. Recomputing forces on restore
+// advances constitutive history and charges dissipation a second time.
+const DOMAIN_STATE = ['px','py','vx','vy','fx','fy','temp','wPlast','damage',
+  'plStrain','nBroken','flags','alive','role','bsp','bstate','bcrit',
+  'flowMul','srate','theta','thetaAcc','virial'];
+const SOLVER_ARRAYS = ['bdc','bstretch','bse','isoAcc'];
+const SOLVER_STATE = ['time','steps','dt','dtBase','totalBroken','E0','brokenThisStep','maxContactForce'];
+const WORLD_STATE = ['simTime','state','contactSeen','trueContactTime',
+  'impactStartTime','impactKE0','settleTime','debrisStart','finishReason',
+  'lastActivity','progressMark','lastProgressTime','truncationLogged',
+  'coastMode','coastDirty','eraLastT','retiredProjM','retiredProjPX','retiredProjPY'];
+const PROJECTILE_STATE = ['x','y','ang','omega','vx','vy','mass','inertia','distance',
+  'state','sabotAttached','fuzeState','fuzeTimer','detonated','activeParts','residual'];
+const FRAGMENT_STATE = ['list','nextId','impacts','stoppedInPlate','stoppedByCasing',
+  'perforations','dropped','droppedMass','_loggedLayers'];
+const pick = (source, names) => Object.fromEntries(names.map(name => [name, source[name]]));
+function copyArrays(source, names, target = {}) {
+  for (const name of names) {
+    const a = source[name];
+    if (!a) continue;
+    if (!target[name] || target[name].constructor !== a.constructor || target[name].length !== a.length) target[name] = new a.constructor(a.length);
+    target[name].set(a);
+  }
+  return target;
+}
+function restoreArrays(target, snapshot) {
+  for (const [name, array] of Object.entries(snapshot)) target[name].set(array);
+}
+function arrayBytes(snapshot) {
+  return Object.values(snapshot || {}).reduce((n, a) => n + a.byteLength, 0);
+}
+
 function snapshotFragment(f) {
   return [f.x, f.y, f.vx, f.vy, f.mass, f.size, f.kind, f.motionDistance || 0,
     f.appearance ? (Object.isFrozen(f.appearance) ? f.appearance : Object.freeze({ ...f.appearance })) : null];
@@ -5863,30 +5904,19 @@ class Recorder {
       k = this.keys.get(oldest);
       this.keys.delete(oldest);
     }
-    if (!k || k.px.length !== d.n || k.bsp.length !== d.nb) {
-      k = {
-        px: new Float64Array(d.n), py: new Float64Array(d.n),
-        vx: new Float32Array(d.n), vy: new Float32Array(d.n),
-        temp: new Float32Array(d.n), damage: new Float32Array(d.n),
-        plStrain: new Float32Array(d.n),
-        nBroken: new Uint16Array(d.n), flags: new Uint8Array(d.n), alive: new Uint8Array(d.n),
-        bsp: new Float32Array(d.nb), bstate: new Uint8Array(d.nb), bcrit: new Float32Array(d.nb),
-        solver: {}, modules: [],
-      };
-    }
-    k.px.set(d.px); k.py.set(d.py); k.vx.set(d.vx); k.vy.set(d.vy);
-    k.temp.set(d.temp); k.damage.set(d.damage); k.plStrain.set(d.plStrain);
-    k.nBroken.set(d.nBroken); k.flags.set(d.flags); k.alive.set(d.alive);
-    k.bsp.set(d.bsp); k.bstate.set(d.bstate); k.bcrit.set(d.bcrit);
-    k.solver = { time: s.time, steps: s.steps, energy: { ...s.energy }, totalBroken: s.totalBroken, E0: s.E0 };
-    k.simTime = world.simTime;
-    k.state = world.state;
-    k.contactSeen = world.contactSeen;
-    k.trueContactTime = world.trueContactTime;
-    k.stats = JSON.parse(JSON.stringify(world.stats));
-    k.fragments = structuredClone(world.fragments.list);
-    k.modules = world.scene.modules.map((m) => ({ id: m.id, integrity: m.integrity, state: m.state, hits: m.hits.length }));
-    k.logLen = world.log.entries.length;
+    k ||= {};
+    k.domain = copyArrays(d, DOMAIN_STATE, k.domain);
+    k.solverArrays = copyArrays(s, SOLVER_ARRAYS, k.solverArrays);
+    k.solver = { ...pick(s, SOLVER_STATE), energy: { ...s.energy } };
+    k.world = structuredClone(pick(world, WORLD_STATE));
+    k.projectile = world.projectile ? structuredClone(pick(world.projectile, PROJECTILE_STATE)) : null;
+    k.stats = structuredClone(world.stats);
+    k.fragments = structuredClone(pick(world.fragments, FRAGMENT_STATE));
+    k.cassettes = structuredClone(world.cassettes || []);
+    k.modules = world.scene.modules.map(m => ({ id:m.id, integrity:m.integrity, state:m.state, hits:structuredClone(m.hits) }));
+    k.layerHits = world.scene.layers.map(L => L.fragHits);
+    k.internals = world.internals ? structuredClone(pick(world.internals, ['events','catastrophic'])) : null;
+    k.log = structuredClone({ entries:world.log.entries, seq:world.log.seq });
     this.keys.set(id, k);
   }
 
@@ -5909,26 +5939,25 @@ class Recorder {
     const k = this.keys.get(this.baseId + logicalIndex);
     if (!k) return false;
     const d = world.domain, s = world.solver;
-    d.px.set(k.px); d.py.set(k.py); d.vx.set(k.vx); d.vy.set(k.vy);
-    d.temp.set(k.temp); d.damage.set(k.damage); d.plStrain.set(k.plStrain);
-    d.nBroken.set(k.nBroken); d.flags.set(k.flags); d.alive.set(k.alive);
-    d.bsp.set(k.bsp); d.bstate.set(k.bstate); d.bcrit.set(k.bcrit);
-    s.time = k.solver.time; s.steps = k.solver.steps;
-    s.energy = { ...k.solver.energy }; s.totalBroken = k.solver.totalBroken; s.E0 = k.solver.E0;
-    world.simTime = k.simTime;
-    world.state = k.state;
-    world.contactSeen = k.contactSeen;
-    world.trueContactTime = k.trueContactTime;
-    Object.assign(world.stats, k.stats);
-    world.fragments.list = structuredClone(k.fragments);
+    restoreArrays(d, k.domain);
+    restoreArrays(s, k.solverArrays);
+    Object.assign(s, k.solver, {energy:{...k.solver.energy}});
+    Object.assign(world, structuredClone(k.world));
+    if (k.projectile) Object.assign(world.projectile, structuredClone(k.projectile));
+    world.stats = structuredClone(k.stats);
+    Object.assign(world.fragments, structuredClone(k.fragments));
     for (const f of world.fragments.list) if (f.appearance) Object.freeze(f.appearance);
+    world.cassettes = structuredClone(k.cassettes);
+    world.scene.layers.forEach((L, i) => { L.fragHits=k.layerHits[i]; });
+    if (k.internals) Object.assign(world.internals, structuredClone(k.internals));
     for (const rec of k.modules) {
       const m = world.scene.modules.find((x) => x.id === rec.id);
-      if (m) { m.integrity = rec.integrity; m.state = rec.state; m.hits.length = Math.min(m.hits.length, rec.hits); }
+      if (m) { m.integrity = rec.integrity; m.state = rec.state; m.hits = structuredClone(rec.hits); }
     }
-    world.log.entries.length = k.logLen;
+    Object.assign(world.log, structuredClone(k.log));
+    world._penMass0Domain = null;
+    world.pendingSteps = 0;
     s.refreshContactSet();
-    s.computeForces();
     return true;
   }
 
@@ -5948,10 +5977,7 @@ class Recorder {
       if (!f || !f.px) continue;
       b += f.px.byteLength * 2 + f.dmg.byteLength * 6;
     }
-    for (const k of this.keys.values()) {
-      b += k.px.byteLength * 2 + k.vx.byteLength * 4 + k.bsp.byteLength * 2 + k.bstate.byteLength;
-    }
-    for (const k of this.keyPool) b += k.px.byteLength * 2 + k.bsp.byteLength * 2;
+    for (const k of [...this.keys.values(), ...this.keyPool]) b += arrayBytes(k.domain) + arrayBytes(k.solverArrays);
     return b;
   }
 }
@@ -6331,6 +6357,19 @@ class World {
     this.residual = null;
     this.impactStartTime = 0;
     this.settleTime = 0;
+    this.finishReason = null;
+    this.trueContactTime = null;
+    this.contactSeen = false;
+    this.lastActivity = null;
+    this.impactKE0 = 0;
+    this.progressMark = 0;
+    this.lastProgressTime = null;
+    this.truncationLogged = false;
+    this.coastMode = false;
+    this.coastDirty = false;
+    this.debrisStart = 0;
+    this.pendingSteps = 0;
+    this._penMass0Domain = null;
     this.cassettes = [];
     this.eraLastT = 0;
     this.retiredProjM = 0; this.retiredProjPX = 0; this.retiredProjPY = 0;
@@ -6754,11 +6793,16 @@ class World {
           this.coastDirty = false;
           this.coastMode = false;
         }
-        s.step();
-        advanced += s.dt;
-        this.simTime += s.dt;
+        // step() may select a different dt for the NEXT step. Account for
+        // the interval it actually integrated, including fragment transport.
+        const dt = s.step();
+        advanced += dt;
+        this.simTime += dt;
       }
       steps++;
+      // Latch transient activity before the next step overwrites the solver's
+      // counters. Event ordering must not depend on substeps per video frame.
+      this.observeContact();
       // ERA initiation is an integral over the shock, and a shock transit
       // through a 6 mm charge lasts under a microsecond, so it is sampled
       // twice as often as the fuze check to avoid stepping over the peak.
@@ -6779,23 +6823,6 @@ class World {
     // settle / finish detection - only once the projectile has actually
     // touched something, otherwise the approach across the standoff gap would
     // read as "quiet" and end the run before the impact
-    if (s.maxContactForce > 0 || s.brokenThisStep > 0) {
-      if (!this.contactSeen) {
-        this.contactSeen = true;
-        this.trueContactTime = this.simTime;
-        // record where contact actually happened, from the leading node
-        let bx = 0, by = 0, bs = -Infinity;
-        for (let i = 0; i < d.n; i++) {
-          if (!d.alive[i] || d.role[i] === ROLE.ARMOUR) continue;
-          const sPos = (d.px[i] - d.ox) * d.ax + (d.py[i] - d.oy) * d.ay;
-          if (sPos > bs) { bs = sPos; bx = d.px[i]; by = d.py[i]; }
-        }
-        this.stats.impactX = bx; this.stats.impactY = by;
-        this.log.add(this.simTime, 'first-contact',
-          `Nose contact with the struck face at (${(bx * 1000).toFixed(0)}, ${(by * 1000).toFixed(0)}) mm`, SEV.MAJOR);
-      }
-      this.lastActivity = this.simTime;
-    }
     const armourKE = s.kineticOf(ROLE.ARMOUR);
     // QUIET MUST OUTLAST A GLANCING FIRST TOUCH
     // On a sloped plate the nose can brush the face and register contact for a
@@ -6944,17 +6971,48 @@ class World {
 
   // ------------------------------------------------------- event hooks
 
+  observeContact() {
+    const s = this.solver, d = this.domain;
+    if (!s || !d || !(s.maxContactForce > 0 || s.brokenThisStep > 0)) return;
+    this.lastActivity = this.simTime;
+    if (this.contactSeen) return;
+    this.contactSeen = true;
+    this.trueContactTime = this.simTime;
+    let bx = 0, by = 0, bs = -Infinity;
+    for (let i = 0; i < d.n; i++) {
+      if (!d.alive[i] || d.role[i] === ROLE.ARMOUR) continue;
+      const sPos = (d.px[i] - d.ox) * d.ax + (d.py[i] - d.oy) * d.ay;
+      if (sPos > bs) { bs = sPos; bx = d.px[i]; by = d.py[i]; }
+    }
+    this.stats.impactX = bx; this.stats.impactY = by;
+    this.log.add(this.simTime, 'first-contact',
+      `First resolved contact at (${(bx * 1000).toFixed(0)}, ${(by * 1000).toFixed(0)}) mm`, SEV.MAJOR);
+  }
+
   checkFuze() {
     const p = this.projectile;
     const fz = p.type.fuze;
     if (!fz || p.detonated) return;
-    if (p.fuzeState === 'safe') {
-      p.fuzeState = 'armed';
+    // HEAT currently meshes only its liner. It is an imposed formation model,
+    // not a conventional shell with filler nodes to detonate later. Sending
+    // it through detonateShell() reported a spurious "filler consumed" dud.
+    if (p.cfg.type === 'heat') {
+      if (p.fuzeState !== 'safe') return;
+      p.fuzeState = 'functioned';
       p.fuzeTimer = this.simTime;
+      p.detonated = true;
+      this.log.add(this.simTime, 'jet-model', 'Simplified HEAT model: liner formation imposed at continuum handoff', SEV.NOTE);
+      this.formJet();
+      return;
+    }
+    if (p.fuzeState === 'safe') {
+      // Meshing starts ahead of contact. Entering the continuum regime alone
+      // must not start an impact-triggered event's delay clock.
+      if (!this.contactSeen) return;
+      p.fuzeState = 'armed';
+      p.fuzeTimer = this.trueContactTime ?? this.simTime;
       this.log.add(this.simTime, 'fuze-arm',
         `Fuze armed on impact setback (${fz.kind}, ${(this.projectile.cfg.fuzeDelay ?? fz.delay) * 1e6} µs delay)`, SEV.NOTE);
-      if (p.cfg.type === 'heat') this.formJet();
-      return;
     }
     if (p.fuzeState !== 'armed') return;
     const delay = this.projectile.cfg.fuzeDelay ?? fz.delay;
@@ -8430,9 +8488,53 @@ __def("src/render/renderer.js", function (__exports, __req) {
 
 const { UI, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, FIELD_SCALES, rgb, shade, hexToRgb } = __req("src/render/palette.js");
 const { NodeGL, kernelLatticeSum } = __req("src/render/nodegl.js");
-const { clamp, DEG } = __req("src/core/math.js");
+const { clamp, DEG, polyBounds } = __req("src/core/math.js");
 const { modulePoly, MODULE_TYPES } = __req("src/sim/scene.js");
 const { ROLE } = __req("src/sim/pd/domain.js");
+
+const apheModels = new WeakMap();
+
+/** Decorative section details, fitted to the actual shell and cavity bounds.
+ * These are a generic game illustration, never meshed or used as fuze data.
+ * The body/cap silhouette and the full filler boundary still come from p.parts.
+ */
+function apheSectionDetails(p) {
+  if (apheModels.has(p)) return apheModels.get(p);
+  const body = p.parts.find(q => q.role === 1), filler = p.parts.find(q => q.role === 3);
+  if (!body || !filler) return [];
+  const b = polyBounds(body.poly), f = polyBounds(filler.poly);
+  const L = b.x1 - b.x0, R = (b.y1 - b.y0) / 2, C = f.x1 - f.x0;
+  const details = [];
+  const add = (label, pts, color, dark = color) => details.push({label, poly:Float64Array.from(pts), color, dark});
+  const rect = (label, x0, x1, y0, y1, color, dark) => add(label,[x0,y0,x1,y0,x1,y1,x0,y1],color,dark);
+  // A copper driving band appears as two exposed edges in longitudinal section.
+  for (const side of [-1, 1]) {
+    rect('driving band',b.x0+L*.13,b.x0+L*.20,side*R*.78,side*R*.99,'#d9a068','#714529');
+    rect('band groove',b.x0+L*.157,b.x0+L*.167,side*R*.80,side*R*.99,'#815032');
+    // Sparse diagonal cut-face marks on the thick rear casing wall.
+    for (let i=0;i<7;i++) {
+      const x=b.x0+L*(.24+i*.052);
+      add('steel section hatch',[x,side*R*.70,x+L*.012,side*R*.70,x+L*.036,side*R*.94,x+L*.024,side*R*.94],'#82909b');
+    }
+  }
+  // A bevel follows the existing rectangular cavity; the colored charge remains
+  // visible inside it. Rounded corners are surface shading, not a new void.
+  const inset=Math.min(C*.05,R*.07), r=R*.08;
+  add('cavity bevel',[f.x0,f.y0,f.x1-r,f.y0,f.x1,f.y0+r,f.x1,f.y1-r,f.x1-r,f.y1,f.x0,f.y1], '#61717c','#29343e');
+  add('exposed filler',[f.x0+inset,f.y0+inset,f.x1-r,f.y0+inset,f.x1-inset,f.y0+r,f.x1-inset,f.y1-r,f.x1-r,f.y1-inset,f.x0+inset,f.y1-inset],filler.mat.color,filler.mat.color2||filler.mat.color);
+  // Stylized base plug, fuze housing and short booster, drawn inside the casing.
+  const plugX=b.x0+L*.018, neckX=f.x0+C*.08, endX=f.x0+C*.23;
+  rect('base plug',plugX,b.x0+L*.085,-R*.52,R*.52,'#a5afb5','#45515b');
+  add('base fuze housing',[plugX,-R*.30,f.x0,-R*.30,neckX,-R*.20,neckX,R*.20,f.x0,R*.30,plugX,R*.30],'#c4aa72','#6b5738');
+  rect('fuze channel',plugX,neckX,-R*.065,R*.065,'#323e49');
+  rect('booster',neckX,endX,-R*.19,R*.19,'#b5bac0','#687580');
+  for(let i=0;i<4;i++) {
+    const x=plugX+(f.x0-plugX)*(.18+i*.18);
+    rect('plug thread',x,x+L*.005,-R*.32,R*.32,'#796a4e');
+  }
+  apheModels.set(p,details);
+  return details;
+}
 
 /**
  * THREE STACKED CANVASES
@@ -9178,26 +9280,37 @@ class Renderer {
     const st = frame ? frame.proj : p;
     const [ex, ey] = this.extrudeVec();
 
-    const saveX = p.x, saveY = p.y, saveA = p.ang;
-    p.x = st.x; p.y = st.y; p.ang = st.ang;
-    const parts = p.parts.filter((q) => !(q.sabot && !st.sabot));
+    const sabotAttached = frame ? st.sabot : p.sabotAttached;
+    const parts = p.parts.filter((q) => !(q.sabot && !sabotAttached));
+    // The mesher gives the first part ownership of overlaps. APHE is always
+    // a section view: draw its outer body first and its existing cavity last.
+    if (p.type.key === 'aphe') parts.reverse();
     for (const pass of (this.opts.extrude ? [0, 1] : [1])) {
       ctx.save();
-      if (pass === 0) ctx.translate(ex, ey);
-      for (const q of parts) {
-        const c = this.matColor(q.mat.color);
-        this.polyPath(p.worldPoly(q.poly));
-        ctx.fillStyle = pass === 0 ? shade(c, 0.35) : this.polyGradient(p.worldPoly(q.poly), c, this.matColor(q.mat.color2 || q.mat.color));
-        ctx.fill();
-        if (pass === 1) {
-          ctx.lineWidth = 1 * this.dpr;
-          ctx.strokeStyle = shade(c, 1.4);
-          ctx.stroke();
+      try {
+        if (pass === 0) ctx.translate(ex, ey);
+        for (const q of parts) {
+          const c = this.matColor(q.mat.color);
+          const poly = p.worldPoly(q.poly, st);
+          this.polyPath(poly);
+          ctx.fillStyle = pass === 0 ? shade(c, 0.35) : this.polyGradient(poly, c, this.matColor(q.mat.color2 || q.mat.color));
+          ctx.fill();
+          if (pass === 1) {
+            ctx.lineWidth = 1 * this.dpr;
+            ctx.strokeStyle = shade(c, 1.4);
+            ctx.stroke();
+          }
         }
-      }
-      ctx.restore();
+        if (pass === 1 && p.type.key === 'aphe') {
+          for (const q of apheSectionDetails(p)) {
+            const poly=p.worldPoly(q.poly,st);
+            this.polyPath(poly);
+            ctx.fillStyle=this.polyGradient(poly,this.matColor(q.color),this.matColor(q.dark));
+            ctx.fill();
+          }
+        }
+      } finally { ctx.restore(); }
     }
-    p.x = saveX; p.y = saveY; p.ang = saveA;
   }
 
   // ---------------------------------------------------------------- overlays
@@ -9289,7 +9402,7 @@ function pointIn(p, x, y) {
 
 
 
-__exports.__all = {ROLE, DEG, Renderer};
+__exports.__all = {ROLE, DEG, apheSectionDetails, Renderer};
 Object.assign(__exports, __exports.__all);
 delete __exports.__all;
 
@@ -9796,8 +9909,11 @@ __def("src/ui/ammo.js", function (__exports, __req) {
  *
  * WHAT THE NUMBERS ARE
  * --------------------
- * Calibre, projectile mass and muzzle velocity are published figures and are
- * reliable. Everything else is not:
+ * Older entries carry reconstructed configurations. New entries marked
+ * `approximate` supply sourced historical names with GENERIC TYPE DEFAULTS,
+ * including generic calibre, mass and velocity. Their source metadata does
+ * not validate the simulation settings. No classified characteristics are
+ * inferred.
  *
  *   - Muzzle velocity is used as the STRIKING velocity. There is no exterior
  *     ballistics here, so every round is being fired at point blank. A round
@@ -9819,18 +9935,50 @@ __def("src/ui/ammo.js", function (__exports, __req) {
 /**
  * @typedef {object} AmmoEntry
  * @property {string} name    what to show in the list
- * @property {string} vehicle the vehicle that carried it
- * @property {number} year    for ordering
+ * @property {string} [vehicle] verified vehicle association, when available
+ * @property {number} [year] verified year, when available
  * @property {string} type    projectile type key
  * @property {object} cfg     overrides passed to makeProjectileConfig
  * @property {string} [note]  what is interesting about it
+ * @property {boolean} [approximate] historical name with generic game settings
+ * @property {{title:string,url:string,locator?:string}[]} [sources] identity references, not performance validation
  */
+
+const { PROJECTILE_TYPES } = __req("src/sim/projectileTypes.js");
+
+const SOURCES = {
+  armyProduction: {title:'US Army Center of Military History — The Army and Economic Mobilization', url:'https://www.govinfo.gov/content/pkg/GOVPUB-D114-PURL-gpo122003/pdf/GOVPUB-D114-PURL-gpo122003.pdf', locator:'Table PR-8, light field, tank and antitank ammunition'},
+  armyDevelopment: {title:'US Army Center of Military History — The Ordnance Department: Planning Munitions for War', url:'https://history.army.mil/portals/143/Images/Publications/catalog/10-9.pdf', locator:'90-mm HVAP M304 standardization'},
+  fstc: {title:'US Army Foreign Science and Technology Center — FSTC-CW-07-100-73 (archival scan)', url:'https://www.bulletpicker.com/pdf/FSTC-CW-07-100-73.pdf', locator:'MD-10 entry, p. 2-51: BR-350B, BR-365K and BR-471B'},
+  armyArmor: {title:'US Army — ARMOR, March–April 1977', url:'https://mcoecbamcoepwprd01.blob.core.usgovcloudapi.net/library/CavalryArmorJournal/1970s/1977Jan-Dec.pdf', locator:'p. 20: HESH L35 series designation'},
+  ukStrategy: {title:'UK Ministry of Defence — Defence Industrial Strategy, Cm 6697 (2005)', url:'https://www.gov.uk/government/uploads/system/uploads/attachment_data/file/272203/6697.pdf', locator:'B6.10: L31A7 HESH designation'},
+  italyCatalog: {title:'Italian Ministry of Defence — TER.I-92-00-MATERIALI-001-R002 (2024)', url:'https://www.difesa.it/assets/allegati/57026/ter_i_92_00_materiali_001_r002.pdf', locator:'Annex A, p. 5: 105MM L52 APDST'},
+};
+
+function historicalGameEntry(name, type, source, note) {
+  return {name,type,approximate:true,cfg:structuredClone(PROJECTILE_TYPES[type].defaults),
+    sources:[{...SOURCES[source]}],note};
+}
 
 /** Stand-off is a simulation staging distance, not a range. */
 const KE = 1.4;      // full-calibre shot: mesh a little before contact
 const SAB = 2.4;     // sabot rounds need room to discard first
 
 const AMMO = {
+  // Identity references only. No service dates, vehicle claims or new
+  // performance parameters are inferred from a name or nominal calibre.
+  'br350b-aphe-game': historicalGameEntry('76 mm BR-350B', 'aphe', 'fstc', 'Historical base-fuzed projectile represented by the generic APHE game model.'),
+  'br365k-aphe-game': historicalGameEntry('85 mm BR-365K', 'aphe', 'fstc', 'Historical base-fuzed projectile represented by the generic APHE game model.'),
+  'br471b-aphe-game': historicalGameEntry('122 mm BR-471B', 'aphe', 'fstc', 'Historical base-fuzed projectile represented by the generic APHE game model.'),
+  'm48-he-game': historicalGameEntry('75 mm M48 HE', 'he', 'armyProduction', 'A WWII catalog name represented by the generic HE game model.'),
+  'm42a1-he-game': historicalGameEntry('76 mm M42A1 HE', 'he', 'armyProduction', 'A WWII catalog name represented by the generic HE game model.'),
+  'm71-he-game': historicalGameEntry('90 mm M71 HE', 'he', 'armyProduction', 'A WWII catalog name represented by the generic HE game model.'),
+  'l35-hesh-game': historicalGameEntry('105 mm L35 HESH', 'hesh', 'armyArmor', 'A Cold War catalog name represented by the generic HESH game model.'),
+  'l31a7-hesh-game': historicalGameEntry('120 mm L31A7 HESH', 'hesh', 'ukStrategy', 'A HESH designation documented in the 2005 UK defence strategy; uses the generic HESH game model.'),
+  'm72-ap-game': historicalGameEntry('75 mm M72 AP', 'ap', 'armyProduction', 'A WWII catalog name represented by the generic AP game model.'),
+  'm51-apc-game': historicalGameEntry('37 mm M51 APC', 'apc', 'armyProduction', 'A WWII catalog name represented by the generic APC game model.'),
+  'm304-hvap-game': historicalGameEntry('90 mm M304 HVAP', 'apcr', 'armyDevelopment', 'A historical HVAP designation represented by the generic APCR game model.'),
+  'l52-apds-game': historicalGameEntry('105 mm L52 APDS-T', 'apds', 'italyCatalog', 'An APDS catalog designation represented by the generic APDS game model.'),
   // ------------------------------------------------------------ WW2, 1939-45
   'qf2pdr-ap': {
     name: '2-pdr AP shot', vehicle: 'Matilda II / Crusader', year: 1939, type: 'ap',
@@ -9974,12 +10122,14 @@ const AMMO = {
 };
 
 /** Oldest first: the list reads as a history of the problem. */
-const AMMO_ORDER = Object.keys(AMMO).sort((a, b) => AMMO[a].year - AMMO[b].year);
+const AMMO_ORDER = Object.keys(AMMO).sort((a, b) =>
+  (AMMO[a].year ?? Infinity) - (AMMO[b].year ?? Infinity) || AMMO[a].name.localeCompare(AMMO[b].name));
 
 /** Label for the picker: year, vehicle, round. */
 function ammoLabel(key) {
   const a = AMMO[key];
-  return `${a.year}  ${a.vehicle} — ${a.name}`;
+  if (a.approximate) return `${a.name} — generic ${a.type.toUpperCase()} game approximation`;
+  return `${a.year ?? 'Date unverified'}  ${a.vehicle ? `${a.vehicle} — ` : ''}${a.name}`;
 }
 
 __exports.__all = {AMMO, AMMO_ORDER, ammoLabel};
@@ -10474,13 +10624,20 @@ class App {
       },
     )));
     if (this.ammoKey && AMMO[this.ammoKey]) {
-      p.body.appendChild(el('div', { class: 'note' }, AMMO[this.ammoKey].note));
-      p.body.appendChild(el('div', { class: 'hint' },
+      const entry = AMMO[this.ammoKey];
+      p.body.appendChild(el('div', { class: 'note' }, entry.note));
+      if (entry.approximate) {
+        p.body.appendChild(el('div', { class: 'hint' }, 'Historical name; generic game settings. Calibre, mass, velocity and internal geometry below are the type defaults, not specifications for this service round.'));
+        for (const source of entry.sources || []) p.body.appendChild(el('div', {class:'hint'},
+          el('a', {href:source.url,target:'_blank',rel:'noopener noreferrer'},source.title),
+          source.locator ? ` — ${source.locator}` : ''));
+      } else p.body.appendChild(el('div', { class: 'hint' },
         'Muzzle velocity is used as the STRIKING velocity — there is no exterior '
         + 'ballistics here, so every round arrives as if fired at point blank. Rod '
         + 'dimensions for sub-calibre rounds are reconstructed to match the published '
         + 'mass where the real ones are not public; see src/ui/ammo.js.'));
     }
+    if (cfg.type === 'aphe') p.body.appendChild(el('div',{class:'hint'},'APHE always shows a cutaway with casing, filler, driving band and base fuze. Interior hardware is illustrative; impact damage uses the simulated material.'));
 
     const set = (key, v) => {
       const next = { ...w.projectileCfg, [key]: v };

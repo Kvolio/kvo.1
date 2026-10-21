@@ -201,12 +201,12 @@ export class Projectile {
   }
 
   /** Local -> world transform of a polygon. */
-  worldPoly(poly) {
-    const c = Math.cos(this.ang), s = Math.sin(this.ang);
+  worldPoly(poly, pose = this) {
+    const c = Math.cos(pose.ang), s = Math.sin(pose.ang);
     const out = new Float64Array(poly.length);
     for (let i = 0; i < poly.length; i += 2) {
-      out[i] = this.x + poly[i] * c - poly[i + 1] * s;
-      out[i + 1] = this.y + poly[i] * s + poly[i + 1] * c;
+      out[i] = pose.x + poly[i] * c - poly[i + 1] * s;
+      out[i + 1] = pose.y + poly[i] * s + poly[i + 1] * c;
     }
     return out;
   }

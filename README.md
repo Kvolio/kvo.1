@@ -167,6 +167,7 @@ node tools/sweep.mjs 0.2 1 0.25      # parameter sweep across three cases
 node tools/fragment-checks.mjs      # swept travel, containment, exit timing
 node tools/contact-checks.mjs       # loose-particle / intact-block collisions
 node tools/debris-lifecycle-checks.mjs # handoff, final-frame and replay continuity
+node tools/ammunition-checks.mjs    # all-type configuration, events, rendering and checkpoint contracts
 ```
 
 With the local server running, open `tools/render-checks.html` for the GPU
@@ -181,6 +182,17 @@ particle coordinates; neither masks or hides an overlapping particle.
 
 `tools/debris-preview.html` checks that handing a node over to the fragment
 system preserves its appearance and does not add a streak on birth or finish.
+
+`tools/ammunition-preview.html` checks the always-visible APHE cutaway, live /
+recorded presentation, and sabot visibility. Add `?webgl1` or `?canvas2d` to
+select the fallback contexts. The projectile overlay itself uses Canvas 2D in
+all three modes.
+
+The ammunition picker has 39 entries. Twelve are explicitly marked **game
+approximation**: they provide sourced historical names with generic type
+settings, including generic calibre, mass and velocity. They are not service
+round specifications. See [the ammunition audit](docs/AMMUNITION-AUDIT.md) for
+the software findings and remaining model limitations.
 
 ---
 
