@@ -1,0 +1,54 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Debris handoff continuity</title>
+<style>body{margin:32px;background:#101820;color:#e5edf4;font:16px system-ui}main{display:flex;gap:20px;flex-wrap:wrap}canvas{background:#18232f;border:1px solid #53687c;width:300px;height:200px}h2{font-size:18px}pre{white-space:pre-wrap}</style>
+<h1>Debris handoff continuity</h1>
+<p>The same gray particle remains at the same position, size and color when handed over and when the run ends.</p>
+<main>
+<section><h2>Before handoff</h2><canvas id="before" width="300" height="200"></canvas></section>
+<section><h2>Just handed over</h2><canvas id="born" width="300" height="200"></canvas></section>
+<section><h2>Run finished</h2><canvas id="done" width="300" height="200"></canvas></section>
+</main><pre id="result">Running…</pre>
+<script type="module">
+import { Renderer } from '../src/render/renderer.js';
+import { NodeGL } from '../src/render/nodegl.js';
+const source = {damage:[0.4],flags:[8],matIndex:[0],matTable:[{mat:{color:'#9eabb8'}}]};
+const a = {materialColor:'#9eabb8',damage:0.4,detached:true,plastic:0,temp:293,stress:0,nodeSize:0.02};
+function renderer(id) {
+  const canvas = document.querySelector(id), actual = canvas.getContext('2d');
+  let lines = 0, fills = 0, color = '';
+  const ctx = new Proxy(actual,{
+    get(target,key) {
+      if (key === 'lineTo') return (...args)=>{lines++;target.lineTo(...args);};
+      if (key === 'fillRect') return (...args)=>{fills++;color=target.fillStyle;target.fillRect(...args);};
+      const value = Reflect.get(target,key,target);return typeof value === 'function' ? value.bind(target) : value;
+    },
+    set(target,key,value){return Reflect.set(target,key,value,target);},
+  });
+  const r = Object.assign(Object.create(Renderer.prototype),{ctx,cam:{x:0,y:0,scale:1000,w:300,h:200,toScreen:(x,y)=>[150+x*1000,100-y*1000]},dpr:1,lastPathGL:false,matColorCache:new Map(),opts:{showTrails:true,field:'material',nodeGain:1,smooth:true}});
+  return {r,ctx,stats:()=>({lines,fills,color})};
+}
+const before=renderer('#before'),born=renderer('#born'),done=renderer('#done');
+const c=before.r.nodeColor(source,0,null).map(Math.round),size=0.02*1000*1.42;
+before.ctx.fillStyle=`rgb(${c.join(',')})`;before.ctx.fillRect(150-size/2,100-size/2,size,size);
+const f={x:0,y:0,vx:1000,vy:0,size:0.02,kind:'spall',alive:true,appearance:a,motionDistance:0};
+born.r.drawFragments({state:'debris',fragments:{list:[f]}},null);
+done.r.drawFragments({state:'done',fragments:{list:[{...f,motionDistance:0.02}]}},null);
+const A=before.stats(),B=born.stats(),C=done.stats();
+const gpuCanvas=document.createElement('canvas');gpuCanvas.width=300;gpuCanvas.height=200;
+const gpu=NodeGL.create(gpuCanvas);
+let gpuOK=true,gpuLabel='SKIP: GPU unavailable';
+if(gpu){
+  gpu.ensure(1);gpu.uploadColours({n:1,matIndex:[0],matTable:source.matTable});
+  gpu.pos.set([0,0]);gpu.val[0]=0.4;gpu.flag[0]=3;gpu.clear();
+  gpu.drawPoints({count:1,cam:born.r.cam,mode:'material',pointSize:size*0.8,extrude:null,alpha:1,onlyFree:true});
+  const pixel=new Uint8Array(4);gpu.gl.readPixels(150,100,1,1,gpu.gl.RGBA,gpu.gl.UNSIGNED_BYTE,pixel);
+  born.r.lastPathGL=true;
+  const expected=born.r.fragmentColor(a,1000,0).match(/\d+/g).map(Number);
+  gpuOK=expected.every((v,i)=>Math.abs(v-pixel[i])<=4)&&gpu.gl.getError()===gpu.gl.NO_ERROR;
+  gpuLabel=`${gpuOK?'PASS':'FAIL'}: GPU source and fragment color agree`;
+}
+const ok=A.color===B.color&&B.color===C.color&&B.lines===0&&C.lines===0&&B.fills===1&&C.fills===1&&gpuOK;
+document.querySelector('#result').textContent=`${ok?'PASS':'FAIL'}: source color and particle preserved\n${B.lines===0?'PASS':'FAIL'}: no invented streak on handoff\n${C.lines===0?'PASS':'FAIL'}: no frozen streak when finished\n${gpuLabel}`;
+document.body.dataset.result=ok?'pass':'fail';
+</script>

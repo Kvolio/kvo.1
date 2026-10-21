@@ -674,6 +674,24 @@ export class Renderer {
 
   // -------------------------------------------------------------- fragments
 
+  fragmentColor(a, vx, vy) {
+    let c;
+    switch (this.opts.field) {
+      case 'damage': c = RAMP_DAMAGE(a.damage); break;
+      case 'plastic': c = RAMP_PLASTIC(clamp(a.plastic, 0, 1)); break;
+      case 'temp': c = RAMP_TEMP(clamp((a.temp - 293) / FIELD_SCALES.tempSpan, 0, 1)); break;
+      case 'velocity': c = RAMP_VELOCITY(clamp(Math.hypot(vx, vy) / this.opts.velScale, 0, 1)); break;
+      case 'stress': c = RAMP_STRESS(clamp(0.5 + a.stress / (2 * this.opts.stressScale), 0, 1)); break;
+      default: {
+        const factor = 1.14 - 0.72 * clamp(a.damage, 0, 1);
+        c = this.matColor(a.materialColor).map((v) => v * factor);
+      }
+    }
+    // Match the GPU's detached-node tint when that was the source view.
+    if (this.lastPathGL && a.detached) c = [c[0] * 1.255, c[1] * 1.034, c[2] * 0.762];
+    return rgb(c.map((v) => Math.round(clamp(v, 0, 255))));
+  }
+
   drawFragments(world, frame) {
     const ctx = this.ctx, cam = this.cam;
     const list = frame ? frame.frags : world.fragments.list;
@@ -686,9 +704,9 @@ export class Renderer {
     // needles with no fragment at the end of them (it was already off the
     // screen), and in replay nothing was drawn at all. A streak is now a short
     // tail along the fragment's own velocity: the length is the distance flown
-    // in a fixed 0.4 ms of exposure, capped in screen pixels, and it always
-    // ends on the fragment. Live and replay draw it the same way.
-    if (this.opts.showTrails) {
+    // in up to 0.4 ms of exposure, bounded by actual motion this frame. A new
+    // particle has no past trajectory, and a finished view has no motion blur.
+    if (this.opts.showTrails && (frame ? frame.state : world.state) !== 'done') {
       const cap = 26 * this.dpr, expo = 4e-4;
       const buckets = [[], [], []];                       // faint, mid, bright
       for (const f of list) {
@@ -698,7 +716,8 @@ export class Renderer {
         if (v < 60) continue;                             // resting or sliding: no streak
         const [sx, sy] = cam.toScreen(frame ? f[0] : f.x, frame ? f[1] : f.y);
         if (sx < -cap || sy < -cap || sx > cam.w + cap || sy > cam.h + cap) continue;
-        const len = Math.min(cap, v * expo * cam.scale);
+        const distance = frame ? (f[7] || 0) : (f.motionDistance || 0);
+        const len = Math.min(cap, v * expo * cam.scale, distance * cam.scale);
         if (len < 2) continue;
         const ux = vx / v, uy = -vy / v;                  // screen y points down
         const bk = v > 900 ? 2 : v > 350 ? 1 : 0;
@@ -723,13 +742,17 @@ export class Renderer {
       const vx = frame ? f[2] : f.vx, vy = frame ? f[3] : f.vy;
       const sz = frame ? f[5] : f.size;
       const kind = frame ? f[6] : f.kind;
+      const appearance = frame ? f[8] : f.appearance;
       if (!frame && (!f.alive)) continue;
       const [sx, sy] = cam.toScreen(x, y);
       if (sx < -20 || sy < -20 || sx > cam.w + 20 || sy > cam.h + 20) continue;
-      const s = Math.max(1.4, sz * cam.scale);
+      const freePoint = this.lastPathGL && this.opts.smooth && this.field?.smoothOK && appearance?.detached;
+      const s = appearance
+        ? Math.max(freePoint ? 2 : 1, appearance.nodeSize * cam.scale * this.opts.nodeGain * 1.42 * (freePoint ? 0.8 : 1))
+        : Math.max(1.4, sz * cam.scale);
       const v = Math.hypot(vx, vy);
       const hot = clamp(v / 1400, 0, 1);
-      ctx.fillStyle = kind === 'penetrator'
+      ctx.fillStyle = appearance ? this.fragmentColor(appearance, vx, vy) : kind === 'penetrator'
         ? `rgb(${190 + 60 * hot | 0},${170},${150})`
         : kind === 'sabot' ? 'rgb(150,160,170)'
           : `rgb(${200 + 55 * hot | 0},${140 + 70 * hot | 0},${70})`;

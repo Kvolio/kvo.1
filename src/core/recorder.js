@@ -29,6 +29,11 @@
 
 import { FIELD_SCALES } from '../render/palette.js';
 
+function snapshotFragment(f) {
+  return [f.x, f.y, f.vx, f.vy, f.mass, f.size, f.kind, f.motionDistance || 0,
+    f.appearance ? (Object.isFrozen(f.appearance) ? f.appearance : Object.freeze({ ...f.appearance })) : null];
+}
+
 export class Recorder {
   constructor(opts = {}) {
     this.maxFrames = opts.maxFrames ?? 420;
@@ -87,7 +92,7 @@ export class Recorder {
         id: this.baseId + this.count, t: world.simTime, state: world.state, n: 0,
         px: null, py: null, dmg: null, tmp: null, alv: null, pls: null, vel: null, str: null,
         frags: world.fragments.list.filter((x) => x.alive)
-          .map((x) => [x.x, x.y, x.vx, x.vy, x.mass, x.size, x.kind]),
+          .map(snapshotFragment),
         proj: world.projectile
           ? { x: world.projectile.x, y: world.projectile.y, ang: world.projectile.ang, sabot: world.projectile.sabotAttached }
           : null,
@@ -141,7 +146,7 @@ export class Recorder {
     f.frags.length = 0;
     for (let i = 0; i < list.length; i++) {
       const x = list[i];
-      if (x.alive) f.frags.push([x.x, x.y, x.vx, x.vy, x.mass, x.size, x.kind]);
+      if (x.alive) f.frags.push(snapshotFragment(x));
     }
 
     if (f.id % this.keyEvery === 0) this.captureKey(world, f.id);
@@ -236,6 +241,7 @@ export class Recorder {
     world.trueContactTime = k.trueContactTime;
     Object.assign(world.stats, k.stats);
     world.fragments.list = structuredClone(k.fragments);
+    for (const f of world.fragments.list) if (f.appearance) Object.freeze(f.appearance);
     for (const rec of k.modules) {
       const m = world.scene.modules.find((x) => x.id === rec.id);
       if (m) { m.integrity = rec.integrity; m.state = rec.state; m.hits.length = Math.min(m.hits.length, rec.hits); }

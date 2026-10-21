@@ -601,8 +601,11 @@ export class World {
     this.checkFuze();
     this.stepEra();
     this.checkModuleStrikes();
-    this.promoteEscapees();
     this.fragments.step(advanced, this.scene, this.simTime, this.internals);
+    // Escapees already reached the end of this interval in the node solver.
+    // Hand them over AFTER advancing older fragments, so they are not moved
+    // through the same interval twice or shown with an invented motion trail.
+    this.promoteEscapees();
     this.updateStats();
 
     // settle / finish detection - only once the projectile has actually
@@ -999,6 +1002,14 @@ export class World {
         matKey: d.matTable[d.matIndex[i]].mat.key,
         bornAt: this.simTime,
         source: d.role[i] === ROLE.ARMOUR ? 'armour' : 'projectile',
+        // Rendering metadata only: preserve the material's appearance when
+        // switching representation, rather than flashing new orange squares.
+        appearance: {
+          materialColor: d.matTable[d.matIndex[i]].mat.color,
+          damage: d.damage[i], detached: (fl & 8) !== 0,
+          plastic: d.plStrain[i] / Math.max(d.matTable[d.matIndex[i]].pd.epsF * 3, 1e-4),
+          temp: d.temp[i], stress: d.virial[i], nodeSize: d.dx,
+        },
       });
       d.alive[i] = 0;
     }

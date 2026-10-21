@@ -2977,18 +2977,22 @@ class PDSolver {
     this.grid = new SpatialGrid(domain.dx * 1.05);
     this.contactSet = new Int32Array(domain.n);
     this.contactCount = 0;
-    this.near = new Int32Array(64);
+    this.contactMask = new Uint8Array(domain.n);
+    this.contactTargets = new Int32Array(domain.n);
+    this.contactTargetCount = 0;
+    // A crowded cell may contain more than 64 nodes. Keep enough room for
+    // every possible target so the grid query cannot silently drop a contact.
+    this.near = new Int32Array(domain.n);
     this.time = 0;
     this.steps = 0;
     this.safety = opts.safety ?? 0.32;
     this.dt = domain.dtStable * this.safety;
     this.gravity = opts.gravity ?? -9.81;
-    // Refreshed every step. At 8 the set went stale: a node newly exposed by
-    // erosion could overlap a quarter of a lattice spacing before it was even
+    // Refreshed every force evaluation. At 8 steps the set went stale: a node
+    // newly exposed by erosion could overlap a quarter of a lattice spacing before it was even
     // eligible for contact, and then met the full penalty force in one step.
     // The set is an O(n) scan against a bond loop an order of magnitude larger,
     // so making it exact costs almost nothing.
-    this.contactRefresh = 1;
     this.friction = opts.friction ?? TUNE.friction ?? MU_FRICTION;
 
     // CONTACT STIFFNESS
@@ -3074,20 +3078,25 @@ class PDSolver {
     this.brokenThisStep = 0;
     this.totalBroken = 0;
     this.maxContactForce = 0;
-    this.refreshContactSet();
     this.computeForces();
     this.E0 = this.kinetic() + this.strainEnergy();
   }
 
-  /** Particles that may participate in non-neighbour contact. */
+  /** Active contact queries and the full set of live collision targets. */
   refreshContactSet() {
     const d = this.d;
-    let k = 0;
+    let k = 0, targets = 0;
     for (let i = 0; i < d.n; i++) {
+      this.contactMask[i] = 0;
       if (!d.alive[i]) continue;
-      if ((d.flags[i] & 1) || d.damage[i] > 0.02 || (d.flags[i] & 8)) this.contactSet[k++] = i;
+      this.contactTargets[targets++] = i;
+      if ((d.flags[i] & 1) || d.damage[i] > 0.02 || (d.flags[i] & 8)) {
+        this.contactSet[k++] = i;
+        this.contactMask[i] = 1;
+      }
     }
     this.contactCount = k;
+    this.contactTargetCount = targets;
   }
 
   /**
@@ -3144,7 +3153,6 @@ class PDSolver {
 
     this.time += dt;
     this.steps++;
-    if (this.steps % this.contactRefresh === 0) this.refreshContactSet();
     // re-evaluated periodically: the fastest thing in the domain changes as a
     // jet forms, a plate is thrown, or the event decays
     if (this.steps % 8 === 0) this.dt = Math.min(this.dtBase, this.velocityLimitedDt());
@@ -3426,10 +3434,15 @@ class PDSolver {
     }
 
     // ------------------------------------------------- non-neighbour contact
+    // Bond failure above can expose nodes in this very force evaluation.
+    this.refreshContactSet();
     const cs = this.contactSet, cn = this.contactCount;
-    if (cn > 1) {
+    if (cn > 0 && this.contactTargetCount > 1) {
       this.grid.cell = dC * 1.02;
-      this.grid.build(px, py, n, cs.subarray(0, cn));
+      // Surface/damaged/free nodes initiate queries, but intact interior nodes
+      // must still receive them. Filtering BOTH sides made the interior of a
+      // solid invisible to loose particles once they got past its surface.
+      this.grid.build(px, py, n, this.contactTargets.subarray(0, this.contactTargetCount));
       const near = this.near;
       const deltaCut = d.delta + d.dx * 0.5;
       let maxF = 0;
@@ -3438,7 +3451,9 @@ class PDSolver {
         const cnt = this.grid.query(px[i], py[i], dC, near);
         for (let z = 0; z < cnt; z++) {
           const j = near[z];
-          if (j <= i) continue;
+          // An inactive target never initiates a query of its own. Index order
+          // can only suppress duplicates when BOTH members are active.
+          if (j === i || (j < i && this.contactMask[j])) continue;
           // skip reference neighbours - already handled by the bond list
           if (d.group[i] === d.group[j]) {
             const rdx = d.rx[j] - d.rx[i], rdy = d.ry[j] - d.ry[i];
@@ -4521,7 +4536,7 @@ __def("src/sim/fragments.js", function (__exports, __req) {
  * fragments and is documented in docs/MODEL.md §6.
  */
 
-const { pointInPoly, clamp } = __req("src/core/math.js");
+const { clamp } = __req("src/core/math.js");
 const { modulePoly, MODULE_TYPES } = __req("src/sim/scene.js");
 const { getMaterial } = __req("src/materials/database.js");
 
@@ -4602,8 +4617,9 @@ class FragmentSystem {
     const frag = Object.assign({
       id: this.nextId++, x: 0, y: 0, vx: 0, vy: 0, mass: 1e-4,
       size: 0.002, kind: 'spall', matKey: 'rha', bornAt: 0,
-      alive: true, trail: [], stopped: false, source: 'armour',
+      alive: true, trail: [], motionDistance: 0, stopped: false, source: 'armour',
     }, f);
+    if (frag.appearance) frag.appearance = Object.freeze({ ...frag.appearance });
     if (!frag.dia) {
       let rho = 7850;
       try { rho = getMaterial(frag.matKey).rho || rho; } catch (e) { /* default steel */ }
@@ -4611,7 +4627,9 @@ class FragmentSystem {
       frag.dia = Math.cbrt((6 * frag.mass) / (Math.PI * rho));
     }
     frag.ke0 = 0.5 * frag.mass * (frag.vx * frag.vx + frag.vy * frag.vy);
-    frag.inside = null;           // filled lazily on the first step
+    // Only crossings whose entry impact was resolved belong here. Stable IDs
+    // keep this state valid through recorder structuredClone / restore.
+    frag.inside = new Map();
     this.list.push(frag);
     this.trimResting();
     return frag;
@@ -4690,17 +4708,13 @@ class FragmentSystem {
     const B = scene.bounds();
     const M = 1.0;
     for (const f of this.list) {
+      f.motionDistance = 0;
       if (!f.alive || f.stopped) continue;
       const v = Math.hypot(f.vx, f.vy);
       if (v < STOP_SPEED) { f.stopped = true; continue; }
       if (!f.departed && (
         (f.x > B.x1 + M && f.vx > 0) || (f.x < B.x0 - M && f.vx < 0)
         || (f.y > B.y1 + M && f.vy > 0) || (f.y < B.y0 - M && f.vy < 0))) f.departed = true;
-      if (!f.inside) {
-        f.inside = new Set();
-        for (const L of layers) if (pointInPoly(L.poly, f.x, f.y)) f.inside.add(L);
-      }
-
       // --- drag, integrated exactly over the step ------------------------
       const A = Math.PI * 0.25 * f.dia * f.dia;
       const k = (0.5 * RHO_AIR * CD * A) / f.mass;
@@ -4715,6 +4729,8 @@ class FragmentSystem {
       // --- swept hits ------------------------------------------------------
       if (f.departed) { f.x = x1; f.y = y1; }
       else this.sweep(f, x0, y0, x1, y1, layers, mods, scene, tNow, internals, born);
+
+      f.motionDistance = Math.hypot(f.x - x0, f.y - y0);
 
       if (f.trail.length === 0 || Math.hypot(f.x - f.trail[f.trail.length - 2], f.y - f.trail[f.trail.length - 1]) > 0.01) {
         f.trail.push(f.x, f.y);
@@ -4736,15 +4752,13 @@ class FragmentSystem {
     for (const L of layers) {
       const c = clipLine(L.poly, x0, y0, ux, uy);
       if (!c || c.tOut <= 0) continue;
-      const inside0 = f.inside.has(L) || c.tIn <= 0;
-      if (inside0) {
-        // started inside: it leaves when the line does; it is not "entering"
-        if (c.tOut > seg) { f.inside.add(L); }
-        else f.inside.delete(L);
-        continue;
+      if (!f.inside.has(L.id)) {
+        if (c.tIn > seg) continue;
+        // A newly spawned piece inside a solid must resolve the remaining
+        // chord too; containment alone is not a completed entry collision.
+        events.push({ kind: 'layer', L, tIn: Math.max(0, c.tIn), tOut: c.tOut, nx: c.nx, ny: c.ny });
       }
-      if (c.tIn > seg) continue;
-      events.push({ kind: 'layer', L, tIn: c.tIn, tOut: c.tOut, nx: c.nx, ny: c.ny });
+      if (c.tOut <= seg) events.push({ kind: 'exit', L, tIn: c.tOut });
     }
     for (const { m, poly } of mods) {
       if (m.type === 'void') continue;
@@ -4757,8 +4771,22 @@ class FragmentSystem {
     let reach = seg;                   // how far along the line this step gets
     for (const e of events) {
       if (e.tIn > reach) break;
+      if (e.kind === 'exit') {
+        const crossing = f.inside.get(e.L.id);
+        if (crossing?.plugMass > 1e-5) {
+          born.push({
+            x: x0 + ux * e.tIn, y: y0 + uy * e.tIn, vx: f.vx, vy: f.vy,
+            mass: crossing.plugMass, size: f.size, kind: 'plug', matKey: e.L.mat.key,
+            bornAt: tNow, source: 'plug',
+          });
+        }
+        f.inside.delete(e.L.id);
+        continue;
+      }
       const v = Math.hypot(f.vx, f.vy);
-      if (v < STOP_SPEED) { f.stopped = true; break; }
+      if (v < STOP_SPEED) {
+        reach = e.tIn; f.stopped = true; f.vx = 0; f.vy = 0; break;
+      }
       if (e.kind === 'layer') {
         const chord = Math.max(e.tOut - e.tIn, 0);
         const res = perforate(f, chord, e.L.mat);
@@ -4768,7 +4796,8 @@ class FragmentSystem {
           // it comes to rest part-way in; how far follows from the energy it
           // spent, never beyond the far face
           const frac = clamp(0.5 * Math.hypot(f.vx, f.vy) / Math.max(res.vbl, 1), 0.1, 0.9);
-          f.x += ux * chord * frac; f.y += uy * chord * frac;
+          const travel = Math.min(chord * frac, Math.max(0, reach - e.tIn));
+          f.x += ux * travel; f.y += uy * travel;
           f.stopped = true; f.vx = 0; f.vy = 0;
           f.embeddedIn = e.L.label || e.L.material;
           this.stoppedInPlate++;
@@ -4784,17 +4813,11 @@ class FragmentSystem {
         this.perforations++;
         const s = res.vr / Math.max(v, 1e-6);
         f.vx *= s; f.vy *= s;
-        if (res.plugMass > 1e-5) {
-          born.push({
-            x: x0 + ux * e.tOut, y: y0 + uy * e.tOut, vx: f.vx, vy: f.vy,
-            mass: res.plugMass, size: f.size, kind: 'plug', matKey: e.L.mat.key,
-            bornAt: tNow, source: 'plug',
-          });
-        }
-        // carry on from the far face: the plate took no appreciable time, so the
-        // rest of the step is flown at the new speed
-        reach = e.tOut + Math.max(reach - e.tOut, 0) * s;
-        f.x = x0 + ux * e.tOut; f.y = y0 + uy * e.tOut;
+        f.inside.set(e.L.id, { plugMass: res.plugMass });
+        // Spend the remaining travel from the ENTRY at the reduced speed.
+        // Jumping to tOut teleports through a thick plate and creates exit
+        // debris before the fragment has actually traversed the geometry.
+        reach = e.tIn + (reach - e.tIn) * s;
       } else {
         const m = e.m;
         f.x = x0 + ux * e.tIn; f.y = y0 + uy * e.tIn;
@@ -4819,10 +4842,6 @@ class FragmentSystem {
       }
     }
     f.x = x0 + ux * reach; f.y = y0 + uy * reach;
-    // update containment for the next step
-    for (const L of layers) {
-      if (pointInPoly(L.poly, f.x, f.y)) f.inside.add(L); else f.inside.delete(L);
-    }
   }
 }
 
@@ -5690,6 +5709,11 @@ __def("src/core/recorder.js", function (__exports, __req) {
 
 const { FIELD_SCALES } = __req("src/render/palette.js");
 
+function snapshotFragment(f) {
+  return [f.x, f.y, f.vx, f.vy, f.mass, f.size, f.kind, f.motionDistance || 0,
+    f.appearance ? (Object.isFrozen(f.appearance) ? f.appearance : Object.freeze({ ...f.appearance })) : null];
+}
+
 class Recorder {
   constructor(opts = {}) {
     this.maxFrames = opts.maxFrames ?? 420;
@@ -5748,7 +5772,7 @@ class Recorder {
         id: this.baseId + this.count, t: world.simTime, state: world.state, n: 0,
         px: null, py: null, dmg: null, tmp: null, alv: null, pls: null, vel: null, str: null,
         frags: world.fragments.list.filter((x) => x.alive)
-          .map((x) => [x.x, x.y, x.vx, x.vy, x.mass, x.size, x.kind]),
+          .map(snapshotFragment),
         proj: world.projectile
           ? { x: world.projectile.x, y: world.projectile.y, ang: world.projectile.ang, sabot: world.projectile.sabotAttached }
           : null,
@@ -5802,7 +5826,7 @@ class Recorder {
     f.frags.length = 0;
     for (let i = 0; i < list.length; i++) {
       const x = list[i];
-      if (x.alive) f.frags.push([x.x, x.y, x.vx, x.vy, x.mass, x.size, x.kind]);
+      if (x.alive) f.frags.push(snapshotFragment(x));
     }
 
     if (f.id % this.keyEvery === 0) this.captureKey(world, f.id);
@@ -5897,6 +5921,7 @@ class Recorder {
     world.trueContactTime = k.trueContactTime;
     Object.assign(world.stats, k.stats);
     world.fragments.list = structuredClone(k.fragments);
+    for (const f of world.fragments.list) if (f.appearance) Object.freeze(f.appearance);
     for (const rec of k.modules) {
       const m = world.scene.modules.find((x) => x.id === rec.id);
       if (m) { m.integrity = rec.integrity; m.state = rec.state; m.hits.length = Math.min(m.hits.length, rec.hits); }
@@ -6744,8 +6769,11 @@ class World {
     this.checkFuze();
     this.stepEra();
     this.checkModuleStrikes();
-    this.promoteEscapees();
     this.fragments.step(advanced, this.scene, this.simTime, this.internals);
+    // Escapees already reached the end of this interval in the node solver.
+    // Hand them over AFTER advancing older fragments, so they are not moved
+    // through the same interval twice or shown with an invented motion trail.
+    this.promoteEscapees();
     this.updateStats();
 
     // settle / finish detection - only once the projectile has actually
@@ -7142,6 +7170,14 @@ class World {
         matKey: d.matTable[d.matIndex[i]].mat.key,
         bornAt: this.simTime,
         source: d.role[i] === ROLE.ARMOUR ? 'armour' : 'projectile',
+        // Rendering metadata only: preserve the material's appearance when
+        // switching representation, rather than flashing new orange squares.
+        appearance: {
+          materialColor: d.matTable[d.matIndex[i]].mat.color,
+          damage: d.damage[i], detached: (fl & 8) !== 0,
+          plastic: d.plStrain[i] / Math.max(d.matTable[d.matIndex[i]].pd.epsF * 3, 1e-4),
+          temp: d.temp[i], stress: d.virial[i], nodeSize: d.dx,
+        },
       });
       d.alive[i] = 0;
     }
@@ -7755,21 +7791,21 @@ precision highp float;
 attribute vec2 aPos;
 attribute float aVal;
 attribute vec3 aCol;
-attribute float aFlag;      // 1 = alive, 2 = detached
+attribute float aFlag;      // 1 = attached, 3 = detached (0 = dead)
 
 uniform vec2  uCam;
 uniform float uScale;
 uniform vec2  uViewport;
 uniform vec2  uOffset;
 uniform float uPointSize;
-uniform float uOnlyFree;    // 1 = draw detached nodes only
+uniform float uOnlyFree;    // 1 = detached only; -1 = attached only; 0 = all
 
 varying float vVal;
 varying vec3  vCol;
 varying float vFree;
 
 void main() {
-  if (aFlag < 0.5 || (uOnlyFree > 0.5 && aFlag < 2.5)) {   // dead (or filtered out): park it outside the frustum
+  if (aFlag < 0.5 || (uOnlyFree > 0.5 && aFlag < 2.5) || (uOnlyFree < -0.5 && aFlag >= 2.5)) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     gl_PointSize = 0.0;
     vVal = 0.0; vCol = vec3(0.0); vFree = 0.0;
@@ -7828,9 +7864,9 @@ void main() {
  * Both passes read exactly the node state the discrete path reads; nothing is
  * added. One node alone only accumulates 1/S (about 0.37), below the 0.5
  * threshold, so an isolated node would vanish. Detached material (spall,
- * ejecta, eroded debris) is therefore ALSO drawn as discrete squares by the
- * ordinary point pass, restricted to detached nodes - debris stays visible as
- * individual pieces exactly as it did before.
+ * ejecta, eroded debris) is drawn ONLY by the ordinary point pass. Including
+ * it in the surface sum as well lets passing debris bridge cracks and tint
+ * nearby solid material, making the plate appear to flow with the fragments.
  */
 const SPLAT_FRAG = `
 precision highp float;
@@ -8246,7 +8282,7 @@ class NodeGL {
     if (!this.ensureAccum(W, H)) return false;
     this.uploadNodes(o.count);
 
-    // pass 1: accumulate every node's kernel into the offscreen target
+    // pass 1: accumulate attached nodes only; loose debris is a separate pass
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.viewport(0, 0, W, H);
     gl.clearColor(0, 0, 0, 0);
@@ -8262,7 +8298,7 @@ class NodeGL {
     gl.uniform2f(S.uViewport, W, H);
     gl.uniform2f(S.uOffset, 0, 0);
     gl.uniform1f(S.uPointSize, o.radiusPx * 2);
-    gl.uniform1f(S.uOnlyFree, 0);
+    gl.uniform1f(S.uOnlyFree, -1);
     gl.uniform1f(S.uRow, this.rowFor(o.mode));
     gl.uniform1f(S.uMaterialMode, o.mode === 'material' ? 1 : 0);
     gl.uniform1f(S.uNorm, o.norm);
@@ -9045,6 +9081,24 @@ class Renderer {
 
   // -------------------------------------------------------------- fragments
 
+  fragmentColor(a, vx, vy) {
+    let c;
+    switch (this.opts.field) {
+      case 'damage': c = RAMP_DAMAGE(a.damage); break;
+      case 'plastic': c = RAMP_PLASTIC(clamp(a.plastic, 0, 1)); break;
+      case 'temp': c = RAMP_TEMP(clamp((a.temp - 293) / FIELD_SCALES.tempSpan, 0, 1)); break;
+      case 'velocity': c = RAMP_VELOCITY(clamp(Math.hypot(vx, vy) / this.opts.velScale, 0, 1)); break;
+      case 'stress': c = RAMP_STRESS(clamp(0.5 + a.stress / (2 * this.opts.stressScale), 0, 1)); break;
+      default: {
+        const factor = 1.14 - 0.72 * clamp(a.damage, 0, 1);
+        c = this.matColor(a.materialColor).map((v) => v * factor);
+      }
+    }
+    // Match the GPU's detached-node tint when that was the source view.
+    if (this.lastPathGL && a.detached) c = [c[0] * 1.255, c[1] * 1.034, c[2] * 0.762];
+    return rgb(c.map((v) => Math.round(clamp(v, 0, 255))));
+  }
+
   drawFragments(world, frame) {
     const ctx = this.ctx, cam = this.cam;
     const list = frame ? frame.frags : world.fragments.list;
@@ -9057,9 +9111,9 @@ class Renderer {
     // needles with no fragment at the end of them (it was already off the
     // screen), and in replay nothing was drawn at all. A streak is now a short
     // tail along the fragment's own velocity: the length is the distance flown
-    // in a fixed 0.4 ms of exposure, capped in screen pixels, and it always
-    // ends on the fragment. Live and replay draw it the same way.
-    if (this.opts.showTrails) {
+    // in up to 0.4 ms of exposure, bounded by actual motion this frame. A new
+    // particle has no past trajectory, and a finished view has no motion blur.
+    if (this.opts.showTrails && (frame ? frame.state : world.state) !== 'done') {
       const cap = 26 * this.dpr, expo = 4e-4;
       const buckets = [[], [], []];                       // faint, mid, bright
       for (const f of list) {
@@ -9069,7 +9123,8 @@ class Renderer {
         if (v < 60) continue;                             // resting or sliding: no streak
         const [sx, sy] = cam.toScreen(frame ? f[0] : f.x, frame ? f[1] : f.y);
         if (sx < -cap || sy < -cap || sx > cam.w + cap || sy > cam.h + cap) continue;
-        const len = Math.min(cap, v * expo * cam.scale);
+        const distance = frame ? (f[7] || 0) : (f.motionDistance || 0);
+        const len = Math.min(cap, v * expo * cam.scale, distance * cam.scale);
         if (len < 2) continue;
         const ux = vx / v, uy = -vy / v;                  // screen y points down
         const bk = v > 900 ? 2 : v > 350 ? 1 : 0;
@@ -9094,13 +9149,17 @@ class Renderer {
       const vx = frame ? f[2] : f.vx, vy = frame ? f[3] : f.vy;
       const sz = frame ? f[5] : f.size;
       const kind = frame ? f[6] : f.kind;
+      const appearance = frame ? f[8] : f.appearance;
       if (!frame && (!f.alive)) continue;
       const [sx, sy] = cam.toScreen(x, y);
       if (sx < -20 || sy < -20 || sx > cam.w + 20 || sy > cam.h + 20) continue;
-      const s = Math.max(1.4, sz * cam.scale);
+      const freePoint = this.lastPathGL && this.opts.smooth && this.field?.smoothOK && appearance?.detached;
+      const s = appearance
+        ? Math.max(freePoint ? 2 : 1, appearance.nodeSize * cam.scale * this.opts.nodeGain * 1.42 * (freePoint ? 0.8 : 1))
+        : Math.max(1.4, sz * cam.scale);
       const v = Math.hypot(vx, vy);
       const hot = clamp(v / 1400, 0, 1);
-      ctx.fillStyle = kind === 'penetrator'
+      ctx.fillStyle = appearance ? this.fragmentColor(appearance, vx, vy) : kind === 'penetrator'
         ? `rgb(${190 + 60 * hot | 0},${170},${150})`
         : kind === 'sabot' ? 'rgb(150,160,170)'
           : `rgb(${200 + 55 * hot | 0},${140 + 70 * hot | 0},${70})`;

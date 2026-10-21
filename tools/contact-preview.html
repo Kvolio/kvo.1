@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Loose particle / solid collision regression</title>
+<style>
+body{margin:32px;background:#101820;color:#e5edf4;font:16px system-ui}main{display:flex;gap:24px;flex-wrap:wrap}canvas{background:#18232f;border:1px solid #53687c;width:480px;max-width:100%;height:auto}button{padding:8px 20px}pre{white-space:pre-wrap}
+</style>
+<h1>Loose particle / solid collision regression</h1>
+<p>The brown square uses the same coordinates for drawing and collision. The blue block stays fixed.</p>
+<button id="run">Run again</button>
+<main><section><h2>Original search</h2><canvas id="before" width="480" height="360"></canvas></section><section><h2>Fixed search</h2><canvas id="after" width="480" height="360"></canvas></section></main>
+<pre id="result">Running…</pre>
+<script type="module">
+import { contactFixture } from './fixtures/contact-scene.js';
+const output = document.querySelector('#result');
+function make(original) {
+  const flags = [8], positions = [[-3.5,0]];
+  for (let x = 0; x <= 3; x++) for (let y = -3; y <= 3; y++) {flags.push(4);positions.push([x,y]);}
+  const f = contactFixture(flags, positions); f.d.vx[0] = 2;
+  if (original) {
+    const refresh = f.s.refreshContactSet.bind(f.s);
+    f.s.refreshContactSet = () => {
+      refresh();
+      f.s.contactTargets.set(f.s.contactSet.subarray(0, f.s.contactCount));
+      f.s.contactTargetCount = f.s.contactCount;
+    };
+  }
+  f.s.computeForces();
+  return f;
+}
+function draw(canvas, f) {
+  const c = canvas.getContext('2d'), d = f.d, scale = 42;
+  c.clearRect(0,0,480,360);
+  c.fillStyle = '#b9c8d8';c.fillRect(240-0.5*scale,180-3.5*scale,4*scale,7*scale);
+  c.fillStyle = '#996b35';c.fillRect(240+d.px[0]*scale-6,180-d.py[0]*scale-6,12,12);
+}
+function run() {
+  const before = make(true), after = make(false);
+  let maxX = -Infinity;
+  for (let step = 0; step < 2200; step++) {
+    before.s.step(0.001);after.s.step(0.001);maxX = Math.max(maxX,after.d.px[0]);
+  }
+  draw(document.querySelector('#before'),before);draw(document.querySelector('#after'),after);
+  const blocked = maxX < -0.9 && after.d.vx[0] < 0;
+  const wallUnchanged = after.d.px.slice(1).every((x,i) => x === after.d.rx[i+1]) && after.d.py.slice(1).every((y,i) => y === after.d.ry[i+1]);
+  output.textContent = `${blocked ? 'PASS' : 'FAIL'}: loose particle rebounds from intact block\n${wallUnchanged ? 'PASS' : 'FAIL'}: solid nodes remain in place\nOriginal particle x: ${before.d.px[0].toFixed(2)}; fixed particle x: ${after.d.px[0].toFixed(2)} (arbitrary game units)`;
+  document.body.dataset.result = blocked && wallUnchanged ? 'pass' : 'fail';
+}
+document.querySelector('#run').addEventListener('click',run);run();
+</script>

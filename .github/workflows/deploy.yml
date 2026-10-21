@@ -56,7 +56,7 @@ jobs:
           node-version: '22'
 
       - name: Verify the solver still behaves
-        run: node tools/checks.mjs
+        run: npm run check
 
       - name: Build single-file bundle and rendered docs
         run: node tools/build.mjs
