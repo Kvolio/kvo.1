@@ -58,7 +58,7 @@
  * fragments and is documented in docs/MODEL.md §6.
  */
 
-import { pointInPoly, clamp } from '../core/math.js';
+import { clamp } from '../core/math.js';
 import { modulePoly, MODULE_TYPES } from './scene.js';
 import { getMaterial } from '../materials/database.js';
 
@@ -139,8 +139,9 @@ export class FragmentSystem {
     const frag = Object.assign({
       id: this.nextId++, x: 0, y: 0, vx: 0, vy: 0, mass: 1e-4,
       size: 0.002, kind: 'spall', matKey: 'rha', bornAt: 0,
-      alive: true, trail: [], stopped: false, source: 'armour',
+      alive: true, trail: [], motionDistance: 0, stopped: false, source: 'armour',
     }, f);
+    if (frag.appearance) frag.appearance = Object.freeze({ ...frag.appearance });
     if (!frag.dia) {
       let rho = 7850;
       try { rho = getMaterial(frag.matKey).rho || rho; } catch (e) { /* default steel */ }
@@ -148,7 +149,9 @@ export class FragmentSystem {
       frag.dia = Math.cbrt((6 * frag.mass) / (Math.PI * rho));
     }
     frag.ke0 = 0.5 * frag.mass * (frag.vx * frag.vx + frag.vy * frag.vy);
-    frag.inside = null;           // filled lazily on the first step
+    // Only crossings whose entry impact was resolved belong here. Stable IDs
+    // keep this state valid through recorder structuredClone / restore.
+    frag.inside = new Map();
     this.list.push(frag);
     this.trimResting();
     return frag;
@@ -227,17 +230,13 @@ export class FragmentSystem {
     const B = scene.bounds();
     const M = 1.0;
     for (const f of this.list) {
+      f.motionDistance = 0;
       if (!f.alive || f.stopped) continue;
       const v = Math.hypot(f.vx, f.vy);
       if (v < STOP_SPEED) { f.stopped = true; continue; }
       if (!f.departed && (
         (f.x > B.x1 + M && f.vx > 0) || (f.x < B.x0 - M && f.vx < 0)
         || (f.y > B.y1 + M && f.vy > 0) || (f.y < B.y0 - M && f.vy < 0))) f.departed = true;
-      if (!f.inside) {
-        f.inside = new Set();
-        for (const L of layers) if (pointInPoly(L.poly, f.x, f.y)) f.inside.add(L);
-      }
-
       // --- drag, integrated exactly over the step ------------------------
       const A = Math.PI * 0.25 * f.dia * f.dia;
       const k = (0.5 * RHO_AIR * CD * A) / f.mass;
@@ -252,6 +251,8 @@ export class FragmentSystem {
       // --- swept hits ------------------------------------------------------
       if (f.departed) { f.x = x1; f.y = y1; }
       else this.sweep(f, x0, y0, x1, y1, layers, mods, scene, tNow, internals, born);
+
+      f.motionDistance = Math.hypot(f.x - x0, f.y - y0);
 
       if (f.trail.length === 0 || Math.hypot(f.x - f.trail[f.trail.length - 2], f.y - f.trail[f.trail.length - 1]) > 0.01) {
         f.trail.push(f.x, f.y);
@@ -273,15 +274,13 @@ export class FragmentSystem {
     for (const L of layers) {
       const c = clipLine(L.poly, x0, y0, ux, uy);
       if (!c || c.tOut <= 0) continue;
-      const inside0 = f.inside.has(L) || c.tIn <= 0;
-      if (inside0) {
-        // started inside: it leaves when the line does; it is not "entering"
-        if (c.tOut > seg) { f.inside.add(L); }
-        else f.inside.delete(L);
-        continue;
+      if (!f.inside.has(L.id)) {
+        if (c.tIn > seg) continue;
+        // A newly spawned piece inside a solid must resolve the remaining
+        // chord too; containment alone is not a completed entry collision.
+        events.push({ kind: 'layer', L, tIn: Math.max(0, c.tIn), tOut: c.tOut, nx: c.nx, ny: c.ny });
       }
-      if (c.tIn > seg) continue;
-      events.push({ kind: 'layer', L, tIn: c.tIn, tOut: c.tOut, nx: c.nx, ny: c.ny });
+      if (c.tOut <= seg) events.push({ kind: 'exit', L, tIn: c.tOut });
     }
     for (const { m, poly } of mods) {
       if (m.type === 'void') continue;
@@ -294,8 +293,22 @@ export class FragmentSystem {
     let reach = seg;                   // how far along the line this step gets
     for (const e of events) {
       if (e.tIn > reach) break;
+      if (e.kind === 'exit') {
+        const crossing = f.inside.get(e.L.id);
+        if (crossing?.plugMass > 1e-5) {
+          born.push({
+            x: x0 + ux * e.tIn, y: y0 + uy * e.tIn, vx: f.vx, vy: f.vy,
+            mass: crossing.plugMass, size: f.size, kind: 'plug', matKey: e.L.mat.key,
+            bornAt: tNow, source: 'plug',
+          });
+        }
+        f.inside.delete(e.L.id);
+        continue;
+      }
       const v = Math.hypot(f.vx, f.vy);
-      if (v < STOP_SPEED) { f.stopped = true; break; }
+      if (v < STOP_SPEED) {
+        reach = e.tIn; f.stopped = true; f.vx = 0; f.vy = 0; break;
+      }
       if (e.kind === 'layer') {
         const chord = Math.max(e.tOut - e.tIn, 0);
         const res = perforate(f, chord, e.L.mat);
@@ -305,7 +318,8 @@ export class FragmentSystem {
           // it comes to rest part-way in; how far follows from the energy it
           // spent, never beyond the far face
           const frac = clamp(0.5 * Math.hypot(f.vx, f.vy) / Math.max(res.vbl, 1), 0.1, 0.9);
-          f.x += ux * chord * frac; f.y += uy * chord * frac;
+          const travel = Math.min(chord * frac, Math.max(0, reach - e.tIn));
+          f.x += ux * travel; f.y += uy * travel;
           f.stopped = true; f.vx = 0; f.vy = 0;
           f.embeddedIn = e.L.label || e.L.material;
           this.stoppedInPlate++;
@@ -321,17 +335,11 @@ export class FragmentSystem {
         this.perforations++;
         const s = res.vr / Math.max(v, 1e-6);
         f.vx *= s; f.vy *= s;
-        if (res.plugMass > 1e-5) {
-          born.push({
-            x: x0 + ux * e.tOut, y: y0 + uy * e.tOut, vx: f.vx, vy: f.vy,
-            mass: res.plugMass, size: f.size, kind: 'plug', matKey: e.L.mat.key,
-            bornAt: tNow, source: 'plug',
-          });
-        }
-        // carry on from the far face: the plate took no appreciable time, so the
-        // rest of the step is flown at the new speed
-        reach = e.tOut + Math.max(reach - e.tOut, 0) * s;
-        f.x = x0 + ux * e.tOut; f.y = y0 + uy * e.tOut;
+        f.inside.set(e.L.id, { plugMass: res.plugMass });
+        // Spend the remaining travel from the ENTRY at the reduced speed.
+        // Jumping to tOut teleports through a thick plate and creates exit
+        // debris before the fragment has actually traversed the geometry.
+        reach = e.tIn + (reach - e.tIn) * s;
       } else {
         const m = e.m;
         f.x = x0 + ux * e.tIn; f.y = y0 + uy * e.tIn;
@@ -356,10 +364,6 @@ export class FragmentSystem {
       }
     }
     f.x = x0 + ux * reach; f.y = y0 + uy * reach;
-    // update containment for the next step
-    for (const L of layers) {
-      if (pointInPoly(L.poly, f.x, f.y)) f.inside.add(L); else f.inside.delete(L);
-    }
   }
 }
 
