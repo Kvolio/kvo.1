@@ -23,9 +23,53 @@
 
 import { UI, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, FIELD_SCALES, rgb, shade, hexToRgb } from './palette.js';
 import { NodeGL, kernelLatticeSum } from './nodegl.js';
-import { clamp, DEG } from '../core/math.js';
+import { clamp, DEG, polyBounds } from '../core/math.js';
 import { modulePoly, MODULE_TYPES } from '../sim/scene.js';
 import { ROLE } from '../sim/pd/domain.js';
+
+const apheModels = new WeakMap();
+
+/** Decorative section details, fitted to the actual shell and cavity bounds.
+ * These are a generic game illustration, never meshed or used as fuze data.
+ * The body/cap silhouette and the full filler boundary still come from p.parts.
+ */
+export function apheSectionDetails(p) {
+  if (apheModels.has(p)) return apheModels.get(p);
+  const body = p.parts.find(q => q.role === 1), filler = p.parts.find(q => q.role === 3);
+  if (!body || !filler) return [];
+  const b = polyBounds(body.poly), f = polyBounds(filler.poly);
+  const L = b.x1 - b.x0, R = (b.y1 - b.y0) / 2, C = f.x1 - f.x0;
+  const details = [];
+  const add = (label, pts, color, dark = color) => details.push({label, poly:Float64Array.from(pts), color, dark});
+  const rect = (label, x0, x1, y0, y1, color, dark) => add(label,[x0,y0,x1,y0,x1,y1,x0,y1],color,dark);
+  // A copper driving band appears as two exposed edges in longitudinal section.
+  for (const side of [-1, 1]) {
+    rect('driving band',b.x0+L*.13,b.x0+L*.20,side*R*.78,side*R*.99,'#d9a068','#714529');
+    rect('band groove',b.x0+L*.157,b.x0+L*.167,side*R*.80,side*R*.99,'#815032');
+    // Sparse diagonal cut-face marks on the thick rear casing wall.
+    for (let i=0;i<7;i++) {
+      const x=b.x0+L*(.24+i*.052);
+      add('steel section hatch',[x,side*R*.70,x+L*.012,side*R*.70,x+L*.036,side*R*.94,x+L*.024,side*R*.94],'#82909b');
+    }
+  }
+  // A bevel follows the existing rectangular cavity; the colored charge remains
+  // visible inside it. Rounded corners are surface shading, not a new void.
+  const inset=Math.min(C*.05,R*.07), r=R*.08;
+  add('cavity bevel',[f.x0,f.y0,f.x1-r,f.y0,f.x1,f.y0+r,f.x1,f.y1-r,f.x1-r,f.y1,f.x0,f.y1], '#61717c','#29343e');
+  add('exposed filler',[f.x0+inset,f.y0+inset,f.x1-r,f.y0+inset,f.x1-inset,f.y0+r,f.x1-inset,f.y1-r,f.x1-r,f.y1-inset,f.x0+inset,f.y1-inset],filler.mat.color,filler.mat.color2||filler.mat.color);
+  // Stylized base plug, fuze housing and short booster, drawn inside the casing.
+  const plugX=b.x0+L*.018, neckX=f.x0+C*.08, endX=f.x0+C*.23;
+  rect('base plug',plugX,b.x0+L*.085,-R*.52,R*.52,'#a5afb5','#45515b');
+  add('base fuze housing',[plugX,-R*.30,f.x0,-R*.30,neckX,-R*.20,neckX,R*.20,f.x0,R*.30,plugX,R*.30],'#c4aa72','#6b5738');
+  rect('fuze channel',plugX,neckX,-R*.065,R*.065,'#323e49');
+  rect('booster',neckX,endX,-R*.19,R*.19,'#b5bac0','#687580');
+  for(let i=0;i<4;i++) {
+    const x=plugX+(f.x0-plugX)*(.18+i*.18);
+    rect('plug thread',x,x+L*.005,-R*.32,R*.32,'#796a4e');
+  }
+  apheModels.set(p,details);
+  return details;
+}
 
 /**
  * THREE STACKED CANVASES
@@ -781,16 +825,24 @@ export class Renderer {
       try {
         if (pass === 0) ctx.translate(ex, ey);
         for (const q of parts) {
-        const c = this.matColor(q.mat.color);
-        const poly = p.worldPoly(q.poly, st);
-        this.polyPath(poly);
-        ctx.fillStyle = pass === 0 ? shade(c, 0.35) : this.polyGradient(poly, c, this.matColor(q.mat.color2 || q.mat.color));
-        ctx.fill();
-        if (pass === 1) {
-          ctx.lineWidth = 1 * this.dpr;
-          ctx.strokeStyle = shade(c, 1.4);
-          ctx.stroke();
+          const c = this.matColor(q.mat.color);
+          const poly = p.worldPoly(q.poly, st);
+          this.polyPath(poly);
+          ctx.fillStyle = pass === 0 ? shade(c, 0.35) : this.polyGradient(poly, c, this.matColor(q.mat.color2 || q.mat.color));
+          ctx.fill();
+          if (pass === 1) {
+            ctx.lineWidth = 1 * this.dpr;
+            ctx.strokeStyle = shade(c, 1.4);
+            ctx.stroke();
+          }
         }
+        if (pass === 1 && p.type.key === 'aphe') {
+          for (const q of apheSectionDetails(p)) {
+            const poly=p.worldPoly(q.poly,st);
+            this.polyPath(poly);
+            ctx.fillStyle=this.polyGradient(poly,this.matColor(q.color),this.matColor(q.dark));
+            ctx.fill();
+          }
         }
       } finally { ctx.restore(); }
     }
