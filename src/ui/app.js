@@ -159,13 +159,20 @@ export class App {
       },
     )));
     if (this.ammoKey && AMMO[this.ammoKey]) {
-      p.body.appendChild(el('div', { class: 'note' }, AMMO[this.ammoKey].note));
-      p.body.appendChild(el('div', { class: 'hint' },
+      const entry = AMMO[this.ammoKey];
+      p.body.appendChild(el('div', { class: 'note' }, entry.note));
+      if (entry.approximate) {
+        p.body.appendChild(el('div', { class: 'hint' }, 'Historical name; generic game settings. Calibre, mass, velocity and internal geometry below are the type defaults, not specifications for this service round.'));
+        for (const source of entry.sources || []) p.body.appendChild(el('div', {class:'hint'},
+          el('a', {href:source.url,target:'_blank',rel:'noopener noreferrer'},source.title),
+          source.locator ? ` — ${source.locator}` : ''));
+      } else p.body.appendChild(el('div', { class: 'hint' },
         'Muzzle velocity is used as the STRIKING velocity — there is no exterior '
         + 'ballistics here, so every round arrives as if fired at point blank. Rod '
         + 'dimensions for sub-calibre rounds are reconstructed to match the published '
         + 'mass where the real ones are not public; see src/ui/ammo.js.'));
     }
+    if (cfg.type === 'aphe') p.body.appendChild(el('div',{class:'hint'},'APHE is always shown in cutaway; impact damage uses the simulated material.'));
 
     const set = (key, v) => {
       const next = { ...w.projectileCfg, [key]: v };

@@ -10,8 +10,11 @@
  *
  * WHAT THE NUMBERS ARE
  * --------------------
- * Calibre, projectile mass and muzzle velocity are published figures and are
- * reliable. Everything else is not:
+ * Older entries carry reconstructed configurations. New entries marked
+ * `approximate` supply sourced historical names with GENERIC TYPE DEFAULTS,
+ * including generic calibre, mass and velocity. Their source metadata does
+ * not validate the simulation settings. No classified characteristics are
+ * inferred.
  *
  *   - Muzzle velocity is used as the STRIKING velocity. There is no exterior
  *     ballistics here, so every round is being fired at point blank. A round
@@ -33,18 +36,50 @@
 /**
  * @typedef {object} AmmoEntry
  * @property {string} name    what to show in the list
- * @property {string} vehicle the vehicle that carried it
- * @property {number} year    for ordering
+ * @property {string} [vehicle] verified vehicle association, when available
+ * @property {number} [year] verified year, when available
  * @property {string} type    projectile type key
  * @property {object} cfg     overrides passed to makeProjectileConfig
  * @property {string} [note]  what is interesting about it
+ * @property {boolean} [approximate] historical name with generic game settings
+ * @property {{title:string,url:string,locator?:string}[]} [sources] identity references, not performance validation
  */
+
+import { PROJECTILE_TYPES } from '../sim/projectileTypes.js';
+
+const SOURCES = {
+  armyProduction: {title:'US Army Center of Military History — The Army and Economic Mobilization', url:'https://www.govinfo.gov/content/pkg/GOVPUB-D114-PURL-gpo122003/pdf/GOVPUB-D114-PURL-gpo122003.pdf', locator:'Table PR-8, light field, tank and antitank ammunition'},
+  armyDevelopment: {title:'US Army Center of Military History — The Ordnance Department: Planning Munitions for War', url:'https://history.army.mil/portals/143/Images/Publications/catalog/10-9.pdf', locator:'90-mm HVAP M304 standardization'},
+  fstc: {title:'US Army Foreign Science and Technology Center — FSTC-CW-07-100-73 (archival scan)', url:'https://www.bulletpicker.com/pdf/FSTC-CW-07-100-73.pdf', locator:'MD-10 entry, p. 2-51: BR-350B, BR-365K and BR-471B'},
+  armyArmor: {title:'US Army — ARMOR, March–April 1977', url:'https://mcoecbamcoepwprd01.blob.core.usgovcloudapi.net/library/CavalryArmorJournal/1970s/1977Jan-Dec.pdf', locator:'p. 20: HESH L35 series designation'},
+  ukStrategy: {title:'UK Ministry of Defence — Defence Industrial Strategy, Cm 6697 (2005)', url:'https://www.gov.uk/government/uploads/system/uploads/attachment_data/file/272203/6697.pdf', locator:'B6.10: L31A7 HESH designation'},
+  italyCatalog: {title:'Italian Ministry of Defence — TER.I-92-00-MATERIALI-001-R002 (2024)', url:'https://www.difesa.it/assets/allegati/57026/ter_i_92_00_materiali_001_r002.pdf', locator:'Annex A, p. 5: 105MM L52 APDST'},
+};
+
+function historicalGameEntry(name, type, source, note) {
+  return {name,type,approximate:true,cfg:structuredClone(PROJECTILE_TYPES[type].defaults),
+    sources:[{...SOURCES[source]}],note};
+}
 
 /** Stand-off is a simulation staging distance, not a range. */
 const KE = 1.4;      // full-calibre shot: mesh a little before contact
 const SAB = 2.4;     // sabot rounds need room to discard first
 
 export const AMMO = {
+  // Identity references only. No service dates, vehicle claims or new
+  // performance parameters are inferred from a name or nominal calibre.
+  'br350b-aphe-game': historicalGameEntry('76 mm BR-350B', 'aphe', 'fstc', 'Historical base-fuzed projectile represented by the generic APHE game model.'),
+  'br365k-aphe-game': historicalGameEntry('85 mm BR-365K', 'aphe', 'fstc', 'Historical base-fuzed projectile represented by the generic APHE game model.'),
+  'br471b-aphe-game': historicalGameEntry('122 mm BR-471B', 'aphe', 'fstc', 'Historical base-fuzed projectile represented by the generic APHE game model.'),
+  'm48-he-game': historicalGameEntry('75 mm M48 HE', 'he', 'armyProduction', 'A WWII catalog name represented by the generic HE game model.'),
+  'm42a1-he-game': historicalGameEntry('76 mm M42A1 HE', 'he', 'armyProduction', 'A WWII catalog name represented by the generic HE game model.'),
+  'm71-he-game': historicalGameEntry('90 mm M71 HE', 'he', 'armyProduction', 'A WWII catalog name represented by the generic HE game model.'),
+  'l35-hesh-game': historicalGameEntry('105 mm L35 HESH', 'hesh', 'armyArmor', 'A Cold War catalog name represented by the generic HESH game model.'),
+  'l31a7-hesh-game': historicalGameEntry('120 mm L31A7 HESH', 'hesh', 'ukStrategy', 'A HESH designation documented in the 2005 UK defence strategy; uses the generic HESH game model.'),
+  'm72-ap-game': historicalGameEntry('75 mm M72 AP', 'ap', 'armyProduction', 'A WWII catalog name represented by the generic AP game model.'),
+  'm51-apc-game': historicalGameEntry('37 mm M51 APC', 'apc', 'armyProduction', 'A WWII catalog name represented by the generic APC game model.'),
+  'm304-hvap-game': historicalGameEntry('90 mm M304 HVAP', 'apcr', 'armyDevelopment', 'A historical HVAP designation represented by the generic APCR game model.'),
+  'l52-apds-game': historicalGameEntry('105 mm L52 APDS-T', 'apds', 'italyCatalog', 'An APDS catalog designation represented by the generic APDS game model.'),
   // ------------------------------------------------------------ WW2, 1939-45
   'qf2pdr-ap': {
     name: '2-pdr AP shot', vehicle: 'Matilda II / Crusader', year: 1939, type: 'ap',
@@ -188,10 +223,12 @@ export const AMMO = {
 };
 
 /** Oldest first: the list reads as a history of the problem. */
-export const AMMO_ORDER = Object.keys(AMMO).sort((a, b) => AMMO[a].year - AMMO[b].year);
+export const AMMO_ORDER = Object.keys(AMMO).sort((a, b) =>
+  (AMMO[a].year ?? Infinity) - (AMMO[b].year ?? Infinity) || AMMO[a].name.localeCompare(AMMO[b].name));
 
 /** Label for the picker: year, vehicle, round. */
 export function ammoLabel(key) {
   const a = AMMO[key];
-  return `${a.year}  ${a.vehicle} — ${a.name}`;
+  if (a.approximate) return `${a.name} — generic ${a.type.toUpperCase()} game approximation`;
+  return `${a.year ?? 'Date unverified'}  ${a.vehicle ? `${a.vehicle} — ` : ''}${a.name}`;
 }
