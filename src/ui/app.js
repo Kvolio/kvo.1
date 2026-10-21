@@ -172,7 +172,7 @@ export class App {
         + 'dimensions for sub-calibre rounds are reconstructed to match the published '
         + 'mass where the real ones are not public; see src/ui/ammo.js.'));
     }
-    if (cfg.type === 'aphe') p.body.appendChild(el('div',{class:'hint'},'APHE is always shown in cutaway; impact damage uses the simulated material.'));
+    if (cfg.type === 'aphe') p.body.appendChild(el('div',{class:'hint'},'APHE always shows a cutaway with casing, filler, driving band and base fuze. Interior hardware is illustrative; impact damage uses the simulated material.'));
 
     const set = (key, v) => {
       const next = { ...w.projectileCfg, [key]: v };
