@@ -68,18 +68,22 @@ export class PDSolver {
     this.grid = new SpatialGrid(domain.dx * 1.05);
     this.contactSet = new Int32Array(domain.n);
     this.contactCount = 0;
-    this.near = new Int32Array(64);
+    this.contactMask = new Uint8Array(domain.n);
+    this.contactTargets = new Int32Array(domain.n);
+    this.contactTargetCount = 0;
+    // A crowded cell may contain more than 64 nodes. Keep enough room for
+    // every possible target so the grid query cannot silently drop a contact.
+    this.near = new Int32Array(domain.n);
     this.time = 0;
     this.steps = 0;
     this.safety = opts.safety ?? 0.32;
     this.dt = domain.dtStable * this.safety;
     this.gravity = opts.gravity ?? -9.81;
-    // Refreshed every step. At 8 the set went stale: a node newly exposed by
-    // erosion could overlap a quarter of a lattice spacing before it was even
+    // Refreshed every force evaluation. At 8 steps the set went stale: a node
+    // newly exposed by erosion could overlap a quarter of a lattice spacing before it was even
     // eligible for contact, and then met the full penalty force in one step.
     // The set is an O(n) scan against a bond loop an order of magnitude larger,
     // so making it exact costs almost nothing.
-    this.contactRefresh = 1;
     this.friction = opts.friction ?? TUNE.friction ?? MU_FRICTION;
 
     // CONTACT STIFFNESS
@@ -165,20 +169,25 @@ export class PDSolver {
     this.brokenThisStep = 0;
     this.totalBroken = 0;
     this.maxContactForce = 0;
-    this.refreshContactSet();
     this.computeForces();
     this.E0 = this.kinetic() + this.strainEnergy();
   }
 
-  /** Particles that may participate in non-neighbour contact. */
+  /** Active contact queries and the full set of live collision targets. */
   refreshContactSet() {
     const d = this.d;
-    let k = 0;
+    let k = 0, targets = 0;
     for (let i = 0; i < d.n; i++) {
+      this.contactMask[i] = 0;
       if (!d.alive[i]) continue;
-      if ((d.flags[i] & 1) || d.damage[i] > 0.02 || (d.flags[i] & 8)) this.contactSet[k++] = i;
+      this.contactTargets[targets++] = i;
+      if ((d.flags[i] & 1) || d.damage[i] > 0.02 || (d.flags[i] & 8)) {
+        this.contactSet[k++] = i;
+        this.contactMask[i] = 1;
+      }
     }
     this.contactCount = k;
+    this.contactTargetCount = targets;
   }
 
   /**
@@ -235,7 +244,6 @@ export class PDSolver {
 
     this.time += dt;
     this.steps++;
-    if (this.steps % this.contactRefresh === 0) this.refreshContactSet();
     // re-evaluated periodically: the fastest thing in the domain changes as a
     // jet forms, a plate is thrown, or the event decays
     if (this.steps % 8 === 0) this.dt = Math.min(this.dtBase, this.velocityLimitedDt());
@@ -517,10 +525,15 @@ export class PDSolver {
     }
 
     // ------------------------------------------------- non-neighbour contact
+    // Bond failure above can expose nodes in this very force evaluation.
+    this.refreshContactSet();
     const cs = this.contactSet, cn = this.contactCount;
-    if (cn > 1) {
+    if (cn > 0 && this.contactTargetCount > 1) {
       this.grid.cell = dC * 1.02;
-      this.grid.build(px, py, n, cs.subarray(0, cn));
+      // Surface/damaged/free nodes initiate queries, but intact interior nodes
+      // must still receive them. Filtering BOTH sides made the interior of a
+      // solid invisible to loose particles once they got past its surface.
+      this.grid.build(px, py, n, this.contactTargets.subarray(0, this.contactTargetCount));
       const near = this.near;
       const deltaCut = d.delta + d.dx * 0.5;
       let maxF = 0;
@@ -529,7 +542,9 @@ export class PDSolver {
         const cnt = this.grid.query(px[i], py[i], dC, near);
         for (let z = 0; z < cnt; z++) {
           const j = near[z];
-          if (j <= i) continue;
+          // An inactive target never initiates a query of its own. Index order
+          // can only suppress duplicates when BOTH members are active.
+          if (j === i || (j < i && this.contactMask[j])) continue;
           // skip reference neighbours - already handled by the bond list
           if (d.group[i] === d.group[j]) {
             const rdx = d.rx[j] - d.rx[i], rdy = d.ry[j] - d.ry[i];
