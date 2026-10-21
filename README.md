@@ -164,7 +164,23 @@ node tools/smoke.mjs apcbc normal    # full run, verdict, event log, energy audi
 node tools/probe.mjs apcbc           # step-level solver internals
 node tools/audit.mjs                 # energy-conservation audit
 node tools/sweep.mjs 0.2 1 0.25      # parameter sweep across three cases
+node tools/fragment-checks.mjs      # swept travel, containment, exit timing
+node tools/contact-checks.mjs       # loose-particle / intact-block collisions
+node tools/debris-lifecycle-checks.mjs # handoff, final-frame and replay continuity
 ```
+
+With the local server running, open `tools/render-checks.html` for the GPU
+surface regression (add `?webgl1` to exercise the WebGL 1 path). It compares a
+solid with and without nearby detached debris and checks that debris remains
+visible in its separate point pass.
+
+`tools/contact-preview.html` shows the contact-search regression in arbitrary
+game units: the original filtering lets a brown particle enter a fixed block,
+while the corrected search makes it rebound. Both views draw the actual
+particle coordinates; neither masks or hides an overlapping particle.
+
+`tools/debris-preview.html` checks that handing a node over to the fragment
+system preserves its appearance and does not add a streak on birth or finish.
 
 ---
 
