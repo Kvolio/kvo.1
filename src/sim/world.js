@@ -163,6 +163,19 @@ export class World {
     this.residual = null;
     this.impactStartTime = 0;
     this.settleTime = 0;
+    this.finishReason = null;
+    this.trueContactTime = null;
+    this.contactSeen = false;
+    this.lastActivity = null;
+    this.impactKE0 = 0;
+    this.progressMark = 0;
+    this.lastProgressTime = null;
+    this.truncationLogged = false;
+    this.coastMode = false;
+    this.coastDirty = false;
+    this.debrisStart = 0;
+    this.pendingSteps = 0;
+    this._penMass0Domain = null;
     this.cassettes = [];
     this.eraLastT = 0;
     this.retiredProjM = 0; this.retiredProjPX = 0; this.retiredProjPY = 0;
@@ -586,11 +599,16 @@ export class World {
           this.coastDirty = false;
           this.coastMode = false;
         }
-        s.step();
-        advanced += s.dt;
-        this.simTime += s.dt;
+        // step() may select a different dt for the NEXT step. Account for
+        // the interval it actually integrated, including fragment transport.
+        const dt = s.step();
+        advanced += dt;
+        this.simTime += dt;
       }
       steps++;
+      // Latch transient activity before the next step overwrites the solver's
+      // counters. Event ordering must not depend on substeps per video frame.
+      this.observeContact();
       // ERA initiation is an integral over the shock, and a shock transit
       // through a 6 mm charge lasts under a microsecond, so it is sampled
       // twice as often as the fuze check to avoid stepping over the peak.
@@ -611,23 +629,6 @@ export class World {
     // settle / finish detection - only once the projectile has actually
     // touched something, otherwise the approach across the standoff gap would
     // read as "quiet" and end the run before the impact
-    if (s.maxContactForce > 0 || s.brokenThisStep > 0) {
-      if (!this.contactSeen) {
-        this.contactSeen = true;
-        this.trueContactTime = this.simTime;
-        // record where contact actually happened, from the leading node
-        let bx = 0, by = 0, bs = -Infinity;
-        for (let i = 0; i < d.n; i++) {
-          if (!d.alive[i] || d.role[i] === ROLE.ARMOUR) continue;
-          const sPos = (d.px[i] - d.ox) * d.ax + (d.py[i] - d.oy) * d.ay;
-          if (sPos > bs) { bs = sPos; bx = d.px[i]; by = d.py[i]; }
-        }
-        this.stats.impactX = bx; this.stats.impactY = by;
-        this.log.add(this.simTime, 'first-contact',
-          `Nose contact with the struck face at (${(bx * 1000).toFixed(0)}, ${(by * 1000).toFixed(0)}) mm`, SEV.MAJOR);
-      }
-      this.lastActivity = this.simTime;
-    }
     const armourKE = s.kineticOf(ROLE.ARMOUR);
     // QUIET MUST OUTLAST A GLANCING FIRST TOUCH
     // On a sloped plate the nose can brush the face and register contact for a
@@ -776,17 +777,48 @@ export class World {
 
   // ------------------------------------------------------- event hooks
 
+  observeContact() {
+    const s = this.solver, d = this.domain;
+    if (!s || !d || !(s.maxContactForce > 0 || s.brokenThisStep > 0)) return;
+    this.lastActivity = this.simTime;
+    if (this.contactSeen) return;
+    this.contactSeen = true;
+    this.trueContactTime = this.simTime;
+    let bx = 0, by = 0, bs = -Infinity;
+    for (let i = 0; i < d.n; i++) {
+      if (!d.alive[i] || d.role[i] === ROLE.ARMOUR) continue;
+      const sPos = (d.px[i] - d.ox) * d.ax + (d.py[i] - d.oy) * d.ay;
+      if (sPos > bs) { bs = sPos; bx = d.px[i]; by = d.py[i]; }
+    }
+    this.stats.impactX = bx; this.stats.impactY = by;
+    this.log.add(this.simTime, 'first-contact',
+      `First resolved contact at (${(bx * 1000).toFixed(0)}, ${(by * 1000).toFixed(0)}) mm`, SEV.MAJOR);
+  }
+
   checkFuze() {
     const p = this.projectile;
     const fz = p.type.fuze;
     if (!fz || p.detonated) return;
-    if (p.fuzeState === 'safe') {
-      p.fuzeState = 'armed';
+    // HEAT currently meshes only its liner. It is an imposed formation model,
+    // not a conventional shell with filler nodes to detonate later. Sending
+    // it through detonateShell() reported a spurious "filler consumed" dud.
+    if (p.cfg.type === 'heat') {
+      if (p.fuzeState !== 'safe') return;
+      p.fuzeState = 'functioned';
       p.fuzeTimer = this.simTime;
+      p.detonated = true;
+      this.log.add(this.simTime, 'jet-model', 'Simplified HEAT model: liner formation imposed at continuum handoff', SEV.NOTE);
+      this.formJet();
+      return;
+    }
+    if (p.fuzeState === 'safe') {
+      // Meshing starts ahead of contact. Entering the continuum regime alone
+      // must not start an impact-triggered event's delay clock.
+      if (!this.contactSeen) return;
+      p.fuzeState = 'armed';
+      p.fuzeTimer = this.trueContactTime ?? this.simTime;
       this.log.add(this.simTime, 'fuze-arm',
         `Fuze armed on impact setback (${fz.kind}, ${(this.projectile.cfg.fuzeDelay ?? fz.delay) * 1e6} µs delay)`, SEV.NOTE);
-      if (p.cfg.type === 'heat') this.formJet();
-      return;
     }
     if (p.fuzeState !== 'armed') return;
     const delay = this.projectile.cfg.fuzeDelay ?? fz.delay;

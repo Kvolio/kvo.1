@@ -342,9 +342,9 @@ export function makeProjectileConfig(typeKey, overrides = {}) {
   // parameter: aimY moves the impact point up or down the plate, attack turns
   // the velocity vector, and yaw turns the body independently of it (the
   // difference between the two is the angle of attack at impact).
-  return Object.assign({ type: typeKey }, structuredClone(t.defaults), {
+  return Object.assign({
     yaw: 0, spin: 0, standoff: 1.8, attack: 0, aimY: 0,
-  }, overrides);
+  }, structuredClone(t.defaults), overrides, { type: typeKey });
 }
 
 /**
