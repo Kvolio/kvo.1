@@ -18,6 +18,10 @@ validate real ammunition performance or infer classified characteristics.
 | Rendering modified live state | Drawing a recorded pose temporarily assigned it to the live projectile, leaving it there if drawing failed. | Transform polygons using an explicit pose without assigning to the projectile; restore canvas state even on failure. |
 | Reset retained old outcome state | A miss could leave `finishReason` and other clocks/counters behind for the next run. | Clear event, completion, coast and progress state on reset. |
 | Checkpoints retained state from the future | Positions were rewound while projectile events, roles, fragment counters, module hits, cassette state, log sequence and result fields could remain from later frames. Recomputing forces also advanced history and energy accounting. | Snapshot mutable state, forces, bond-contact references and accumulators; replace future result objects and restore the saved forces without another force evaluation. |
+| Moving debris was declared settled at 15 ms | A fixed playback timer could end runs with consequential pieces still active. | Let transport finish naturally by default. A configured time budget or the 30 s runtime backstop marks the result incomplete and logs the number of remaining pieces, without moving or deleting them at finish. |
+| Failed shell events still said functioned | Missing filler generated a dud log but retained the functioned state; HEAT likewise marked an event successful when no liner nodes were available. | Keep one-shot dispatch but report unavailable/dud when required event material is absent. Existing event calculations are unchanged. |
+| Playback inflated contact duration | Updating statistics during debris playback and at finish included that playback in the contact-phase clock. | Advance the contact-phase duration only while the continuum is running. |
+| Time-limit warnings had no warning severity | Several calls referenced nonexistent `SEV.WARN`, silently falling back to informational severity. | Use the existing major severity and show provisional-result warnings in the impact report. |
 
 The local development server also now converts its file URL with
 `fileURLToPath`, allowing the documented Node server to work on Windows.
@@ -39,7 +43,7 @@ than increasing penetration or reducing ricochet until a result looks right.
 
 ## Verification
 
-- `node tools/ammunition-checks.mjs`: 35 software checks. Includes all ten types,
+- `node tools/ammunition-checks.mjs`: 42 software checks. Includes all ten types,
   a bonded-domain checkpoint continuation, and a generic two-particle elastic
   collision at two timesteps. The collision uses a declared 1% final energy
   tolerance; measured drift was approximately 0.037% and 0.012%, respectively,
@@ -51,17 +55,21 @@ than increasing penetration or reducing ricochet until a result looks right.
   overlay regardless of which node-field backend is available.
 - Real UI: each of the 12 additions loads, displays its provenance and generic
   settings notice, and preserves the armor setup.
-- `node tools/ammunition-checks.mjs --aphe-runs`: 39 passing checks, including
+- The APHE model revision passed the optional `--aphe-runs` checks, including
   the revised default APHE and all three APHE catalog entries running to completion.
-- The full `tools/checks.mjs` suite passes the ten-type and 39-entry completion
-  checks, but finishes with **two failures**. Both reproduce on the unchanged
+- `tools/report-checks.html`: seven UI checks cover both budget warnings,
+  ordinary completion, and missing event material for HE, HESH, APHE and HEAT.
+- The full suite before the completion follow-up passed the ten-type and
+  39-entry completion checks, but finished with **two failures**. Both reproduce on the unchanged
   base revision `bc223a3f4881ef9f3c226b51a64befa39f722aeb`:
   the hardness-ordering case reports 290 / 320 / 295 m/s for UHH / RHA / mild
   steel in both versions, and the debris case ends at its existing 15 ms budget
   with moving fragments (4 on the base, 3 on the candidate). These are existing
   model/completion-contract limitations, not passing results or tuned-away tests.
-  The full suite preceded the final APHE shape revision; the focused APHE runs
-  above validate that revision separately.
+  The debris completion failure is addressed by the follow-up above. The
+  material-ordering assertion remains intact; no strengths, contact laws or
+  ammunition-performance parameters were changed to force it to pass.
+  Current scenario-suite results are recorded in the follow-up PR.
 - Standalone build and `git diff --check`.
 
 No `.game-dev/adapter.json` exists in this repository. Visual evidence uses
