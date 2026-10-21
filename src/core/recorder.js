@@ -29,6 +29,39 @@
 
 import { FIELD_SCALES } from '../render/palette.js';
 
+// A checkpoint must preserve the force left for Verlet's next half kick and
+// every accumulator that affects later steps. Recomputing forces on restore
+// advances constitutive history and charges dissipation a second time.
+const DOMAIN_STATE = ['px','py','vx','vy','fx','fy','temp','wPlast','damage',
+  'plStrain','nBroken','flags','alive','role','bsp','bstate','bcrit',
+  'flowMul','srate','theta','thetaAcc','virial'];
+const SOLVER_ARRAYS = ['bdc','bstretch','bse','isoAcc'];
+const SOLVER_STATE = ['time','steps','dt','dtBase','totalBroken','E0','brokenThisStep','maxContactForce'];
+const WORLD_STATE = ['simTime','state','contactSeen','trueContactTime',
+  'impactStartTime','impactKE0','settleTime','debrisStart','finishReason',
+  'lastActivity','progressMark','lastProgressTime','truncationLogged',
+  'coastMode','coastDirty','eraLastT','retiredProjM','retiredProjPX','retiredProjPY'];
+const PROJECTILE_STATE = ['x','y','ang','omega','vx','vy','mass','inertia','distance',
+  'state','sabotAttached','fuzeState','fuzeTimer','detonated','activeParts','residual'];
+const FRAGMENT_STATE = ['list','nextId','impacts','stoppedInPlate','stoppedByCasing',
+  'perforations','dropped','droppedMass','_loggedLayers'];
+const pick = (source, names) => Object.fromEntries(names.map(name => [name, source[name]]));
+function copyArrays(source, names, target = {}) {
+  for (const name of names) {
+    const a = source[name];
+    if (!a) continue;
+    if (!target[name] || target[name].constructor !== a.constructor || target[name].length !== a.length) target[name] = new a.constructor(a.length);
+    target[name].set(a);
+  }
+  return target;
+}
+function restoreArrays(target, snapshot) {
+  for (const [name, array] of Object.entries(snapshot)) target[name].set(array);
+}
+function arrayBytes(snapshot) {
+  return Object.values(snapshot || {}).reduce((n, a) => n + a.byteLength, 0);
+}
+
 function snapshotFragment(f) {
   return [f.x, f.y, f.vx, f.vy, f.mass, f.size, f.kind, f.motionDistance || 0,
     f.appearance ? (Object.isFrozen(f.appearance) ? f.appearance : Object.freeze({ ...f.appearance })) : null];
@@ -183,30 +216,19 @@ export class Recorder {
       k = this.keys.get(oldest);
       this.keys.delete(oldest);
     }
-    if (!k || k.px.length !== d.n || k.bsp.length !== d.nb) {
-      k = {
-        px: new Float64Array(d.n), py: new Float64Array(d.n),
-        vx: new Float32Array(d.n), vy: new Float32Array(d.n),
-        temp: new Float32Array(d.n), damage: new Float32Array(d.n),
-        plStrain: new Float32Array(d.n),
-        nBroken: new Uint16Array(d.n), flags: new Uint8Array(d.n), alive: new Uint8Array(d.n),
-        bsp: new Float32Array(d.nb), bstate: new Uint8Array(d.nb), bcrit: new Float32Array(d.nb),
-        solver: {}, modules: [],
-      };
-    }
-    k.px.set(d.px); k.py.set(d.py); k.vx.set(d.vx); k.vy.set(d.vy);
-    k.temp.set(d.temp); k.damage.set(d.damage); k.plStrain.set(d.plStrain);
-    k.nBroken.set(d.nBroken); k.flags.set(d.flags); k.alive.set(d.alive);
-    k.bsp.set(d.bsp); k.bstate.set(d.bstate); k.bcrit.set(d.bcrit);
-    k.solver = { time: s.time, steps: s.steps, energy: { ...s.energy }, totalBroken: s.totalBroken, E0: s.E0 };
-    k.simTime = world.simTime;
-    k.state = world.state;
-    k.contactSeen = world.contactSeen;
-    k.trueContactTime = world.trueContactTime;
-    k.stats = JSON.parse(JSON.stringify(world.stats));
-    k.fragments = structuredClone(world.fragments.list);
-    k.modules = world.scene.modules.map((m) => ({ id: m.id, integrity: m.integrity, state: m.state, hits: m.hits.length }));
-    k.logLen = world.log.entries.length;
+    k ||= {};
+    k.domain = copyArrays(d, DOMAIN_STATE, k.domain);
+    k.solverArrays = copyArrays(s, SOLVER_ARRAYS, k.solverArrays);
+    k.solver = { ...pick(s, SOLVER_STATE), energy: { ...s.energy } };
+    k.world = structuredClone(pick(world, WORLD_STATE));
+    k.projectile = world.projectile ? structuredClone(pick(world.projectile, PROJECTILE_STATE)) : null;
+    k.stats = structuredClone(world.stats);
+    k.fragments = structuredClone(pick(world.fragments, FRAGMENT_STATE));
+    k.cassettes = structuredClone(world.cassettes || []);
+    k.modules = world.scene.modules.map(m => ({ id:m.id, integrity:m.integrity, state:m.state, hits:structuredClone(m.hits) }));
+    k.layerHits = world.scene.layers.map(L => L.fragHits);
+    k.internals = world.internals ? structuredClone(pick(world.internals, ['events','catastrophic'])) : null;
+    k.log = structuredClone({ entries:world.log.entries, seq:world.log.seq });
     this.keys.set(id, k);
   }
 
@@ -229,26 +251,25 @@ export class Recorder {
     const k = this.keys.get(this.baseId + logicalIndex);
     if (!k) return false;
     const d = world.domain, s = world.solver;
-    d.px.set(k.px); d.py.set(k.py); d.vx.set(k.vx); d.vy.set(k.vy);
-    d.temp.set(k.temp); d.damage.set(k.damage); d.plStrain.set(k.plStrain);
-    d.nBroken.set(k.nBroken); d.flags.set(k.flags); d.alive.set(k.alive);
-    d.bsp.set(k.bsp); d.bstate.set(k.bstate); d.bcrit.set(k.bcrit);
-    s.time = k.solver.time; s.steps = k.solver.steps;
-    s.energy = { ...k.solver.energy }; s.totalBroken = k.solver.totalBroken; s.E0 = k.solver.E0;
-    world.simTime = k.simTime;
-    world.state = k.state;
-    world.contactSeen = k.contactSeen;
-    world.trueContactTime = k.trueContactTime;
-    Object.assign(world.stats, k.stats);
-    world.fragments.list = structuredClone(k.fragments);
+    restoreArrays(d, k.domain);
+    restoreArrays(s, k.solverArrays);
+    Object.assign(s, k.solver, {energy:{...k.solver.energy}});
+    Object.assign(world, structuredClone(k.world));
+    if (k.projectile) Object.assign(world.projectile, structuredClone(k.projectile));
+    world.stats = structuredClone(k.stats);
+    Object.assign(world.fragments, structuredClone(k.fragments));
     for (const f of world.fragments.list) if (f.appearance) Object.freeze(f.appearance);
+    world.cassettes = structuredClone(k.cassettes);
+    world.scene.layers.forEach((L, i) => { L.fragHits=k.layerHits[i]; });
+    if (k.internals) Object.assign(world.internals, structuredClone(k.internals));
     for (const rec of k.modules) {
       const m = world.scene.modules.find((x) => x.id === rec.id);
-      if (m) { m.integrity = rec.integrity; m.state = rec.state; m.hits.length = Math.min(m.hits.length, rec.hits); }
+      if (m) { m.integrity = rec.integrity; m.state = rec.state; m.hits = structuredClone(rec.hits); }
     }
-    world.log.entries.length = k.logLen;
+    Object.assign(world.log, structuredClone(k.log));
+    world._penMass0Domain = null;
+    world.pendingSteps = 0;
     s.refreshContactSet();
-    s.computeForces();
     return true;
   }
 
@@ -268,10 +289,7 @@ export class Recorder {
       if (!f || !f.px) continue;
       b += f.px.byteLength * 2 + f.dmg.byteLength * 6;
     }
-    for (const k of this.keys.values()) {
-      b += k.px.byteLength * 2 + k.vx.byteLength * 4 + k.bsp.byteLength * 2 + k.bstate.byteLength;
-    }
-    for (const k of this.keyPool) b += k.px.byteLength * 2 + k.bsp.byteLength * 2;
+    for (const k of [...this.keys.values(), ...this.keyPool]) b += arrayBytes(k.domain) + arrayBytes(k.solverArrays);
     return b;
   }
 }
