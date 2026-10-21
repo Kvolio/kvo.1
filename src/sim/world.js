@@ -128,7 +128,7 @@ export class World {
       erodedMass: 0, spallMass: 0, fragmentCount: 0,
       perforated: false, ricochet: false, embedded: false,
       backfaceBulge: 0, craterDiameter: 0, craterDepth: 0,
-      brokenBonds: 0, contactTime: 0, truncated: false,
+      brokenBonds: 0, contactTime: 0, truncated: false, debrisTruncated: false,
     };
   }
 
@@ -520,7 +520,7 @@ export class World {
         `${L.label || L.mat.name} is ${(L.thickness * 1000).toFixed(1)} mm against a `
         + `${(dx * 1000).toFixed(2)} mm lattice — ${worst.toFixed(1)} nodes through it. `
         + `A layer this thin cannot behave as a plate: raise Discretisation or narrow the `
-        + `deformable zone before trusting anything that depends on it.`, SEV.WARN);
+        + `deformable zone before trusting anything that depends on it.`, SEV.MAJOR);
     }
     this.log.add(this.simTime, 'contact', 'Continuum phase armed — projectile within a few lattice spacings', SEV.NOTE);
     this.bus.emit('impact-begin', {
@@ -684,7 +684,7 @@ export class World {
       this.log.add(this.simTime, 'truncated',
         `Resolved window hit its ${(hardCap * 1e3).toFixed(1)} ms backstop with the round still `
         + `making progress — the reported depth and residual velocity are a LOWER BOUND, `
-        + `not a final state`, SEV.WARN);
+        + `not a final state`, SEV.MAJOR);
     }
     const overrun = this.contactSeen && ((stalled && elapsed > minWindow) || truncated);
     // A meshed shot that never touches anything - it missed inside the
@@ -804,11 +804,12 @@ export class World {
     // it through detonateShell() reported a spurious "filler consumed" dud.
     if (p.cfg.type === 'heat') {
       if (p.fuzeState !== 'safe') return;
-      p.fuzeState = 'functioned';
       p.fuzeTimer = this.simTime;
       p.detonated = true;
-      this.log.add(this.simTime, 'jet-model', 'Simplified HEAT model: liner formation imposed at continuum handoff', SEV.NOTE);
-      this.formJet();
+      this.log.add(this.simTime, 'jet-model', 'Simplified HEAT model selected: imposed liner formation at continuum handoff', SEV.NOTE);
+      const formed = this.formJet();
+      p.fuzeState = formed ? 'functioned' : 'dud';
+      if (!formed) this.log.add(this.simTime, 'jet-unavailable', 'No liner nodes were available for the simplified formation event', SEV.MAJOR);
       return;
     }
     if (p.fuzeState === 'safe') {
@@ -858,6 +859,7 @@ export class World {
       cm += d.mass[i]; cx += d.px[i]; cy += d.py[i]; cn++;
     }
     if (cn === 0) {
+      p.fuzeState = 'dud';
       this.log.add(this.simTime, 'fuze-dud',
         'Fuze functioned but the filler had already been consumed or dispersed — no coherent detonation',
         SEV.NOTE);
@@ -904,7 +906,7 @@ export class World {
       if (s < sMin) sMin = s;
       if (s > sMax) sMax = s;
     }
-    if (!idx.length) return;
+    if (!idx.length) return false;
     const keBefore = this.solver.kinetic();
     const span = Math.max(sMax - sMin, 1e-4);
     for (const i of idx) {
@@ -924,6 +926,7 @@ export class World {
     this.log.add(this.simTime, 'jet-formed',
       `Shaped-charge liner collapsed — imposed jet gradient ${tail.toFixed(0)}-${tip.toFixed(0)} m/s over ${(span * 1000).toFixed(0)} mm`,
       SEV.MAJOR);
+    return true;
   }
 
   /** Fast peridynamic material striking an internal component. */
@@ -1076,13 +1079,22 @@ export class World {
     // a frame moves the fastest piece about 2 cm, so it is seen to travel
     let dt = clamp(0.02 / Math.max(vmax, 1), 5e-6, 6e-4);
     dt = Math.min(dt, Math.max(wantDt, 5e-6) * 4);
+    // A user-specified budget is a stop request, not evidence that debris has
+    // settled. Without one, let the existing transport finish naturally. The
+    // generous backstop bounds pathological scenes and is reported explicitly.
+    const limit = this.settings.debrisTime ?? 30;
     for (let k = 0; k < 4 && this.fragments.liveCount > 0; k++) {
       this.simTime += dt;
       this.fragments.step(dt, this.scene, this.simTime, this.internals);
-      if (this.simTime - this.debrisStart > (this.settings.debrisTime ?? 0.015)) break;
+      if (this.simTime - this.debrisStart >= limit) break;
     }
     this.updateStats();
-    if (this.fragments.liveCount === 0 || this.simTime - this.debrisStart > (this.settings.debrisTime ?? 0.015)) {
+    if (this.fragments.liveCount > 0 && this.simTime - this.debrisStart >= limit) {
+      this.stats.debrisTruncated = true;
+      this.log.add(this.simTime, 'debris-truncated',
+        `Debris time budget reached with ${this.fragments.liveCount} pieces still active; later interactions were not simulated`, SEV.MAJOR);
+    }
+    if (this.fragments.liveCount === 0 || this.stats.debrisTruncated) {
       this.endDebris();
     }
   }
@@ -1091,7 +1103,7 @@ export class World {
     const F = this.fragments;
     if (F.stoppedInPlate || F.stoppedByCasing || F.impacts.length) {
       this.log.add(this.simTime, 'debris-end',
-        `Debris settled: ${F.stoppedInPlate} pieces embedded in plate, ${F.impacts.length} reached components`
+        `Debris ${this.stats.debrisTruncated ? 'stopped at budget' : 'complete'}: ${F.stoppedInPlate} pieces embedded in plate, ${F.impacts.length} reached components`
         + `${F.stoppedByCasing ? `, ${F.stoppedByCasing} stopped by casings` : ''}`, SEV.NOTE);
     }
     this.finish(this.finishReason || 'settled');
@@ -1409,7 +1421,11 @@ export class World {
           `RICOCHET — remnant deflected at ${st.residualVelocity.toFixed(0)} m/s`, SEV.MAJOR);
       }
     }
-    st.contactTime = this.simTime - (this.trueContactTime ?? this.impactStartTime);
+    // Debris playback advances world time after the continuum has stopped.
+    // Keep that playback duration out of the reported contact-phase clock.
+    if (this.state === 'impact' || this.state === 'settle') {
+      st.contactTime = this.simTime - (this.trueContactTime ?? this.impactStartTime);
+    }
   }
 
   /**
@@ -1479,6 +1495,7 @@ export class World {
       residualVelocity: st.atPerforation ? st.atPerforation.velocity : st.residualVelocity,
       residualMass: st.atPerforation ? st.atPerforation.mass : st.residualMass,
       erodedMass: st.atPerforation ? st.atPerforation.eroded : st.erodedMass,
+      incomplete: !!(st.truncated || st.debrisTruncated),
       spallMass: st.spallMass, fragments: st.fragmentCount,
       bulge: st.backfaceBulge, kill: kill.kill, modules: kill,
       energy: this.solver ? { ...this.solver.energy } : null,
