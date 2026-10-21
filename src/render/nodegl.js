@@ -36,21 +36,21 @@ precision highp float;
 attribute vec2 aPos;
 attribute float aVal;
 attribute vec3 aCol;
-attribute float aFlag;      // 1 = alive, 2 = detached
+attribute float aFlag;      // 1 = attached, 3 = detached (0 = dead)
 
 uniform vec2  uCam;
 uniform float uScale;
 uniform vec2  uViewport;
 uniform vec2  uOffset;
 uniform float uPointSize;
-uniform float uOnlyFree;    // 1 = draw detached nodes only
+uniform float uOnlyFree;    // 1 = detached only; -1 = attached only; 0 = all
 
 varying float vVal;
 varying vec3  vCol;
 varying float vFree;
 
 void main() {
-  if (aFlag < 0.5 || (uOnlyFree > 0.5 && aFlag < 2.5)) {   // dead (or filtered out): park it outside the frustum
+  if (aFlag < 0.5 || (uOnlyFree > 0.5 && aFlag < 2.5) || (uOnlyFree < -0.5 && aFlag >= 2.5)) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     gl_PointSize = 0.0;
     vVal = 0.0; vCol = vec3(0.0); vFree = 0.0;
@@ -109,9 +109,9 @@ void main() {
  * Both passes read exactly the node state the discrete path reads; nothing is
  * added. One node alone only accumulates 1/S (about 0.37), below the 0.5
  * threshold, so an isolated node would vanish. Detached material (spall,
- * ejecta, eroded debris) is therefore ALSO drawn as discrete squares by the
- * ordinary point pass, restricted to detached nodes - debris stays visible as
- * individual pieces exactly as it did before.
+ * ejecta, eroded debris) is drawn ONLY by the ordinary point pass. Including
+ * it in the surface sum as well lets passing debris bridge cracks and tint
+ * nearby solid material, making the plate appear to flow with the fragments.
  */
 const SPLAT_FRAG = `
 precision highp float;
@@ -527,7 +527,7 @@ export class NodeGL {
     if (!this.ensureAccum(W, H)) return false;
     this.uploadNodes(o.count);
 
-    // pass 1: accumulate every node's kernel into the offscreen target
+    // pass 1: accumulate attached nodes only; loose debris is a separate pass
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.viewport(0, 0, W, H);
     gl.clearColor(0, 0, 0, 0);
@@ -543,7 +543,7 @@ export class NodeGL {
     gl.uniform2f(S.uViewport, W, H);
     gl.uniform2f(S.uOffset, 0, 0);
     gl.uniform1f(S.uPointSize, o.radiusPx * 2);
-    gl.uniform1f(S.uOnlyFree, 0);
+    gl.uniform1f(S.uOnlyFree, -1);
     gl.uniform1f(S.uRow, this.rowFor(o.mode));
     gl.uniform1f(S.uMaterialMode, o.mode === 'material' ? 1 : 0);
     gl.uniform1f(S.uNorm, o.norm);
