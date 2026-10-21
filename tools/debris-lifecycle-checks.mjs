@@ -56,7 +56,7 @@ const frag = (o = {}) => ({x:0,y:0,vx:1000,vy:0,mass:1,size:0.01,kind:'spall',al
   const fs = new FragmentSystem(null,{add(){}});
   const w = Object.assign(Object.create(World.prototype), {
     domain:{n:1,dx:0.01,px:[0],alive:[1],vx:[1000],vy:[0]},
-    solver:{dt:1e-4,step(){w.domain.px[0]+=0.01;},maxContactForce:0,brokenThisStep:0,kineticOf:()=>0},
+    solver:{dt:1e-4,step(){w.domain.px[0]+=0.01;return this.dt;},maxContactForce:0,brokenThisStep:0,kineticOf:()=>0},
     fragments:fs,scene:{activeLayers:()=>[],modules:[],bounds:()=>({x0:-1,y0:-1,x1:1,y1:1})},
     simTime:0,paused:true,perf:{},settings:{},stats:{armourDefeated:0},projectile:{speed:1000},state:'impact',contactSeen:false,impactStartTime:0,
     maybeCoast:()=>0,checkFuze(){},stepEra(){},checkModuleStrikes(){},updateStats(){},

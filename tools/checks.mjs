@@ -72,7 +72,7 @@ for (const t of TYPE_ORDER) {
   const standoff = PROJECTILE_TYPES[t].sabot ? 2.2 : 0.6;
   try {
     const r = run({ type: t, proj: { standoff }, layers: [{ material: 'rha', thickness: 0.05 }] });
-    check(r.w.domain && r.w.domain.n > 200 && Number.isFinite(r.stats.maxDepth),
+    check(r.w.state === 'done' && r.w.domain && r.w.domain.n > 200 && Number.isFinite(r.stats.maxDepth),
       `${t}: meshed ${r.w.domain ? r.w.domain.n : 0} nodes, depth ${(r.stats.maxDepth * 1000).toFixed(0)} mm`);
   } catch (e) {
     fail(`${t}: threw — ${e.message}`);
@@ -142,18 +142,17 @@ console.log('\n== the historic ammunition catalogue ==');
     `every round is in the ordering (${AMMO_ORDER.length} rounds)`);
   let ordered = true;
   for (let i = 1; i < AMMO_ORDER.length; i++) {
-    if (AMMO[AMMO_ORDER[i]].year < AMMO[AMMO_ORDER[i - 1]].year) ordered = false;
+    if ((AMMO[AMMO_ORDER[i]].year ?? Infinity) < (AMMO[AMMO_ORDER[i - 1]].year ?? Infinity)) ordered = false;
   }
-  check(ordered, `the list reads oldest first (${AMMO[AMMO_ORDER[0]].year} to `
-    + `${AMMO[AMMO_ORDER[AMMO_ORDER.length - 1]].year})`);
+  check(ordered, 'dated entries read oldest first; entries without verified dates follow');
 
   // Every entry must name a real projectile type and describe itself.
   let wellFormed = 0;
   for (const key of AMMO_ORDER) {
     const a = AMMO[key];
     const ok = !!PROJECTILE_TYPES[a.type] && typeof a.name === 'string' && a.name.length > 0
-      && typeof a.vehicle === 'string' && a.vehicle.length > 0
-      && Number.isFinite(a.year) && a.cfg && Number.isFinite(a.cfg.velocity)
+      && (a.approximate ? a.sources?.length > 0 : typeof a.vehicle === 'string' && a.vehicle.length > 0 && Number.isFinite(a.year))
+      && a.cfg && Number.isFinite(a.cfg.velocity)
       && a.cfg.velocity > 0 && Number.isFinite(a.cfg.caliber) && a.cfg.caliber > 0
       && ammoLabel(key).includes(a.name);
     if (ok) wellFormed++; else fail(`${key}: malformed entry`);
@@ -168,7 +167,7 @@ console.log('\n== the historic ammunition catalogue ==');
     const a = AMMO[key];
     try {
       const r = run({ type: a.type, proj: a.cfg, layers: [{ material: 'rha', thickness: 0.10 }] });
-      const ok = r.w.domain && r.w.domain.n > 200
+      const ok = r.w.state === 'done' && r.w.domain && r.w.domain.n > 200
         && Number.isFinite(r.stats.maxDepth) && r.stats.maxDepth >= 0
         && Number.isFinite(r.stats.residualVelocity) && r.stats.residualVelocity >= 0;
       if (ok) fired++; else fail(`${key}: ran but produced unusable stats`);
