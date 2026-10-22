@@ -562,8 +562,16 @@ export class App {
       p.body.appendChild(el('div', { class: `verdict ${cls}` },
         el('h4', {}, v.headline),
         el('p', {}, v.kill !== 'none' ? `Assessed effect: ${v.kill} kill` : 'No component effect')));
+      if (v.incomplete) p.body.appendChild(el('div', {class:'note'},
+        'Incomplete run: a simulation time budget was reached. Moving material or later interactions may remain; these results are provisional.'));
     } else if (w.state === 'idle') {
       p.body.appendChild(el('div', { class: 'note' }, 'Press FIRE. The projectile flies, contacts the array, and the continuum solver takes over at the struck face.'));
+    }
+    if (w.projectile.type.fuze) {
+      const state = w.projectile.fuzeState;
+      p.body.appendChild(kv([['Shell event', state === 'dud' ? 'unavailable / dud' : state]]));
+      if (w.projectile.cfg.type === 'heat') p.body.appendChild(el('div',{class:'hint'},
+        'HEAT uses an imposed liner-formation approximation. The event status reports whether liner nodes were available; it does not validate real ammunition performance.'));
     }
     // ERA state, when the array has any. Worth its own block: whether a
     // cassette functioned, and how fast its plates left, is the single thing
