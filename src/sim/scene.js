@@ -87,7 +87,7 @@ export function makeModule(o = {}) {
 }
 
 export const MODULE_TYPES = {
-  crew: { label: 'Crew', color: '#c86a5a', tough: 250, note: 'Incapacitated by a few hundred joules of fragment energy.' },
+  crew: { label: 'Crew', color: '#c86a5a', tough: 250, note: 'One crew position. Incapacitated by a single fragment carrying ~80 J, or by several hundred joules in total.' },
   ammo: { label: 'Ammunition', color: '#d2a03a', tough: 900, note: 'May deflagrate or detonate; catastrophic if it does.' },
   fuel: { label: 'Fuel cell', color: '#9a7b3c', tough: 1500, note: 'Ignition possible; diesel is far less sensitive than petrol.' },
   engine: { label: 'Powerpack', color: '#6f8fa8', tough: 40000, note: 'Large, heavy, absorbs a lot before stopping.' },
@@ -315,7 +315,7 @@ export class Scene {
   }
 
   resetDamage() {
-    for (const m of this.modules) { m.integrity = 1; m.hits.length = 0; m.state = 'ok'; }
+    for (const m of this.modules) { m.integrity = 1; m.hits.length = 0; m.state = 'ok'; m.effect = null; m.peakHit = 0; }
   }
 
   toJSON() {
@@ -352,6 +352,9 @@ export class Scene {
       modules: this.modules.map((m) => ({
         type: m.type, label: m.label, x: m.x, y: m.y, w: m.w, h: m.h,
         angle: m.angle, casing: m.casing,
+        // user-edited vulnerability numbers travel with the scenario
+        ...(m.tough !== undefined ? { tough: m.tough } : {}),
+        ...(m.perHit !== undefined ? { perHit: m.perHit } : {}),
       })),
     };
   }

@@ -197,7 +197,8 @@ export class PDDomain {
 
         const sc = sol.scale ?? 1;
         this.pscale[n] = sc;
-        this.mass[n] = m.rho * this.vol * sc;
+        // massMul: extra inertia without extra stiffness (see Projectile)
+        this.mass[n] = m.rho * this.vol * sc * (sol.massMul ?? 1);
         this.invM[n] = 1 / this.mass[n];
         this.body[n] = sol.bodyId;
         this.group[n] = sol.bondGroup;
@@ -214,12 +215,66 @@ export class PDDomain {
       }
     }
     this.n = n;
+    this.correctAliasedMass();
 
     // ---- pass 3: bonds ------------------------------------------------
     this.buildBonds();
     this.classifySurface();
     this.computeStableDt();
     return this;
+  }
+
+  /**
+   * LATTICE ALIASING OF SMALL BODIES
+   * A body only a few lattice spacings across gets whatever number of rows
+   * happens to fall inside its outline: a 22 mm rod on a 5 mm lattice gets 4
+   * rows or 5 depending on where the lattice lines fall, which is a 12 %
+   * mass error, fixed for a given setup and different for the next. It made
+   * the same rod 3.73 kg in one scenario and 4.22 kg in the next, so two
+   * shots that should differ only in their armour also differed in the
+   * threat. For solids flagged `massTarget` the meshed site count is compared
+   * with the area of the outline the solid actually owns (supersampled, with
+   * the same priority rule as the occupancy pass), and its nodes' `pscale` is
+   * corrected by the ratio. pscale scales mass and bond stiffness together,
+   * so the body carries its true mass and strength with its wave speed
+   * unchanged. Plates are not corrected: they span the corridor, and over
+   * their length the row count averages out.
+   */
+  correctAliasedMass() {
+    const dx = this.dx, sub = 5, h = dx / sub;
+    const bb = this.solids.map((s) => polyBounds(s.poly));
+    this.massCorrection = [];
+    for (let k = 0; k < this.solids.length; k++) {
+      const sol = this.solids[k];
+      if (!sol.massTarget) continue;
+      let realised = 0;
+      for (let i = 0; i < this.n; i++) if (this.body[i] === sol.bodyId) realised++;
+      if (realised < 3) continue;
+      const b = bb[k];
+      let hits = 0;
+      for (let x = b.x0 + h * 0.5; x < b.x1; x += h) {
+        for (let y = b.y0 + h * 0.5; y < b.y1; y += h) {
+          if (!pointInPoly(sol.poly, x, y)) continue;
+          let mine = true;
+          for (let q = 0; q < k; q++) {
+            const c = bb[q];
+            if (x < c.x0 || x > c.x1 || y < c.y0 || y > c.y1) continue;
+            if (pointInPoly(this.solids[q].poly, x, y)) { mine = false; break; }
+          }
+          if (mine) hits++;
+        }
+      }
+      const expected = hits / (sub * sub);
+      const ratio = clamp(expected / realised, 0.6, 1.6);
+      this.massCorrection.push({ label: sol.label, ratio, expected, realised });
+      if (Math.abs(ratio - 1) < 0.005) continue;
+      for (let i = 0; i < this.n; i++) {
+        if (this.body[i] !== sol.bodyId) continue;
+        this.pscale[i] *= ratio;
+        this.mass[i] *= ratio;
+        this.invM[i] = 1 / this.mass[i];
+      }
+    }
   }
 
   internMat(m, pd, gradKey = '') {

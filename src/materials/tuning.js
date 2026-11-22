@@ -115,4 +115,11 @@ export const TUNE = {
 
   freeZoneD: 1.2,
   freeZoneT: 0.5,
+  /** Free plate beyond a blast footprint, in plate thicknesses (line of
+   *  sight). A plate under a local load deforms over the footprint and a
+   *  couple of thicknesses around it. In a 2D section the free zone is a
+   *  strip clamped along two edges, which bends far more easily than the
+   *  disc a real plate presents, so it is kept to that local zone: at 2.5
+   *  calibres a 50 mm plate dished 225 mm under an 88 mm HE burst. */
+  freeZoneBlast: 1.5,
 };

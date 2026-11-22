@@ -325,8 +325,11 @@ export class FragmentSystem {
           this.stoppedInPlate++;
           // one line per plate, not one per piece: six hundred fragments
           // embedding in the same plate used to bury the rest of the log
-          if (!this._loggedLayers.has(e.L)) {
-            this._loggedLayers.add(e.L);
+          // keyed by id, not by the layer object: the recorder clones this
+          // set into every key frame, and a layer carries functions
+          // (depthAt), which cannot be cloned
+          if (!this._loggedLayers.has(e.L.id)) {
+            this._loggedLayers.add(e.L.id);
             this.log.add(tNow, 'frag-stopped',
               `Fragments are being stopped by ${e.L.label || e.L.mat.name} (first: ${(f.mass * 1000).toFixed(1)} g at ${v.toFixed(0)} m/s)`, 0);
           }

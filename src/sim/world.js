@@ -28,14 +28,14 @@
  * The renderer is called afterwards by the app loop and never writes state.
  */
 
-import { PDDomain, ROLE } from './pd/domain.js';
+import { PDDomain, ROLE, BOND } from './pd/domain.js';
 import { PDSolver } from './pd/solver.js';
 import { Scene, modulePoly } from './scene.js';
 import { Projectile } from './projectile.js';
 import { makeProjectileConfig, PROJECTILE_TYPES } from './projectileTypes.js';
 import { FragmentSystem } from './fragments.js';
 import { InternalDamage } from './internals.js';
-import { detonate, logDetonation } from './explosive.js';
+import { detonate, logDetonation, contactImpulse } from './explosive.js';
 import { buildCassettes, stepCassettes, logCassetteEvents } from './era.js';
 import { Bus, EventLog, SEV } from '../core/events.js';
 import { Recorder } from '../core/recorder.js';
@@ -178,6 +178,7 @@ export class World {
     this._penMass0Domain = null;
     this.cassettes = [];
     this.eraLastT = 0;
+    this.blastAt = null;
     this.retiredProjM = 0; this.retiredProjPX = 0; this.retiredProjPY = 0;
     if (this.projectile) this.projectile.reset();
     for (const L of this.scene.layers) { L.fragHits = 0; }
@@ -284,7 +285,8 @@ export class World {
     } else if (this.state === 'debris') {
       this.debrisPhase(want);
     } else if (this.state === 'impact' || this.state === 'settle') {
-      const maxSteps = this.paused ? budgetSteps : this.adaptiveSubsteps(q);
+      const wantSteps = this.solver ? Math.ceil(want / Math.max(this.solver.dt, 1e-12)) : q.substeps;
+      const maxSteps = this.paused ? budgetSteps : this.adaptiveSubsteps(q, wantSteps);
       this.impactPhase(want, maxSteps);
     }
 
@@ -304,7 +306,7 @@ export class World {
    * frame is the only free variable that trades wall-clock smoothness against
    * how fast the event plays out; the physics per step is unchanged either way.
    */
-  adaptiveSubsteps(q) {
+  adaptiveSubsteps(q, wantSteps = q.substeps) {
     // DETERMINISM. The sub-step count below is chosen from measured wall-clock
     // time, which means the same scenario advances a different amount of
     // simulated time on a fast machine than on a slow one - identical runs were
@@ -316,13 +318,23 @@ export class World {
     if (this.settings.deterministic) return q.substeps;
     const ms = this.perf.avgMs;
     let n = this.perf.substeps || q.substeps;
+    // FASTER PLAYBACK. The quality level's sub-step count used to be a hard
+    // ceiling, which meant the impact could never play faster than about
+    // 1:10,000 however the time scale was set - the solver simply stopped at
+    // its few steps per frame. When the chosen scale asks for more steps than
+    // that, the ceiling rises to what was asked (up to 64), and the frame is
+    // allowed to take up to ~33 ms (30 fps) to deliver it. The physics per
+    // step is identical; only how much of it is shown per frame changes.
+    const fast = wantSteps > q.substeps;
+    const cap = fast ? Math.min(64, wantSteps) : q.substeps;
+    const slowMs = fast ? 33 : 22, quickMs = fast ? 24 : 12;
     // The thresholds are deliberately loose. Trimming sub-steps aggressively
     // keeps the frame rate high but stretches a 350 us event over a minute of
     // wall time, which is worse than running at 40 fps. Prefer a slightly
     // lower frame rate over a crawling event.
-    if (ms > 22 && n > 1) n -= 1;
-    else if (ms < 12 && n < q.substeps) n += 1;
-    this.perf.substeps = clamp(n, 1, q.substeps);
+    if (ms > slowMs && n > 1) n = fast ? Math.max(1, Math.floor(n * 0.8)) : n - 1;
+    else if (ms < quickMs && n < cap) n = fast ? n + Math.max(1, Math.ceil(n * 0.25)) : n + 1;
+    this.perf.substeps = clamp(n, 1, cap);
     return this.perf.substeps;
   }
 
@@ -395,9 +407,52 @@ export class World {
     // eroded as a ragged chain and penetrated at 0.4 of Tate. Shells are
     // unaffected: ten of their diameters is wider than any plate they face.
     const plateTerm = chemical ? this.scene.losTotal : Math.min(this.scene.losTotal, 10 * refD);
-    const width = Math.max(corridorCal * (chemical ? cal : refD), 0.95 * plateTerm, 0.05)
-      * (this.settings.corridorScale ?? 1);
-    return { dx0, refD, width, chemical, budget: q.budget, mRatio: q.mRatio };
+    let width = Math.max(corridorCal * (chemical ? cal : refD), 0.95 * plateTerm, 0.05);
+    // A BLAST NEEDS PLATE AROUND IT
+    // HE and HESH load a footprint more than a calibre across, and the corridor
+    // used to be 1.7 calibres wide - so the loaded patch WAS the corridor, held
+    // only by the clamped rows at its two edges, and a 50 mm plate came out as
+    // a free strip blown half a metre into the compartment. The corridor now
+    // reaches past the free zone, so the footprint is surrounded by plate that
+    // bends and holds, and only the far edges stand in for the hull.
+    if (this.isBlast()) width = Math.max(width, 2 * this.blastFreeHalf() + 12 * dx0);
+    width *= this.settings.corridorScale ?? 1;
+    // ERA AGAINST A SHAPED CHARGE NEEDS RESOLUTION
+    // Measured with an inert cassette of identical mesh as the control: at the
+    // Normal node budget (4.2 mm lattice) a light cassette's 3 mm plates are
+    // sub-lattice, the jet tears an ~80 mm hole in them, and the flying plates
+    // never meet the jet again - the live cassette came out WORSE than inert
+    // (133 vs 90 mm into the main plate). At the Ultra budget (2.9 mm) the
+    // same pair gives live 176 mm against inert perforating all 250 mm. So a
+    // shaped charge facing a live cassette is meshed at no less than Ultra.
+    let budget = q.budget, eraFloor = false;
+    if (p.cfg.type === 'heat' && this.scene.activeLayers().some((L) => L.eraPart === 'charge' && L.mat.detVel > 0)) {
+      if (budget < QUALITY.ultra.budget) { budget = QUALITY.ultra.budget; eraFloor = true; }
+    }
+    return { dx0, refD, width, chemical, budget, mRatio: q.mRatio, eraFloor };
+  }
+
+  /** HE and HESH: rounds whose effect on the plate is a contact blast. */
+  isBlast() {
+    const t = this.projectile?.cfg.type;
+    return t === 'he' || t === 'hesh';
+  }
+
+  /**
+   * Radius of plate a blast loads. HESH squashes into a pancake about two
+   * calibres across, in contact. A nose-fuzed HE shell bursts with its charge
+   * a calibre or more off the plate, so its products and nose fragments
+   * spread over a wider patch; that patch is measured at the burst (see
+   * detonateShell) and bounded by the figure used here for meshing.
+   */
+  blastFootprint() {
+    const p = this.projectile, cal = p.cfg.caliber || p.geom.refDiameter;
+    return (p.cfg.type === 'hesh' ? 1.0 : 1.6) * cal;
+  }
+
+  /** Half-width of the plate left free to respond to a blast (see meshPlan). */
+  blastFreeHalf() {
+    return this.blastFootprint() + TUNE.freeZoneBlast * this.scene.losTotal;
   }
 
   beginImpact(hits) {
@@ -481,8 +536,15 @@ export class World {
     // 400 mm strap: it dishes like taffy, tears from its clamps and flaps open
     // while the shot slips through the gap. Everything beyond a free zone sized
     // to the penetrator and the line-of-sight thickness is held instead.
-    const freeHalf = plan.chemical ? Infinity
-      : TUNE.freeZoneD * plan.refD + TUNE.freeZoneT * this.scene.losTotal;
+    // HE and HESH used to be exempt (free zone = infinity), so the blast shoved
+    // the whole meshed strip of plate backward as a free body - a 50 mm plate
+    // section ended up 200 mm inside the compartment behind it. A blast loads a
+    // footprint about a calibre or two across, and the plate around that is
+    // held by the hull exactly as it is for a kinetic round. HEAT keeps its old
+    // treatment: its jet is narrow and its calibration was done without one.
+    const freeHalf = this.isBlast() ? this.blastFreeHalf()
+      : plan.chemical ? Infinity
+        : TUNE.freeZoneD * plan.refD + TUNE.freeZoneT * this.scene.losTotal;
     dom.applyLateralBC((x, y) => !!this.scene.isSolid(x, y), freeHalf);
 
     this.domain = dom;
@@ -509,6 +571,11 @@ export class World {
     this.log.add(this.simTime, 'mesh',
       `Continuum domain built — ${dom.n} nodes, ${dom.nb} bonds, dx = ${(dx * 1000).toFixed(2)} mm, ` +
       `dt = ${(this.solver.dt * 1e9).toFixed(0)} ns`, SEV.INFO, this.meshInfo);
+    if (plan.eraFloor) {
+      this.log.add(this.simTime, 'era-resolution',
+        'Shaped charge against live ERA: meshed at the Ultra node budget whatever the quality setting, '
+        + 'because below it the cassette plates are too coarse to meet the jet (see MODEL.md 5.1a)', SEV.NOTE);
+    }
     // A layer thinner than a couple of lattice spacings is not being simulated
     // as a layer, and anything that depends on it behaving like one - an ERA
     // cassette's plates above all - will be wrong. Say so rather than quietly
@@ -555,12 +622,15 @@ export class World {
         role: part.role === 1 ? ROLE.PENETRATOR : part.role === 3 ? ROLE.FILLER : ROLE.PROJ_AUX,
         vel: [p.vx, p.vy],
         scale: part.scale,
+        massMul: part.massMul,
         // a slender kinetic rod's material has to flow, not shatter, to erode
         failMul: (part.role === 1 && ['apds', 'apfsds'].includes(p.cfg.type)) ? TUNE.rodDuctility : 1,
         strengthMul: (part.role === 1 && ['apds', 'apfsds'].includes(p.cfg.type))
           ? TUNE.rodStrength * flowStress(part.mat, TUNE.rodHardening) / flowStress(part.mat) : 1,
         label: part.label,
         partRef: part,
+        // carry the stated mass, not whatever the lattice happens to sample
+        massTarget: true,
       });
     }
 
@@ -870,11 +940,107 @@ export class World {
     cx /= cn; cy /= cn;
     const keBefore = this.solver.kinetic();
     const radius = Math.sqrt(cn) * d.dx * 0.6;
+    // HE and HESH burst ON the plate: load its struck face with the contact
+    // impulse instead of flinging it like casing (see explosive.js). APHE bursts
+    // after penetrating, inside or behind the plate, where there is no single
+    // struck face; it keeps the old treatment.
+    let faceOpts = {}, footprint = 0;
+    if (this.isBlast()) {
+      // the layer the burst is against: the one owning the nearest armour node
+      let best = -1, bd = Infinity;
+      for (let i = 0; i < d.n; i++) {
+        if (!d.alive[i] || d.role[i] !== ROLE.ARMOUR) continue;
+        const q = (d.px[i] - cx) ** 2 + (d.py[i] - cy) ** 2;
+        if (q < bd) { bd = q; best = i; }
+      }
+      const layers = this.scene.activeLayers();
+      const Ls = best >= 0 ? layers[d.layer[best]] : null;
+      if (Ls && Ls.depthAt) {
+        const hesh = p.cfg.type === 'hesh';
+        const cal = p.cfg.caliber || 0.1;
+        const D = fm.detVel || 7500;
+        const [tx, ty] = Ls.tangent;
+        // where the charge sits relative to the plate: its nearest point's
+        // stand-off and its half-width across the plate
+        let stand = Infinity, half = 0;
+        for (let i = 0; i < d.n; i++) {
+          if (!d.alive[i] || d.role[i] !== ROLE.FILLER) continue;
+          stand = Math.min(stand, -Ls.depthAt(d.px[i], d.py[i]));
+          half = Math.max(half, Math.abs((d.px[i] - cx) * tx + (d.py[i] - cy) * ty));
+        }
+        stand = Math.max(0, stand);
+        // FOOTPRINT and MOMENTUM.
+        // HESH squashes into a pancake about two calibres across lying on the
+        // plate, which is the planar contact case: (8/27) C D.
+        // HE is not in contact. A nose-fuzed shell bursts with the front of its
+        // charge about a calibre and a half off the plate (the nose is in the
+        // way), and the products expand before they arrive. The plate takes
+        // the products' momentum heading its way - a quarter of C sqrt(2E):
+        // half the products, at a mean obliquity of 60 degrees - spread over a
+        // patch as wide as the stand-off plus the charge. The nose casing
+        // fragments it also throws are meshed and hit the plate on their own.
+        const footR = hesh ? this.blastFootprint() : clamp(stand + half, 0.6 * cal, this.blastFootprint());
+        footprint = 2 * footR;
+        // The planar contact result (8/27) C D is the thick-wall limit. A thin
+        // plate is itself the flyer of an open-faced Gurney sandwich and takes
+        // less: a 10 mm screen was being driven at 6.9 km/s, faster than the
+        // explosive can throw anything. The sandwich result covers both - it
+        // tends to 0.87 C sqrt(2E), the same figure, as the plate thickens.
+        // (the pancake lies on the face and pushes along its normal, so the
+        // plate's areal mass is taken through its normal thickness)
+        const footArea = Math.PI * footR * footR;
+        const J3 = hesh
+          ? contactImpulse(cm / footArea, (Ls.mat.rho || 7850) * Ls.thickness, fm.gurney || 2400).impulse * footArea
+          : 0.25 * cm * (fm.gurney || 2400);
+        // FROM THE ROUND TO THE SLICE. The charge mass is the real one (the
+        // body-of-revolution correction sees to that), but in 3D it loads a
+        // disc of radius r while this section loads a strip 2r wide and one
+        // slab deep. Matching impulse per unit area would give the strip
+        // J3 * 2 r slab / (pi r^2) - but the strip's plug is held along two
+        // edges where the disc's is held all round, half the shear per unit
+        // loaded area, so at that impulse a section plugs plates a real round
+        // only dents (a 105 mm HESH blew the full footprint out of 120 mm).
+        // What the plate's survival turns on is the plug's kinetic energy
+        // against the work to shear it out; equating that ratio between disc
+        // and strip gives J3 * sqrt(2) slab / (pi r), 0.71 of the per-area
+        // match. (A HESH section is cut pi/2 r deep - see buildProjectile -
+        // so for HESH this is J3 / sqrt(2).)
+        const i3 = J3 / (Math.PI * footR * footR);
+        const J2 = J3 * Math.SQRT2 * d.slab / (Math.PI * footR);
+        // DEPTH. The momentum arrives as a pulse no stronger than the
+        // explosive's Chapman-Jouguet pressure (~rho D^2/4); a pulse of
+        // specific impulse i at peak pressure p occupies c i / p of plate,
+        // which is how deep the load is laid in, decaying linearly from the
+        // face.
+        const pCJ = (fm.rho || 1600) * D * D / 4;
+        const cP = Math.sqrt((Ls.mat.E || 2e11) / (Ls.mat.rho || 7850));
+        // A plate thinner than the pulse is simply thrown as a flyer: load
+        // its whole thickness evenly.
+        const depth = Math.max(cP * i3 / pCJ, 2 * d.dx);
+        const flyer = depth >= 0.6 * Ls.thickness;
+        const li = d.layer[best];
+        this.blastAt = { layer: li, cx, cy, footR };
+        faceOpts = {
+          armourFace: (i) => {
+            if (d.layer[i] !== li) return 0;
+            if (Math.abs((d.px[i] - cx) * tx + (d.py[i] - cy) * ty) > footR) return 0;
+            const z = Ls.depthAt(d.px[i], d.py[i]);
+            if (flyer) return 1;
+            return z < depth ? 1 - Math.max(z, 0) / depth : 0;
+          },
+          faceNormal: Ls.normal,
+          impulse: J2,
+        };
+      }
+    }
     const info = detonate(d, {
       cx, cy, chargeMass: cm, gurneyVel: fm.gurney || 2400, radius,
       geometry: p.cfg.type === 'hesh' ? 'sandwich' : 'cylindrical',
+      // the shell's axis, so a cylindrical casing bursts sideways
+      axis: normalize(p.vx, p.vy),
+      ...faceOpts,
     });
-    info.chargeMass = cm; info.x = cx; info.y = cy;
+    info.chargeMass = cm; info.x = cx; info.y = cy; info.footprint = footprint;
     // The burst injects chemical energy the audit baseline knows nothing about.
     // Fold the delivered kinetic energy into E0 so the closure figure keeps
     // meaning something after a detonation.
@@ -935,22 +1101,38 @@ export class World {
   checkModuleStrikes() {
     const d = this.domain;
     if (!d || !this.scene.modules.length) return;
+    // ONE STRIKE PER PIECE OF MATERIAL PER COMPONENT
+    // This used to score every fast node inside a component's outline on every
+    // call. A node still BONDED to the plate is pulled back up to speed by its
+    // neighbours after each "spent" velocity cut, so it re-scored every step:
+    // 121 plate nodes behind an UNPERFORATED 50 mm plate registered 16,953
+    // hits on a crew position and killed it. A piece of material delivers its
+    // energy to a component once, on arrival.
+    if (!this.moduleStruck || this.moduleStruck.domain !== d) {
+      this.moduleStruck = { domain: d, sets: new Map() };
+    }
     for (const m of this.scene.modules) {
       if (m.type === 'void') continue;
+      let seen = this.moduleStruck.sets.get(m.id);
+      if (!seen) { seen = new Set(); this.moduleStruck.sets.set(m.id, seen); }
       const poly = modulePoly(m);
       for (let i = 0; i < d.n; i++) {
-        if (!d.alive[i]) continue;
+        if (!d.alive[i] || seen.has(i)) continue;
         const v2 = d.vx[i] * d.vx[i] + d.vy[i] * d.vy[i];
         if (v2 < 2500) continue;
         if (!pointInPoly(poly, d.px[i], d.py[i])) continue;
+        seen.add(i);
         const e = 0.5 * d.mass[i] * v2;
+        const free = d.role[i] !== ROLE.ARMOUR || (d.flags[i] & 8);
         this.internals.applyHit(m, {
           energy: e, mass: d.mass[i], velocity: Math.sqrt(v2),
-          source: d.role[i] === ROLE.PENETRATOR ? 'penetrator' : 'fragment',
+          source: d.role[i] === ROLE.PENETRATOR ? 'penetrator'
+            : d.role[i] === ROLE.ARMOUR ? (free ? 'spall' : 'plate bulge') : 'fragment',
           t: this.simTime, x: d.px[i], y: d.py[i],
         });
-        // the strike is spent on the component
-        d.vx[i] *= 0.25; d.vy[i] *= 0.25;
+        // a loose piece spends itself on the component; plate still bonded to
+        // the armour is held by the armour, not by a velocity cut
+        if (free) { d.vx[i] *= 0.25; d.vy[i] *= 0.25; }
       }
     }
   }
@@ -1003,9 +1185,16 @@ export class World {
         if (layers.some((L) => pointInPoly(L.poly, d.px[i], d.py[i]))) continue;
       } else {
         if (!lateral && !ends) continue;
-        // lattice material still attached to its neighbours is not debris,
-        // unless it has left through the front or rear of the array
-        if (!ends && !free) continue;
+        // Lattice material still attached to its neighbours is not debris
+        // while it is inside the window. Once it is past a side wall it has
+        // left, bonded or not: the clamped rows are the wall, so anything out
+        // there has moved at least a lattice spacing sideways out of the
+        // meshed region. This used to keep such material in the continuum
+        // because it was still bonded - a whole torn-off piece of a HESH-struck
+        // screen flew out of the side of the window as one bonded chunk, and
+        // with nothing meshed out there it passed straight through the main
+        // plate behind and into the ammunition. Past the wall it is now
+        // stopped by any plate it is inside, or flown as fragments.
       }
       const inPlate = lateral && !ends && layers.some((L) => pointInPoly(L.poly, d.px[i], d.py[i]));
       // slow debris, material that has run into the plate beside the window,
@@ -1477,22 +1666,90 @@ export class World {
     this.state = 'done';
     this.finishReason = reason;
     if (this.domain) this.updateStats();
+    if (this.domain && this.blastAt) this.stats.blast = this.blastOutcome();
     const verdict = this.verdict();
     this.log.add(this.simTime, 'end', `Result: ${verdict.headline}`, SEV.MAJOR, verdict);
     this.bus.emit('finished', verdict);
+  }
+
+  /**
+   * WHAT A BLAST DID TO THE PLATE
+   * HE and HESH have no penetrator, so the penetrator-mass test behind
+   * "perforated" can never fire for them, and a plate blown clean through used
+   * to be reported as "No penetration". The struck layer is instead split into
+   * what is still connected to the plate around it (the clamped rows standing
+   * in for the hull) and what has come away. A run of the footprint with no
+   * connected plate left in it is a hole; detached material that started in
+   * the rear half of the plate is the scab.
+   */
+  blastOutcome() {
+    const d = this.domain, b = this.blastAt;
+    const L = this.scene.activeLayers()[b.layer];
+    if (!L) return null;
+    const T = L.thickness;
+    const parent = new Int32Array(d.n);
+    for (let i = 0; i < d.n; i++) parent[i] = i;
+    const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+    for (let k = 0; k < d.nb; k++) {
+      if (d.bstate[k] !== BOND.INTACT) continue;
+      const i = d.bi[k], j = d.bj[k];
+      if (d.layer[i] !== b.layer || d.layer[j] !== b.layer) continue;
+      const a = find(i), c = find(j);
+      if (a !== c) parent[a] = c;
+    }
+    // the plate is whatever is still joined to its held edges
+    const anchored = new Set();
+    for (let i = 0; i < d.n; i++) {
+      if (d.layer[i] === b.layer && d.alive[i] && (d.flags[i] & 4)) anchored.add(find(i));
+    }
+    const [tx, ty] = L.tangent;
+    const reach = b.footR + 2 * T;
+    const nBin = Math.max(4, Math.ceil((2 * reach) / d.dx));
+    const held = new Uint8Array(nBin), seen = new Uint8Array(nBin);
+    let scab = 0, detached = 0;
+    for (let i = 0; i < d.n; i++) {
+      if (d.layer[i] !== b.layer) continue;
+      const u = (d.rx[i] - b.cx) * tx + (d.ry[i] - b.cy) * ty;
+      const k = Math.floor(((u + reach) / (2 * reach)) * nBin);
+      const inBin = k >= 0 && k < nBin;
+      if (inBin) seen[k] = 1;
+      const joined = d.alive[i] && d.damage[i] < 0.9 && anchored.has(find(i));
+      if (joined) { if (inBin) held[k] = 1; continue; }
+      if (!d.alive[i]) continue;
+      detached += d.mass[i];
+      if (L.depthAt(d.rx[i], d.ry[i]) > 0.5 * T && L.depthAt(d.px[i], d.py[i]) > T) scab += d.mass[i];
+    }
+    let run = 0, hole = 0;
+    for (let k = 0; k < nBin; k++) {
+      if (seen[k] && !held[k]) { run++; hole = Math.max(hole, run); } else run = 0;
+    }
+    const holeWidth = hole * ((2 * reach) / nBin);
+    return { breached: hole >= 2 && holeWidth >= 0.25 * Math.min(T, b.footR), holeWidth, scabMass: scab, detachedMass: detached, layer: b.layer };
   }
 
   verdict() {
     const st = this.stats;
     const kill = this.internals.summary();
     let headline;
+    const bl = st.blast;
     if (this.finishReason === 'miss') headline = 'No contact';
+    else if (bl && bl.breached) {
+      // in an array, say WHICH plate: a blown-through screen with the main
+      // armour intact behind it is the spaced-armour defeat of HESH, not a kill
+      const layers = this.scene.activeLayers();
+      const L = layers[bl.layer];
+      const which = layers.length > 1 ? `${L?.label || L?.mat?.name || 'Plate'} (layer ${bl.layer + 1} of ${layers.length})` : 'Plate';
+      headline = `${which} breached by the blast — ${(bl.holeWidth * 1000).toFixed(0)} mm hole`;
+    }
+    else if (bl && bl.scabMass > 0.02) headline = `No perforation — ${(bl.scabMass * 1000).toFixed(0)} g scab torn from the inside face`;
+    else if (bl) headline = st.backfaceBulge > 0.002
+      ? `No perforation — plate dished ${(st.backfaceBulge * 1000).toFixed(0)} mm` : 'No perforation — blast defeated';
     else if (st.perforated) headline = `Perforation — ${(st.atPerforation.velocity).toFixed(0)} m/s residual`;
     else if (st.ricochet) headline = 'Ricochet — armour defeated the attack';
     else if (st.armourDefeated > 0) headline = `Partial penetration — ${(st.armourDefeated * 1000).toFixed(0)} mm of armour defeated`;
     else headline = 'No penetration';
     return {
-      headline, perforated: st.perforated, ricochet: st.ricochet,
+      headline, perforated: st.perforated || !!(bl && bl.breached), ricochet: st.ricochet, blast: bl || null,
       depth: st.maxDepth, depthLOS: st.maxDepthLOS, armourDefeated: st.armourDefeated,
       residualVelocity: st.atPerforation ? st.atPerforation.velocity : st.residualVelocity,
       residualMass: st.atPerforation ? st.atPerforation.mass : st.residualMass,

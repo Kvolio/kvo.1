@@ -16,6 +16,7 @@ import { MATERIALS, ARMOUR_KEYS, materialGroup, gradeText, keysFor, describeMate
 
 import { PROJECTILE_TYPES, TYPE_ORDER, makeProjectileConfig } from '../sim/projectileTypes.js';
 import { Scene, makeLayer, makeModule, expandEra, MODULE_TYPES } from '../sim/scene.js';
+import { CONSEQUENCE } from '../sim/internals.js';
 import { QUALITY } from '../sim/world.js';
 import { FIELD_MODES, RAMP_DAMAGE, RAMP_PLASTIC, RAMP_TEMP, RAMP_VELOCITY, RAMP_STRESS, rgb } from '../render/palette.js';
 import * as U from '../core/units.js';
@@ -306,11 +307,15 @@ export class App {
       tsVals.map((v) => ({ value: String(v), label: `1 : ${v.toLocaleString()}` })),
       String(Math.round(1 / w.settings.timeScale)), (v) => { w.settings.timeScale = 1 / +v; },
     )));
-    const isVals = [10000, 30000, 60000, 150000, 400000];
+    const isVals = [1000, 2000, 5000, 10000, 30000, 60000, 150000, 400000];
     p.body.appendChild(row('Impact time scale', select(
-      isVals.map((v) => ({ value: String(v), label: `1 : ${v.toLocaleString()}` })),
+      isVals.map((v) => ({ value: String(v), label: `1 : ${v.toLocaleString()}${v < 10000 ? ' (fast)' : ''}` })),
       String(Math.round(1 / w.settings.impactTimeScale)), (v) => { w.settings.impactTimeScale = 1 / +v; },
     )));
+    p.body.appendChild(el('div', { class: 'hint' },
+      'Faster than 1:10,000 the solver runs as many steps per frame as the device can manage at about '
+      + '30 fps, so on Ultra or with a large deformable zone the impact may play somewhat slower than the '
+      + 'scale chosen. The physics is the same at every speed.'));
     p.body.appendChild(el('div', { class: 'row' },
       el('label', {}, 'Auto slow-motion at contact'),
       toggle(w.settings.autoSlow ? 'ON' : 'AUTO', w.settings.autoSlow, (v) => { w.settings.autoSlow = v; })));
@@ -645,11 +650,22 @@ export class App {
       b.appendChild(row('Casing (mm)', num(m.casing * 1000, { dp: 1, step: 1, onchange: (v) => { m.casing = Math.max(0, v / 1000); changed(); } })));
       b.appendChild(row('Label', el('input', { type: 'text', value: m.label || '', onchange: (e) => { m.label = e.target.value; changed(); } })));
       b.appendChild(el('button', { class: 'mini', onclick: () => { sc.modules.splice(idx, 1); changed(); } }, 'Delete'));
+      // the two numbers that decide this component's fate, editable
+      const cq = CONSEQUENCE[m.type];
+      if (m.type !== 'void') {
+        b.appendChild(row('Toughness (J)', num(m.tough ?? spec.tough, { dp: 0, step: 50,
+          onchange: (v) => { m.tough = Math.max(1, v); changed(); } })));
+        if (cq?.perHit) b.appendChild(row('Single-strike limit (J)', num(m.perHit ?? cq.perHit, { dp: 0, step: 10,
+          onchange: (v) => { m.perHit = Math.max(1, v); changed(); } })));
+      }
       if (m.hits.length) {
         b.appendChild(kv([
           ['Integrity', U.pct(m.integrity)],
           ['Strikes', String(m.hits.length)],
+          ['Largest strike', U.energy(m.peakHit || 0)],
           ['Energy absorbed', U.energy(m.hits.reduce((a, h) => a + h.energy, 0))],
+          m.effect ? ['Effect', { K: 'catastrophic', F: 'firepower kill', 'F-': 'turret drive lost', M: 'mobility kill',
+            crew: 'casualty', fire: 'fire', power: 'power degraded' }[m.effect] || m.effect] : null,
         ]));
       }
       if (spec.note) b.appendChild(el('div', { class: 'note' }, spec.note));
@@ -662,9 +678,20 @@ export class App {
     }, '+ Component'));
     p.body.appendChild(el('div', { class: 'hint' },
       'Components are resolved analytically: a striker must beat the casing (plugging-work model), '
-      + 'then the surviving energy is compared with a component toughness scale. Those scales are '
-      + 'engineering placeholders, not validated vulnerability data.'));
+      + 'then what survives wears the component down against its toughness, and a single strike over '
+      + 'its single-strike limit (crew ~80 J, ammunition, fuel) takes it out at once. Each consequence '
+      + 'counts once and rolls up into K (catastrophic), F (firepower) and M (mobility) kills. These '
+      + 'numbers are engineering placeholders, not validated vulnerability data.'));
     return p;
+  }
+
+  /** One line for the component effect of a finished shot. */
+  killText(v) {
+    const notes = v.modules?.notes?.length ? ` · ${v.modules.notes.join(' · ')}` : '';
+    if (v.kill === 'none') return `No component effect${notes}`;
+    if (v.kill === 'partial') return `Components damaged, no kill${notes}`;
+    if (v.kill === 'casualties') return `Assessed effect: crew casualties${notes}`;
+    return `Assessed effect: ${v.kill} kill${notes}`;
   }
 
   panelReport() {
@@ -675,7 +702,7 @@ export class App {
       const cls = v.perforated ? 'pen' : (v.ricochet || v.depth === 0) ? 'stop' : '';
       p.body.appendChild(el('div', { class: `verdict ${cls}` },
         el('h4', {}, v.headline),
-        el('p', {}, v.kill !== 'none' ? `Assessed effect: ${v.kill} kill` : 'No component effect')));
+        el('p', {}, this.killText(v))));
       if (v.incomplete) p.body.appendChild(el('div', {class:'note'},
         'Incomplete run: a simulation time budget was reached. Moving material or later interactions may remain; these results are provisional.'));
       // PIN AND COMPARE. Most questions here are comparisons - centre against

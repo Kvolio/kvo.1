@@ -34,6 +34,12 @@ const step = (fs, sc, dt) => fs.step(dt, sc, 0, { applyHit() { throw new Error('
   assert(f.stopped, 'fragment spawned in a solid skipped its collision');
   assert(f.x <= 0.010101, `stopped fragment jumped to ${f.x}`);
   assert.equal(fs.stoppedInPlate, 1);
+  // The recorder clones this state into every key frame. Layers carry
+  // functions (depthAt, for curved plates), so nothing here may hold a layer
+  // object: the "already logged" set used to, and recording threw the first
+  // time a fragment lodged in a plate.
+  assert.doesNotThrow(() => structuredClone({ logged: fs._loggedLayers, list: fs.list }),
+    'fragment state holds something the recorder cannot clone');
 }
 
 // An impact in an earlier layer cannot bring an unreachable later layer into range.

@@ -261,14 +261,26 @@ export const PROJECTILE_TYPES = {
     key: 'he', name: 'HE — high explosive', family: 'chemical',
     desc: 'Thin-walled shell with a large explosive fill and a nose fuze.',
     mechanism: 'Not a penetrator. Damage comes from casing fragments driven by the expanding gas (Gurney model) and from the impulse delivered to the plate, which can dish it and throw spall off the inside face of thin armour.',
-    defaults: { caliber: 0.088, ld: 4.2, mass: 9.40, velocity: 600, shell: 'mild', filler: 'compb', fillFrac: 0.62, fuzeDelay: 8e-6, noseFrac: 0.36 },
+    defaults: { caliber: 0.088, ld: 4.2, mass: 9.40, velocity: 600, shell: 'mild', filler: 'compb', fillFrac: 0.80, fuzeDelay: 8e-6, noseFrac: 0.36 },
     fuze: { kind: 'impact', delay: 8e-6, armThreshold: 5e4 },
     build(c) {
       const R = c.caliber / 2, L = c.ld * c.caliber, nl = L * c.noseFrac;
-      const wall = R * 0.16;
-      const body = profilePoly(bodyProfile('ogive', R, L, nl), L);
-      const cavX1 = -nl * 0.85, cavX0 = -L + wall * 1.6;
-      const cav = box(cavX0, cavX1, R - wall);
+      // A gun-launched HE shell has thick walls - it has to survive setback
+      // and spin - and its filler runs up into the ogive as far as the fuze.
+      // This one used to be a 7 mm skin round a rectangular cavity that
+      // stopped short of the ogive, leaving the whole nose SOLID steel: 2.7 kg
+      // of it, which the burst threw into the plate at 1.6 km/s and which,
+      // not the explosive, punched out a 50 mm plate. The cavity now follows
+      // the outer profile inset by the wall, ending at a nose fuze.
+      const wall = R * 0.36;
+      const outer = bodyProfile('ogive', R, L, nl);
+      const body = profilePoly(outer, L);
+      const fuzeLen = Math.min(nl * 0.45, 0.6 * c.caliber);
+      // fillFrac is the length of the cavity as a fraction of the shell, as it
+      // is for APHE. It used to be shown in the UI and ignored here.
+      const cavX0 = -L + wall * 1.6;
+      const cavX1 = Math.min(cavX0 + L * clampFrac(c.fillFrac, 0.80), -fuzeLen);
+      const cav = profilePoly((x) => Math.max(1e-4, outer(x) - wall), cavX1 - cavX0, 30, cavX1);
       return {
         refDiameter: c.caliber, penDiameter: c.caliber, length: L,
         fillerCentre: [(cavX0 + cavX1) / 2, 0],
@@ -318,13 +330,17 @@ export const PROJECTILE_TYPES = {
     key: 'hesh', name: 'HESH / HEP — squash head', family: 'chemical',
     desc: 'Soft-nosed shell filled with plastic explosive and fired by a base fuze.',
     mechanism: 'The filler squashes onto the plate before the base fuze functions. The detonation drives a compressive pulse into the armour which reflects from the free rear face as tension, tearing a scab off the inside. Nothing is "placed" there: the scab appears where the reflected tensile wave exceeds the local bond strength.',
-    defaults: { caliber: 0.105, ld: 4.0, mass: 16.10, velocity: 730, shell: 'mild', filler: 'hesh', fillFrac: 0.72, fuzeDelay: 120e-6 },
+    defaults: { caliber: 0.105, ld: 4.0, mass: 11.30, velocity: 730, shell: 'mild', filler: 'hesh', fillFrac: 0.72, fuzeDelay: 120e-6 },
     fuze: { kind: 'base-delay', delay: 120e-6, armThreshold: 2e4 },
     build(c) {
       const R = c.caliber / 2, L = c.ld * c.caliber;
       const wall = R * 0.09;
       const body = profilePoly(bodyProfile('round', R, L, L * 0.34), L);
-      const cavX1 = -L * 0.10, cavX0 = -L + wall * 3.0;
+      const cavX0 = -L + wall * 3.0;
+      // fillFrac sets the cavity length, as for HE and APHE (it used to be
+      // ignored). The default 0.72 holds ~3.4 kg, against the ~3 kg of a
+      // 105 mm HESH/HEP projectile of ~11.3 kg.
+      const cavX1 = Math.min(cavX0 + L * clampFrac(c.fillFrac, 0.72), -L * 0.06);
       const cav = profilePoly(bodyProfile('round', R - wall, cavX1 - cavX0, (cavX1 - cavX0) * 0.4), cavX1 - cavX0, 22, cavX1);
       return {
         refDiameter: c.caliber, penDiameter: c.caliber, length: L,
@@ -337,6 +353,12 @@ export const PROJECTILE_TYPES = {
     },
   }),
 };
+
+/** A filler fraction from the UI, kept to a buildable range. */
+function clampFrac(f, dflt) {
+  const v = Number.isFinite(f) ? f : dflt;
+  return Math.min(0.92, Math.max(0.1, v));
+}
 
 export const TYPE_ORDER = ['ap', 'apc', 'apcbc', 'aphe', 'apcr', 'apds', 'apfsds', 'he', 'heat', 'hesh'];
 
@@ -363,7 +385,15 @@ export function makeProjectileConfig(typeKey, overrides = {}) {
 export function buildProjectile(cfg) {
   const t = PROJECTILE_TYPES[cfg.type];
   const g = t.build(cfg);
-  const slab = (Math.PI / 4) * g.penDiameter;
+  // The section is one slab deep, chosen so the strip a projectile loads has
+  // the area the real round loads: pi/4 d deep for a body of diameter d.
+  // A HESH shell does not load its own diameter. It squashes into a pancake
+  // about two calibres across, and its momentum, its casing and its blast all
+  // land on that disc. At pi/4 d the strip under the pancake carried half the
+  // disc's plate mass, so every one of those loads hit twice the steel-per-
+  // newton-second a real plate sees. pi/2 r makes the strip's area 2r x slab
+  // equal to the disc's pi r^2 (r = one calibre, see World.blastFootprint).
+  const slab = cfg.type === 'hesh' ? (Math.PI / 2) * g.refDiameter : (Math.PI / 4) * g.penDiameter;
   for (const p of g.parts) {
     const d = p.diameter || g.refDiameter;
     p.scale = ((Math.PI / 4) * d) / slab * (p.thinFactor ?? 1) * (p.hollow ? p.hollow : 1);

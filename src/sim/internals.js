@@ -8,17 +8,69 @@
  *
  *   1. the striker must defeat the component casing (plugging-work model,
  *      shared with the fragment transport in fragments.js);
- *   2. the energy that survives is compared with a component toughness scale;
- *   3. component-specific consequences are applied.
+ *   2. the energy that survives is compared with the component's vulnerability
+ *      data below;
+ *   3. each component's consequence is applied ONCE, the first time its
+ *      condition is met, and rolled up into the standard kill categories.
  *
- * The toughness scales are *engineering placeholders*, not validated
- * vulnerability data. They are exposed in the UI so the user can see and edit
- * exactly what is driving each verdict. Nothing here is calibrated against
- * live-fire results and it should not be read as if it were.
+ * TWO KINDS OF THRESHOLD
+ * ----------------------
+ * A component can be put out of action in two ways, and the old model only
+ * had one of them:
+ *
+ *   - by a single strike above a per-hit threshold (`perHit`). This is how
+ *     people and propellant actually fail: one 100 J fragment incapacitates a
+ *     crewman, a thousand 1 J fragments do not. The crew threshold is the
+ *     classical ~79 J (58 ft-lbf) fragment incapacitation criterion; it is
+ *     crude, and it is used here only as a threshold, not as a probability.
+ *   - by accumulated damage. Machinery degrades with every strike and stops
+ *     when enough of it is wrecked. `tough` is the energy scale for that,
+ *     integrity = product over hits of exp(-E/tough).
+ *
+ * The old model gave crew ONLY the second kind, with a scale of 250 J. A crew
+ * position therefore needed roughly a kilojoule in total before it was
+ * counted as lost, while the log simultaneously reported "crew casualty" for
+ * every 120 J strike - the run said a man was hit thirty times and the verdict
+ * said he was fine.
+ *
+ * KILL CATEGORIES
+ * ---------------
+ * The usual vulnerability vocabulary:
+ *   K  catastrophic   ammunition reaction; the vehicle is lost
+ *   F  firepower      gun, sight or fire control out of action
+ *   M  mobility       powerpack or transmission out of action
+ *   crew casualties   counted per crew position (one crew component = one man)
+ *
+ * All the numbers are ENGINEERING PLACEHOLDERS, not validated vulnerability
+ * data. They are exposed in the UI so the user can see and edit exactly what
+ * is driving each verdict. Nothing here is calibrated against live-fire
+ * results and it should not be read as if it were.
  */
 
 import { MODULE_TYPES } from './scene.js';
 import { SEV } from '../core/events.js';
+
+/**
+ * What losing each component means. `at` is the integrity below which the
+ * consequence applies; `perHit` (J) applies it outright from a single strike.
+ */
+export const CONSEQUENCE = {
+  crew: { perHit: 80, at: 0.02, kind: 'crew', event: 'crew-casualty', sev: SEV.MAJOR,
+    text: (m, h) => `Crew casualty${m.label ? ` (${m.label})` : ''} — ${h.energy.toFixed(0)} J strike from ${h.source}`
+      + ` (incapacitation criterion ~80 J per fragment)` },
+  ammo: { perHit: 1400, at: 0.3, kind: 'K', event: 'ammo-reaction', sev: SEV.CRITICAL,
+    text: () => 'AMMUNITION REACTION — stowed charges initiated by the strike' },
+  fuel: { perHit: 2500, at: 0.3, kind: 'fire', event: 'fuel-fire', sev: SEV.MAJOR,
+    text: () => 'Fuel cell ruptured — fire likely (diesel is far harder to ignite than petrol)' },
+  engine: { at: 0.4, kind: 'M', event: 'mobility-kill', sev: SEV.MAJOR, text: () => 'Powerpack disabled — mobility kill' },
+  transmission: { at: 0.4, kind: 'M', event: 'mobility-kill', sev: SEV.MAJOR, text: () => 'Transmission disabled — mobility kill' },
+  breech: { at: 0.4, kind: 'F', event: 'firepower-kill', sev: SEV.MAJOR, text: () => 'Gun breech wrecked — firepower kill' },
+  optics: { at: 0.3, kind: 'F', event: 'firepower-kill', sev: SEV.MAJOR, text: () => 'Main sight destroyed — firepower kill' },
+  electronics: { at: 0.3, kind: 'F', event: 'firepower-kill', sev: SEV.MAJOR, text: () => 'Fire-control electronics destroyed — firepower kill' },
+  hydraulics: { at: 0.6, kind: 'F-', event: 'hydraulic-loss', sev: SEV.NOTE,
+    text: () => 'Hydraulic line severed — powered turret drive lost, leaking fluid is a fire risk' },
+  battery: { at: 0.4, kind: 'power', event: 'power-loss', sev: SEV.NOTE, text: () => 'Batteries wrecked — electrical power degraded' },
+};
 
 export class InternalDamage {
   constructor(scene, log, bus) {
@@ -27,7 +79,10 @@ export class InternalDamage {
     this.catastrophic = false;
   }
 
-  reset() { this.events.length = 0; this.catastrophic = false; this.scene.resetDamage(); }
+  reset() {
+    this.events.length = 0; this.catastrophic = false;
+    this.scene.resetDamage();
+  }
 
   /**
    * Apply a strike to a component.
@@ -37,12 +92,17 @@ export class InternalDamage {
   applyHit(m, hit) {
     const spec = MODULE_TYPES[m.type] || MODULE_TYPES.void;
     if (m.type === 'void') return;
-    const tough = (m.tough ?? spec.tough) * 1;
-    // fractional damage saturates: repeated small hits accumulate, a single
-    // large hit can destroy outright
-    const frac = 1 - Math.exp(-hit.energy / Math.max(tough, 1));
-    m.integrity = Math.max(0, m.integrity - frac);
+    const tough = Math.max(m.tough ?? spec.tough, 1);
+    // accumulated damage: repeated small hits add up, a single large hit can
+    // destroy outright
+    m.integrity = Math.max(0, m.integrity * Math.exp(-hit.energy / tough));
     m.hits.push(hit);
+    m.peakHit = Math.max(m.peakHit || 0, hit.energy);
+
+    const c = CONSEQUENCE[m.type];
+    const perHit = m.perHit ?? c?.perHit;
+    // a single strike over the per-hit threshold takes the component out
+    if (perHit && hit.energy >= perHit) m.integrity = Math.min(m.integrity, 0.02);
 
     const prev = m.state;
     if (m.integrity <= 0.02) m.state = 'destroyed';
@@ -52,61 +112,52 @@ export class InternalDamage {
     if (m.state !== prev) {
       const sev = m.state === 'destroyed' ? SEV.MAJOR : SEV.NOTE;
       this.log.add(hit.t, `module-${m.state}`,
-        `${spec.label}${m.label ? ` (${m.label})` : ''} ${m.state} — ${(hit.energy / 1000).toFixed(1)} kJ from ${hit.source}`,
+        `${spec.label}${m.label ? ` (${m.label})` : ''} ${m.state} — ${hit.energy >= 1000 ? `${(hit.energy / 1000).toFixed(1)} kJ` : `${hit.energy.toFixed(0)} J`} from ${hit.source}`,
         sev, { module: m.id });
     }
-
-    this.consequence(m, hit, spec);
+    this.consequence(m, hit, c);
   }
 
-  consequence(m, hit, spec) {
-    switch (m.type) {
-      case 'ammo': {
-        // Propellant/charge reaction threshold. Bulk energy density delivered
-        // to the stowage is the driver; a hot fragment is worse than a cold one.
-        const thresh = 1400;
-        if (hit.energy > thresh && m.integrity < 0.6 && !this.catastrophic) {
-          this.catastrophic = true;
-          this.log.add(hit.t, 'ammo-reaction',
-            'AMMUNITION REACTION — stowed charges initiated by the strike', SEV.CRITICAL, { module: m.id });
-          this.bus.emit('catastrophic', { module: m, hit });
-        }
-        break;
-      }
-      case 'fuel':
-        if (hit.energy > 2500 && m.integrity < 0.7) {
-          this.log.add(hit.t, 'fuel-fire', 'Fuel cell ruptured — ignition likely', SEV.MAJOR, { module: m.id });
-        }
-        break;
-      case 'crew':
-        if (hit.energy > 120) {
-          this.log.add(hit.t, 'crew-casualty',
-            `Crew position struck — ${(hit.energy).toFixed(0)} J delivered (incapacitation threshold ~80-150 J)`,
-            SEV.MAJOR, { module: m.id });
-        }
-        break;
-      case 'engine':
-      case 'transmission':
-        if (m.integrity < 0.4) this.log.add(hit.t, 'mobility-kill', `${spec.label} disabled — mobility kill`, SEV.MAJOR, { module: m.id });
-        break;
-      case 'hydraulics':
-        if (m.integrity < 0.6) this.log.add(hit.t, 'hydraulic-loss', 'Hydraulic line severed — turret drive lost', SEV.NOTE, { module: m.id });
-        break;
-      default: break;
+  /** Apply a component's consequence the first time its condition is met. */
+  consequence(m, hit, c) {
+    if (!c || m.effect) return;
+    if (m.integrity > c.at) return;
+    m.effect = c.kind;
+    this.events.push({ t: hit.t, module: m.id, kind: c.kind });
+    this.log.add(hit.t, c.event, c.text(m, hit), c.sev, { module: m.id });
+    if (c.kind === 'K' && !this.catastrophic) {
+      this.catastrophic = true;
+      this.bus.emit('catastrophic', { module: m, hit });
     }
   }
 
   summary() {
-    const out = { destroyed: [], damaged: [], catastrophic: this.catastrophic, kill: 'none' };
-    for (const m of this.scene.modules) {
+    const mods = this.scene.modules;
+    const out = {
+      destroyed: [], damaged: [], catastrophic: this.catastrophic, kill: 'none',
+      categories: [], crewHit: 0, crewTotal: 0, fire: false, notes: [],
+    };
+    for (const m of mods) {
       if (m.state === 'destroyed') out.destroyed.push(m);
       else if (m.state === 'damaged') out.damaged.push(m);
+      if (m.type === 'crew') { out.crewTotal++; if (m.effect === 'crew') out.crewHit++; }
+      if (m.effect === 'fire') out.fire = true;
     }
-    const has = (t, states) => this.scene.modules.some((m) => m.type === t && states.includes(m.state));
+    const any = (k) => mods.some((m) => m.effect === k);
+    if (this.catastrophic) out.categories.push('K');
+    if (any('F')) out.categories.push('F');
+    if (any('M')) out.categories.push('M');
+
     if (this.catastrophic) out.kill = 'catastrophic';
-    else if (has('crew', ['destroyed'])) out.kill = 'firepower / crew';
-    else if (has('engine', ['destroyed']) || has('transmission', ['destroyed'])) out.kill = 'mobility';
+    else if (out.categories.length) {
+      out.kill = out.categories.map((k) => ({ F: 'firepower', M: 'mobility' })[k]).join(' + ');
+    } else if (out.crewHit) out.kill = out.crewHit === out.crewTotal ? 'crew' : 'partial (crew)';
     else if (out.destroyed.length || out.damaged.length) out.kill = 'partial';
+
+    if (out.crewTotal) out.notes.push(`${out.crewHit} of ${out.crewTotal} crew positions hit`);
+    if (out.fire) out.notes.push('fuel fire likely');
+    if (any('F-')) out.notes.push('turret drive lost');
+    if (any('power')) out.notes.push('electrical power degraded');
     return out;
   }
 }

@@ -197,9 +197,24 @@ export function buildCassettes(scene, domain) {
     for (const [k, c] of cols) {
       if (!c.charge.length) { cols.delete(k); continue; }
       c.x /= c.charge.length; c.y /= c.charge.length;
-      c.span = spanBonds.get(k) || [];
-      c.chargeBonds = chargeBonds.get(k) || [];
+      c.span = [];
+      c.chargeBonds = [];
     }
+    // Bonds are binned by their MIDPOINT, which can fall in a slice that has
+    // no charge node of its own (a bond from the last charge node out to a
+    // plate node past the end of the charge, or a lattice row that happens to
+    // straddle the charge edge). Such a bond belonged to no column, was never
+    // cut, and left detonation products still bonded to a plate - measured at
+    // 4 bonds on a finer lattice. Each goes to the nearest column instead.
+    const nearestCol = (k) => {
+      for (let r = 0; r < 64; r++) {
+        const c = cols.get(k - r) || cols.get(k + r);
+        if (c) return c;
+      }
+      return null;
+    };
+    for (const [k, list] of spanBonds) { const c = nearestCol(k); if (c) c.span.push(...list); }
+    for (const [k, list] of chargeBonds) { const c = nearestCol(k); if (c) c.chargeBonds.push(...list); }
     if (!cols.size) continue;
 
     out.push({

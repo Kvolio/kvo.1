@@ -98,6 +98,33 @@ was meshed 971 mm long). The UI now shows a rod's real flight mass (rod + tip +
 fins), and typing a mass re-solves the L/D to reach it — flight mass is exactly
 linear in rod length, so the displayed L/D is always the simulated one.
 
+**Nor for an HE or HESH shell.** Stretching the body stretches the explosive
+with it. The 105 mm HESH shell is drawn with a thin casing, so it measured
+light, and matching 16.1 kg meshed it 1.08 m long (L/D 10) with 10.5 kg of
+explosive — three times the real charge. The shell keeps its drawn shape and
+filler; the difference goes into the casing (the base, fuze and driving band
+the outline does not draw) as extra *mass only*, so the casing does not also
+become stronger. The HESH default is now the projectile mass, 11.3 kg, not the
+16.1 kg of a complete round, and its filler is ~3.4 kg against the ~3 kg of a
+real 105 mm HESH/HEP. The HE shell's nose used to be solid steel ahead of a
+rectangular cavity — 2.7 kg of it — and that, thrown into the plate at
+1.6 km/s by the burst, was what punched through 50 mm plate. Its cavity now
+follows the outer profile inset by a realistic wall and runs up to a nose fuze:
+~1.2 kg of filler in the 88 mm default. *Filler fraction* in the UI now sets the
+cavity length of HE and HESH shells; it was shown and ignored before.
+
+**Lattice aliasing.** A body only a few lattice spacings across gets whatever
+number of rows happens to fall inside its outline: a 22 mm rod on a 5 mm
+lattice gets 4 rows or 5, a 12 % mass error that is fixed for one setup and
+different for the next. The same rod meshed as 3.73 kg in one scenario and
+4.22 kg in another, so two shots meant to differ only in their armour also
+differed in the threat. Each projectile part's meshed site count is now
+compared with the area it owns (supersampled with the mesher's priority rule)
+and its nodes' out-of-plane scale corrected by the ratio, which scales mass and
+bond stiffness together: the body carries its true mass and strength with its
+wave speed unchanged. Across the ERA comparison meshes the rod now comes out at
+4.0–4.17 kg every time.
+
 ### 2.5 Curved plates
 
 A layer can be flat, **convex** (bulging toward the shooter — a cast turret
@@ -740,6 +767,31 @@ escape sideways from a thin unconfined slab. It is a calibration constant, not
 a derivation; the resulting flyer velocity is logged so it can be checked
 against the 500–900 m/s that light ERA plates are usually quoted at.
 
+**Does it work? Measured against a fair control (November 2026).** Earlier
+live-versus-"empty" comparisons were confounded: replacing the charge by a gap
+changes the thinnest layer, hence the lattice and the corridor, hence the
+projectile's discretised mass (a rod came out 3.73 kg in one mesh and 4.22 kg
+in the other). The control is now the same cassette with an *inert* copy of the
+filler (identical mesh), and projectile mass is corrected for lattice aliasing
+(§2.4). Main-plate depth, 250 mm RHA at 60°, 100 mm behind the cassette:
+
+| threat | cassette | quality | inert | live |
+|---|---|---|---|---|
+| 125 mm DU rod, 1700 m/s | heavy (15/10/15 mm) | Normal | 223 mm | **172 mm** |
+| 120 mm HEAT jet | light (3/6/3 mm) | Normal | 90 mm | 133 mm |
+| 120 mm HEAT jet | light (3/6/3 mm) | Ultra | perforated (250) | **176 mm** |
+
+Against the rod the heavy cassette works at the ordinary resolution: 23 % less
+penetration than inert. Against the jet it works only once the lattice is fine
+enough. At the Normal budget (4.2 mm) the light cassette's 3 mm plates are
+sub-lattice, the jet is a single-file stream of nodes, and the hole it tears in
+the plates is ~80 mm wide; the plates fly off carrying the hole with them and
+the jet passes through it for most of its length, while an inert cassette's
+torn lips stay in the jet's path. At Ultra (2.9 mm) the plates meet the jet and
+the live cassette stops it well short of where the inert one lets it through.
+**A shaped charge facing a live cassette is therefore always meshed at the
+Ultra node budget**, whatever the quality setting, and the run log says so.
+
 **Resolution.** A layer needs a few nodes through its thickness before it
 behaves as a plate rather than as a line of loosely connected points. The
 mesher now takes the thinnest layer in the array into account when choosing the
@@ -773,15 +825,86 @@ symmetric sandwich   V = √(2E) · (M/C + 1/3)^(-1/2)
 with `√(2E)` the explosive's tabulated Gurney velocity. Near-field attenuation
 falls off geometrically beyond the charge radius.
 
+**A cylinder bursts sideways.** Gurney's cylindrical result drives the casing
+outward from the charge's *axis*, and a shell's fragments do fly out broadside.
+The casing used to be driven outward from the charge's centre point instead,
+which sends the whole forward third of a long shell straight ahead: an HE burst
+threw its nose into the plate at Gurney speed, and that, not the explosive,
+punched out 50 mm plates. A node beside the charge is now driven perpendicular
+to the shell axis, and only the end caps beyond the charge are driven forward
+or back, each from the nearest point of the charge's axial segment. This
+applies to HE, HESH and APHE.
+
 **Fragmentation is not scripted.** The imposed expansion field stretches the
 casing bonds past their failure strain and the casing breaks up on its own,
 with the fragment size distribution set by the material's failure strain and
 local strength scatter — the mechanism Mott's fragmentation theory describes,
 arrived at by simulation rather than by a fitted distribution.
 
-For HESH the same machinery drives the compressive pulse into the plate; the
-scab that comes off the rear face appears where the reflected tensile wave
+**Armour is a target, not a casing.** For HE and HESH the plate used to be
+driven exactly like the shell casing: every plate node within 3.2 charge radii
+pushed radially at the Gurney velocity, uniformly through its thickness. That
+launched a 50 mm plate section at ~1300 m/s into the compartment behind it, and
+because the whole thickness moved together no shock ever crossed the plate to
+reflect from its back face — which is the entire HESH mechanism. Armour now
+takes no Gurney drive. The struck layer's face is loaded with the momentum the
+blast actually delivers there, and the solver carries the pulse:
+
+* **HESH** squashes into a pancake about two calibres across, in contact: the
+  planar contact result, `J = (8/27)·C·D`.
+* **HE** is nose-fuzed and bursts with the front of its charge more than a
+  calibre off the plate, so it is not a contact charge. The plate takes the
+  share of the products' momentum heading its way, `J = ¼·C·√(2E)` (half the
+  products, at a mean obliquity of 60°), spread over a patch as wide as the
+  measured stand-off plus the charge. The nose fragments the burst throws are
+  meshed and strike the plate on their own.
+* **From the round to the slice.** The charge mass is the real one (the
+  body-of-revolution correction sees to that) but in 3-D it loads a disc of
+  radius `r` while the section loads a strip `2r` wide and one slab deep. What
+  must match is impulse per unit area of plate, so the strip takes
+  `J·2r·slab/(πr²)`.
+* **Depth.** The momentum arrives as a pulse no stronger than the explosive's
+  Chapman–Jouguet pressure, `p ≈ ρD²/4`; a pulse of specific impulse `i` at
+  peak pressure `p` occupies `c·i/p` of plate, so the load is laid in to that
+  depth, decaying linearly from the face (at least two lattice spacings, at
+  most 0.6 of the plate).
+* Energy is capped at a quarter of the charge's Gurney energy.
+
+The scab that comes off the rear face appears where the reflected tensile wave
 exceeds the local bond strength. Nothing is placed there.
+
+**The section depth for HESH.** The slab is normally `π/4·d` deep, so the
+strip a body of diameter `d` loads has the body's real area. A HESH shell does
+not load its own diameter: it squashes into a pancake about two calibres across,
+and its own momentum (8 kN·s for a 105 mm shell at 730 m/s, as much as the
+explosive delivers), its casing and its blast all land on that disc. At `π/4·d`
+the strip under the pancake carried half the disc's plate mass, so every one of
+those loads met half the steel a real plate puts in their way. A HESH section is
+therefore cut `π/2·r` deep, which makes the strip's area `2r × slab` equal the
+disc's `πr²`; projectile masses are unaffected (the per-part out-of-plane
+correction preserves them). Measured on a 105 mm HESH against RHA, before → after:
+120 mm, full footprint blown out → 49 mm dish, no breach; 200 mm, 80 mm dish →
+13 mm dish.
+
+**Support.** A blast footprint is wider than a calibre, and the deformable
+corridor used to be 1.7 calibres wide — the loaded patch *was* the corridor,
+held only at its two edges, and HE and HESH also had no lateral hold at all, so
+the meshed strip of plate was shoved backwards as a free body (a 50 mm plate
+section ended up 200 mm inside the compartment). The corridor now reaches past
+a free zone of footprint + one plate thickness, beyond which the plate is held
+as the hull holds it. A 2-D section is a strip clamped along two edges, which
+bends and plugs far more easily than the disc a real plate presents (half the
+shear perimeter per unit loaded area), so blast dishing in particular is
+over-predicted; the free zone is kept local to limit that, and this is a
+calibration choice, not a derivation.
+
+**Reporting.** A blast round has no penetrator, so the penetrator-mass test
+behind "perforated" can never fire, and a plate blown clean through used to be
+reported as "No penetration". The struck layer is now split by bond
+connectivity into what is still joined to its held edges and what has come
+away: a run of the footprint with no joined plate in it is reported as a
+breach with its width, and detached material that started in the rear half of
+the plate is reported as the scab.
 
 ### 5.3 Shaped charge — the largest single approximation
 
@@ -808,7 +931,13 @@ with the penetrator and the channel walls.
 **What leaves the window.** The corridor is a cut-out of a bigger plate, so its
 side walls are not free space: clamped and absorbing boundary rows stand in for
 the plate beyond them and are never debris, and material that runs into the
-plate beside the window is stopped by it and retired. Only material that
+plate beside the window is stopped by it and retired. That applies to material
+still bonded together too: a piece of a HESH-struck screen used to tear off as
+one bonded chunk, leave through the side of the window, and — being "still
+attached to its neighbours" — stay in the continuum, where nothing was meshed
+out there to stop it, so it flew through the main plate behind and into the
+ammunition. Past a side wall, bonded or not, material is now stopped by any
+plate it is inside or flown as fragments. Only material that
 emerges into open space (the front and rear faces) becomes a fragment.
 Detonation products and loose explosive are gas, not shrapnel, and are retired
 with their mass accounted for: a functioning reactive cassette used to "fire"
@@ -849,11 +978,36 @@ crossing a sloped plate obliquely sees the longer path. The plug leaves as a
 separate piece; mass and momentum are conserved.
 
 Components are resolved analytically: the striker must beat the casing, then
-the surviving energy is compared with a component toughness scale. **Those
-toughness scales are engineering placeholders, not validated vulnerability
-data.** They are editable in the UI so that whatever is driving a verdict is
-visible. Crew incapacitation thresholds in particular are order-of-magnitude
-figures.
+what survives is compared with the component's vulnerability data. There are
+two ways to lose a component:
+
+* **a single strike** over its *single-strike limit*: crew ~80 J (the classical
+  58 ft·lbf fragment incapacitation criterion, used as a threshold, not a
+  probability), ammunition 1.4 kJ, fuel 2.5 kJ;
+* **accumulated damage**: integrity is the product over strikes of
+  `exp(−E/toughness)`, and machinery stops when enough of it is wrecked.
+
+The old model had only the second, with a 250 J crew scale, so a crew position
+needed about a kilojoule in total before it counted as lost while the log
+reported a "crew casualty" for every 120 J strike — the run said a man was hit
+thirty times and the verdict said he was fine. It also re-logged a consequence
+on every later hit. Each consequence now applies **once**, and they roll up
+into the usual categories: **K** (catastrophic — ammunition reaction),
+**F** (firepower — breech, main sight or fire control lost; a severed
+hydraulic line is noted as loss of powered traverse), **M** (mobility —
+powerpack or transmission), plus crew casualties counted per crew component
+and notes for a likely fuel fire or lost electrical power.
+
+**Strike counting.** Peridynamic material inside a component's outline used to
+score a hit on every check. A node still bonded to the plate is pulled back up
+to speed by its neighbours after each velocity cut, so it re-scored every step:
+121 plate nodes behind an *unperforated* 50 mm plate registered 16,953 hits on
+a crew position and killed it. Each piece of material now delivers its energy
+to a component once, on arrival.
+
+**All of these numbers are engineering placeholders, not validated
+vulnerability data.** Toughness and single-strike limits are editable per
+component in the UI so that whatever is driving a verdict is visible.
 
 ---
 
@@ -1018,9 +1172,14 @@ calibrated to it. Lanz–Odermatt (analytics.js) is a perforation-limit fit to
 | round | family | sim mm | L–O mm | sim/ref |
 |---|---|---|---|---|
 | 3BM6 | steel | 310 | 211 | 1.47 |
-| 3BM15 | tungsten | 656 | 426 | 1.54 |
+| 3BM15 | tungsten | 688 | 426 | 1.62 |
 | M829A1 | DU | 848 | 551 | 1.54 |
 | DM53 | tungsten | 777 | 591 | 1.32 |
+
+(Re-run after the lattice-aliasing mass correction of §2.4: 3BM15 went from
+656 to 688 mm because its rod had been meshed light; the rest of the
+catalogue moved by less than one bisection step. Across all ten rods the
+ratio is 1.32–1.62.)
 
 **The rods perforate 1.3–1.5× too much — and the rod physics is not why.**
 3BM15 fired into a 1000 mm block stops at **375 mm**: 0.88 of the L–O limit,
@@ -1072,16 +1231,26 @@ was left alone.
 ### Open items, in priority order
 
 1. **Rod perforation criterion and thick-plate rear face** (above). The single
-   largest accuracy error in the model: 1.3–1.5× on every modern long rod.
+   largest accuracy error in the model: 1.3–1.6× on every modern long rod.
 2. **Capped shot ~15 % under de Marre**, systematic across calibre and speed.
-3. **Thin-rod mass aliasing**: one 2.94 kg rod meshed at 2.45–2.88 kg across
-   four plate thicknesses (§2.4). A lumped-mass correction to the specified
-   mass would remove it.
-4. **Catalogue rod dimensions are reconstructions.** At their specified
+3. ~~Thin-rod mass aliasing~~ — **resolved** by the lumped-mass correction of
+   §2.4; the same rod now meshes within ±2 % of its mass in every scenario.
+4. **Blast against plate in a 2-D section** (§5.2). Breach and no-breach now
+   come out in a plausible order — 88 mm HE breaches 15 mm and not 50 mm;
+   105 mm HESH breaches 60 mm, dishes 120 mm and 200 mm, and is defeated by a
+   10 mm screen 300 mm ahead of an 80 mm plate — but dishing is over-predicted
+   (an 88 mm HE dishes 50 mm plate 84 mm) and the HESH scab under-predicted
+   (~0.2 kg of spall from 120 mm where a real round tears off kilograms). The
+   linear bulk response has no equation of state, so the reflected tension
+   that makes a scab is weak (§3, limitation 6).
+5. **ERA against shaped charges needs the Ultra node budget** (§5.1a). Below
+   it the light cassette makes the jet *worse*; the budget is now enforced for
+   that case, at a cost in run time.
+6. **Catalogue rod dimensions are reconstructions.** At their specified
    geometry, Lanz–Odermatt lands at about 0.75–1.0× rough open-source
    penetration figures (mean ~0.83). Part of that is the database RHA at
    340 BHN, on the hard side of the 260–340 range the open figures assume.
-5. **`ricochet` is reported for a rebound at normal incidence** (§7.0).
+7. **`ricochet` is reported for a rebound at normal incidence** (§7.0).
 
 ## 8. Material data provenance
 

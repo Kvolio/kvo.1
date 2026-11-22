@@ -51,7 +51,26 @@ export class Projectile {
     // geometry is authoritative and the mass is whatever it comes out to.
     this.geometryAuthoritative = cfg.rodLd > 0;
     const target = cfg.mass;
-    if (target > 0 && this.massNoSabot > 0 && !this.geometryAuthoritative) {
+    // NOT for an HE or HESH shell either. Stretching the body to match the
+    // mass stretches the explosive with it: the 105 mm HESH round was meshed
+    // 1.08 m long (L/D 10) carrying 10.5 kg of explosive, three times the real
+    // charge, because its thin casing makes the drawn shell light. The charge
+    // is what decides a blast round's effect, so the shell keeps its drawn
+    // shape and filler, and the difference goes into the casing - the base,
+    // fuze and driving band the outline does not draw - as extra mass
+    // (density only, so the casing does not also become stronger).
+    const shell = cfg.type === 'he' || cfg.type === 'hesh';
+    if (shell && target > 0) {
+      const casing = this.parts.filter((q) => q.role === 2 && !q.sabot);
+      const mCase = casing.reduce((a, q) => a + q.mass, 0);
+      const mRest = this.massNoSabot - mCase;
+      if (mCase > 0) {
+        const mul = clamp((target - mRest) / mCase, 0.5, 4);
+        const byLabel = new Set(casing.map((q) => q.label));
+        for (const part of this.geom.parts) if (part.role === 2 && !part.sabot && byLabel.has(part.label)) part.massMul = mul;
+        this.measure();
+      }
+    } else if (target > 0 && this.massNoSabot > 0 && !this.geometryAuthoritative) {
       const k = target / this.massNoSabot;
       for (const part of this.geom.parts) {
         for (let i = 0; i < part.poly.length; i += 2) part.poly[i] *= k;
@@ -93,7 +112,7 @@ export class Projectile {
     }
     let m = 0, cx = 0, cy = 0, I = 0, mNo = 0;
     for (const p of parts) {
-      p.mass = p.mat.rho * p.area * this.slab * p.scale;
+      p.mass = p.mat.rho * p.area * this.slab * p.scale * (p.massMul ?? 1);
       p.cx = p.area > 0 ? p.sx / p.area : 0;
       p.cy = p.area > 0 ? p.sy / p.area : 0;
       m += p.mass; cx += p.cx * p.mass; cy += p.cy * p.mass;
@@ -105,7 +124,7 @@ export class Projectile {
     this.cgx = m > 0 ? cx / m : 0;
     this.cgy = m > 0 ? cy / m : 0;
     for (const p of parts) {
-      const rho = p.mat.rho * this.slab * p.scale;
+      const rho = p.mat.rho * this.slab * p.scale * (p.massMul ?? 1);
       I += rho * (p.sxx - 2 * this.cgx * p.sx - 2 * this.cgy * p.sy
         + (this.cgx * this.cgx + this.cgy * this.cgy) * p.area);
     }
