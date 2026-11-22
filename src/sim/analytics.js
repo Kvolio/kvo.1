@@ -76,6 +76,87 @@ export function tatePenetration({ rhoP, rhoT, Yp, Rt, L0, v0, obliquity = 0, max
   };
 }
 
+/**
+ * LANZ-ODERMATT PERFORATION EQUATION
+ * ----------------------------------
+ * Empirical perforation limit of a long-rod penetrator against a steel plate,
+ * as published by W. Odermatt (longrods.ch, "Perforation Equation"; Lanz &
+ * Odermatt). Unlike Tate it has no free constants to choose: it is a fit to 99
+ * tungsten, 42 DU and 40 steel-rod firings, with a stated standard deviation
+ * of 3.3 / 3.5 / 2.8 %.
+ *
+ *   P/Lw = a * 1/tanh(b0 + b1 Lw/D) * cos^m(theta) * sqrt(rhoP/rhoT) * exp(-s^2/v^2)
+ *
+ *   tungsten, DU:  s^2 = (c0 + c1 BHN_T) BHN_T / rhoP
+ *   steel:         s^2 = c0 BHN_T^k BHN_P^n / rhoP
+ *
+ * P is the LINE-OF-SIGHT thickness at the perforation limit (m < 0, so it
+ * grows with obliquity). It is a perforation limit of a finite plate, so it is
+ * the like-for-like reference for a bisected ballistic limit - Tate predicts
+ * semi-infinite penetration depth, which is always somewhat shallower.
+ *
+ * UNITS. The source states none. They are fixed by its own v_min formula,
+ * v_min = sqrt(s^2 / 1.5): only density in kg/m^3 with velocity in km/s gives
+ * a sensible minimum (about 0.97 km/s for tungsten against 260 BHN steel).
+ * Density in g/cm^3, or velocity in m/s, makes the hardness term either
+ * astronomically large or negligible.
+ *
+ * Validity as published: Lw/D >= 4, obliquity 0-75 deg, target 150-500 BHN,
+ * steel penetrators 200-750 BHN, and v above v_min. Outside that the function
+ * still returns a number but flags `valid: false`.
+ */
+export const LANZ_ODERMATT = {
+  b0: 0.283, b1: 0.0656, m: -0.224,
+  tungsten: { a: 0.994, c0: 134.5, c1: -0.148 },
+  du: { a: 0.825, c0: 90.0, c1: -0.0849 },
+  steel: { a: 1.104, c0: 9874, k: 0.3598, n: -0.2342 },
+};
+
+/** Which Lanz-Odermatt family a penetrator material belongs to, or null. */
+export function lanzOdermattFamily(mat) {
+  const k = mat.key || '';
+  if (k === 'du') return 'du';
+  if (/^wha|^tungsten$/.test(k)) return 'tungsten';
+  if (mat.class === 'metal' && mat.rho > 7500 && mat.rho < 8300) return 'steel';
+  return null;   // carbide, diamond, tantalum, copper... outside the fitted data
+}
+
+/**
+ * @param {object} o
+ * @param {'tungsten'|'du'|'steel'} o.family
+ * @param {number} o.Lw    working (rod) length, m
+ * @param {number} o.D     rod diameter, m
+ * @param {number} o.rhoP  rod density, kg/m^3
+ * @param {number} o.rhoT  target density, kg/m^3
+ * @param {number} o.bhnT  target Brinell hardness
+ * @param {number} [o.bhnP] rod Brinell hardness (steel rods only)
+ * @param {number} o.v     striking velocity, m/s
+ * @param {number} [o.obliquity] rad, from the plate normal
+ * @returns {{los:number, normal:number, vmin:number, valid:boolean, why:string}}
+ */
+export function lanzOdermatt({ family, Lw, D, rhoP, rhoT, bhnT, bhnP = 0, v, obliquity = 0 }) {
+  const C = LANZ_ODERMATT[family];
+  if (!C) return { los: NaN, normal: NaN, vmin: NaN, valid: false, why: 'no fitted family' };
+  const { b0, b1, m } = LANZ_ODERMATT;
+  const s2 = family === 'steel'
+    ? (C.c0 * Math.pow(bhnT, C.k) * Math.pow(Math.max(bhnP, 1), C.n)) / rhoP
+    : ((C.c0 + C.c1 * bhnT) * bhnT) / rhoP;
+  const vk = v / 1000;
+  const ratio = C.a / Math.tanh(b0 + (b1 * Lw) / D)
+    * Math.pow(Math.cos(obliquity), m)
+    * Math.sqrt(rhoP / rhoT)
+    * Math.exp(-s2 / (vk * vk));
+  const los = ratio * Lw;
+  const vmin = Math.sqrt(s2 / 1.5) * 1000;
+  const why = [];
+  if (Lw / D < 4) why.push(`L/D ${(Lw / D).toFixed(1)} < 4`);
+  if (obliquity > (75 * Math.PI) / 180) why.push('obliquity > 75 deg');
+  if (bhnT < 150 || bhnT > 500) why.push(`target ${bhnT} BHN outside 150-500`);
+  if (family === 'steel' && (bhnP < 200 || bhnP > 750)) why.push(`rod ${bhnP} BHN outside 200-750`);
+  if (v < vmin) why.push(`v ${v.toFixed(0)} below v_min ${vmin.toFixed(0)} m/s`);
+  return { los, normal: los * Math.cos(obliquity), vmin, valid: why.length === 0, why: why.join('; ') };
+}
+
 /** Cavity-expansion target resistance used for R_t. */
 export function cavityResistance(Y, E) {
   return (2 / 3) * Y * (1 + Math.log(Math.max(E / (3 * Y), 1.0001)));

@@ -142,6 +142,18 @@ export const STEELS = [
     refs: ['ASM Handbook vol. 1: AISI 1020 normalised, Y 345 MPa, UTS 440 MPa, A 36 %'],
     rho: 7850, E: 2e11, nu: 0.3, Y: 3.45e8, UTS: 4.4e8, epsF: 0.36, G0: 98000, BHN: 131, jcC: 0.022,
     Tm: 1793, cp: 477, jcM: 1.03, brittle: 0, weibull: 30, compFail: false, erosionResist: 0.55,
+    // CALIBRATION, not a property. The soft-metal compression (TUNE.softMetalExp)
+    // was fitted when mild steel was stored at Y 0.26 / UTS 0.42 GPa with the
+    // solver working at Y. The library audit then corrected it to the honest
+    // Y 0.345 / UTS 0.44 and moved the solver to Y + 0.4 (UTS - Y), but the
+    // calibration was not re-run: mild steel's effective plate strength rose
+    // to 1.03 GPa (66 % of RHA's) while keeping twice RHA's failure strain, and
+    // it came out AS GOOD AS RHA - ME 1.01 against a published band of
+    // 0.65-0.95 (tools/validate-materials.mjs), and better than RHA once
+    // overmatched. Bisected: 0.65 gives ME 0.80, the centre of the band; 0.75
+    // gives 0.86. Cast steel and aluminium sit inside their bands at the shared
+    // setting, so this is corrected here rather than in the shared exponent.
+    plateScale: 0.65,
     color: '#6c757f', color2: '#3f454d',
     notes: 'Structural, not armour. Deforms and petals rather than plugs.',
   }),

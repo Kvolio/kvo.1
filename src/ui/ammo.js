@@ -20,16 +20,24 @@
  *     ballistics here, so every round is being fired at point blank. A round
  *     quoted at 1700 m/s does not arrive at 1700 m/s at 2000 m.
  *   - Sub-calibre rod dimensions (`rodD`, `rodLd`) are rarely published for
- *     anything modern. Where they are not, they are inferred from the quoted
- *     projectile mass and the core material's density at a plausible L/D. They
- *     are consistent with the mass, which is what the simulation actually
- *     integrates, but they are not the real rod.
+ *     anything modern; most here are reconstructions, not the real rod. For a
+ *     long rod THE GEOMETRY IS WHAT IS SIMULATED: the rod is meshed at exactly
+ *     rodD x rodLd and its mass follows from the core density.
+ *   - The `mass` on an APFSDS entry is the quoted projectile mass, which in
+ *     open sources includes the sabot. It is kept as a record and is NOT used
+ *     to size the rod. It used to be: the builder matched it against the mass
+ *     WITHOUT the sabot by stretching the rod, so the sabot's share became
+ *     extra rod - simulated L/D was off by -34 % to +170 % (3BM6's 360 mm
+ *     steel rod was meshed 971 mm long), and long-rod penetration with it.
+ *     Measured against the Lanz-Odermatt perforation equation, the specified
+ *     geometry lands at a consistent 0.75-1.0x the rough open-source
+ *     penetration figures; the stretched geometry scattered from 0.6x to 1.6x.
  *   - Core materials are the usual class for the round's generation - steel,
  *     tungsten carbide, tungsten heavy alloy, depleted uranium - not a
  *     specific alloy specification.
  *
- * So this is a catalogue of plausible reconstructions with correct mass and
- * velocity, not a data table. Penetration figures the simulation produces from
+ * So this is a catalogue of plausible reconstructions with correct velocity
+ * and, for full-calibre shot, correct mass - not a data table. Penetration figures the simulation produces from
  * them should be read the same way.
  */
 

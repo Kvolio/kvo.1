@@ -39,8 +39,19 @@ export class Projectile {
 
     // Optional mass target: scale the body *length* until the measured mass
     // matches. Area is exactly linear in an axial scale, so one pass converges.
+    //
+    // NOT for a round whose rod is specified explicitly (rodLd). A long rod's
+    // penetration is set by its length, and the rod dimensions are what the
+    // user sees and edits. Matching a mass by stretching the rod silently
+    // replaced them: catalogue masses are quoted WITH the sabot, the match is
+    // made WITHOUT it, so the sabot's share of the mass was turned into extra
+    // rod. Measured across the catalogue, simulated L/D differed from the
+    // specified L/D by -34 % to +170 % - a 1960s 360 mm steel rod was meshed
+    // 971 mm long - and penetration followed. With an explicit L/D the
+    // geometry is authoritative and the mass is whatever it comes out to.
+    this.geometryAuthoritative = cfg.rodLd > 0;
     const target = cfg.mass;
-    if (target > 0 && this.massNoSabot > 0) {
+    if (target > 0 && this.massNoSabot > 0 && !this.geometryAuthoritative) {
       const k = target / this.massNoSabot;
       for (const part of this.geom.parts) {
         for (let i = 0; i < part.poly.length; i += 2) part.poly[i] *= k;

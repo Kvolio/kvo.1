@@ -70,6 +70,11 @@ than increasing penetration or reducing ricochet until a result looks right.
   material-ordering assertion remains intact; no strengths, contact laws or
   ammunition-performance parameters were changed to force it to pass.
   Current scenario-suite results are recorded in the follow-up PR.
+  **Resolved since (MODEL.md §7a):** the ordering failure was a stale
+  calibration, not a model limit. Mild steel bisected at mass efficiency 1.01
+  against its published 0.65–0.95 band, because the library audit corrected
+  its stored yield without re-running the soft-metal fit. Restored to 0.80 with
+  a per-material `plateScale`; cast and aluminium were already in band.
 - Standalone build and `git diff --check`.
 
 No `.game-dev/adapter.json` exists in this repository. Visual evidence uses

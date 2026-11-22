@@ -88,6 +88,21 @@ a fudge factor. Mass is measured by sampling the assembly on a fine grid using
 the same first-match priority rule the mesher uses, so the quoted mass is
 exactly the mass that gets discretised, cavities included.
 
+**Except for a long rod with an explicit L/D.** There the rod geometry is
+authoritative and the mass is derived from it. A long rod's penetration is set
+by its length, and matching a mass by stretching it silently replaced the
+dimensions the user sees: catalogue masses are quoted *with* the sabot, the
+match excluded it, so the sabot's share became extra rod. Measured across the
+catalogue, simulated L/D was off by −34 % to +170 % (3BM6's 360 mm steel rod
+was meshed 971 mm long). The UI now shows a rod's real flight mass (rod + tip +
+fins), and typing a mass re-solves the L/D to reach it — flight mass is exactly
+linear in rod length, so the displayed L/D is always the simulated one.
+
+**Discretisation still moves a thin rod's mass.** A 22 mm rod on a ~5 mm
+lattice is four or five nodes across depending on how it aliases onto the grid,
+and the meshed mass of one specified 2.94 kg rod was measured at 2.45–2.88 kg
+across four plate thicknesses (up to −17 %). See §7a.
+
 ---
 
 ## 3. Constitutive model
@@ -852,24 +867,27 @@ dominate the figure the moment the plate is perforated.
 
 ## 7. Known limitations
 
-### 7.0 Obliquity below the ricochet threshold buys nothing
+### 7.0 Obliquity below the ricochet threshold — resolved
 
-Surfaced while removing the fixed event window (§4.7), which had been hiding
-it: once runs are allowed to finish, an 88 mm APCBC at 800 m/s exits 70 mm of
-flat RHA at 399 m/s and 70 mm at 60° at **416 m/s** — the extra 70 mm of
-line-of-sight steel costs the round nothing at all. The same 140 mm presented
-as *flat* plate costs it a great deal (173 m/s exit).
+This section used to record that a sloped plate below the ricochet angle
+behaved as though only its normal thickness counted: an 88 mm APCBC at 800 m/s
+exited 70 mm of flat RHA at 399 m/s and 70 mm at 60° at 416 m/s. The later
+sloped-armour work (§3.6a: corridor face clamping, the free zone, sloped-layer
+depth sec^1.0) changed that. Re-measured on the current code in the accuracy
+audit (§7a):
 
-Above the ricochet threshold the model behaves correctly and strongly: at
-100 mm the flat plate is perforated and the 60° plate turns the shot away with
-nothing defeated. So obliquity is not ignored — it is all-or-nothing. Below the
-angle at which the round is deflected, the sloped plate behaves as though only
-its normal thickness counts, and the longer path through the material is not
-being paid for.
+| plate | result |
+|---|---|
+| 70 mm flat | perforated, exit 252 m/s |
+| 70 mm at 60° | **defeated** — shot turned away, 31 mm of plate defeated |
+| 140 mm flat (= the 60° plate's line of sight) | defeated, rebounds at 45 m/s |
 
-The regression check for obliquity is deliberately pinned at 100 mm, where the
-discrimination is real, and deliberately *not* at 70 mm, where pinning it would
-only have concealed this. Cause not yet established.
+So obliquity now pays for its line of sight. The 100 mm obliquity check stays
+where it is; it no longer has anything to hide.
+
+One reporting oddity remains: the 140 mm *flat* case is flagged `ricochet`.
+At normal incidence a stopped shot that comes back is a rebound, not a
+ricochet, and the label overstates what happened.
 
 
 1. **Not validated.** No comparison against firing trials has been performed.
@@ -924,6 +942,107 @@ only have concealed this. Cause not yet established.
     accounted but not transported.
 
 ---
+
+## 7a. Accuracy against independent references (audit, November 2026)
+
+Every number below is a **bisected ballistic limit** at normal incidence,
+quality `low` — the thickest RHA plate the round perforates — set beside an
+independent reference. Commands: `node tools/validate.mjs <keys>` and
+`node tools/validate-materials.mjs <materials>`. Bisection resolution is about
+±6 %, so differences smaller than that are noise.
+
+### Full-calibre shot vs de Marre
+
+| round | v m/s | sim mm | de Marre mm | sim/ref |
+|---|---|---|---|---|
+| 2-pdr AP (uncapped) | 792 | 72 | 60 | 1.20 |
+| 75 mm M61 APCBC | 618 | 67 | 80 | 0.84 |
+| 88 mm KwK 36 PzGr 39 | 773 | 107 | 124 | 0.86 |
+| 17-pdr APCBC | 884 | 122 | 142 | 0.86 |
+| 88 mm KwK 43 PzGr 39 | 1000 | 146 | 178 | 0.82 |
+| 122 mm BR-471 | 795 | 148 | 172 | 0.86 |
+
+All six inside the ±25 % tolerance. But the capped shot is **0.82–0.86 across
+five rounds, 75–122 mm and 618–1000 m/s** — a systematic ~15 % shortfall, not
+scatter. de Marre's constant is itself a two-point fit (analytics.js), so this
+is recorded rather than tuned away.
+
+### Long rods vs Lanz–Odermatt
+
+The validator's rod reference used to be Tate with a hand-chosen R_t and rod
+strength. Tate predicts **semi-infinite depth** but was compared against a
+perforation limit, and it read 7–17 % *above* Lanz–Odermatt on 9 of 10
+catalogue rods — so it was 15–25 % too generous, and the rods had been
+calibrated to it. Lanz–Odermatt (analytics.js) is a perforation-limit fit to
+181 firings with a 3 % standard deviation and is now the rod reference.
+
+| round | family | sim mm | L–O mm | sim/ref |
+|---|---|---|---|---|
+| 3BM6 | steel | 310 | 211 | 1.47 |
+| 3BM15 | tungsten | 656 | 426 | 1.54 |
+| M829A1 | DU | 848 | 551 | 1.54 |
+| DM53 | tungsten | 777 | 591 | 1.32 |
+
+**The rods perforate 1.3–1.5× too much — and the rod physics is not why.**
+3BM15 fired into a 1000 mm block stops at **375 mm**: 0.88 of the L–O limit,
+which is where semi-infinite depth should sit, just below the perforation
+limit. Erosion is right. What is wrong is how a *finite* plate is declared
+perforated:
+
+| 3BM15 into | outcome | what emerged at break-out |
+|---|---|---|
+| 1000 mm | stopped at 375 mm | — |
+| 430 mm (1.0× L–O) | perforated | the rod, 599 m/s |
+| 560 mm | perforated | 270 m/s |
+| 650 mm (1.5× L–O) | "perforated" | 16 g of debris at 87 m/s — 0.6 % of the rod |
+
+Two things combine. The perforation test fires when about 1 % of the
+penetrator's mass is past the back face, and eroded rod debris still counts as
+penetrator; Lanz–Odermatt and de Marre mean a coherent residual comes through
+(about 1–1.5 rod diameters of rod, per Odermatt). And a thick plate in this 2D
+section fails from the rear far too early: the 650 mm plate let the rod 275 mm
+further than the solid block did, where a real rod gains one or two
+diameters. A full-calibre shell does not show this because it stays in one
+piece — "1 % through" and "the shot came through" coincide — which is why
+capped shot reads *under* de Marre while rods read *over*.
+
+**Do not retune the rods to close this gap.** Their depth is right. The fix
+belongs in the perforation criterion (a residual-mass threshold of roughly one
+rod diameter of rod, about 5 % of rod mass, which is Odermatt's own
+definition) and in the rear-face behaviour of thick plates.
+
+### Materials vs published efficiency bands (75 mm PzGr 39, 790 m/s)
+
+| material | ME measured | band | |
+|---|---|---|---|
+| mild steel | 1.01 → **0.80** | 0.65–0.95 | corrected (below) |
+| cast | 1.01 | 0.85–1.05 | ok |
+| HHA | 1.21 | 1.05–1.5 | ok |
+| Al 5083 | 1.32 | 0.9–1.5 | ok |
+
+Mild steel was as good as RHA, and better once overmatched — the open
+"UHH / RHA / mild" ordering failure in AMMUNITION-AUDIT.md. Cause: the
+soft-metal compression (`softMetalExp`) was fitted to mild steel's old stored
+properties, then the library audit corrected its yield and moved the solver to
+Y + 0.4 (UTS − Y) without re-running the fit. Its effective plate strength
+rose to 66 % of RHA's while it kept twice RHA's failure strain. Corrected with
+`plateScale: 0.65` on the material (bisected: 0.65 → 0.80, 0.75 → 0.86).
+Cast and aluminium sit in band at the shared setting, so the shared exponent
+was left alone.
+
+### Open items, in priority order
+
+1. **Rod perforation criterion and thick-plate rear face** (above). The single
+   largest accuracy error in the model: 1.3–1.5× on every modern long rod.
+2. **Capped shot ~15 % under de Marre**, systematic across calibre and speed.
+3. **Thin-rod mass aliasing**: one 2.94 kg rod meshed at 2.45–2.88 kg across
+   four plate thicknesses (§2.4). A lumped-mass correction to the specified
+   mass would remove it.
+4. **Catalogue rod dimensions are reconstructions.** At their specified
+   geometry, Lanz–Odermatt lands at about 0.75–1.0× rough open-source
+   penetration figures (mean ~0.83). Part of that is the database RHA at
+   340 BHN, on the hard side of the 260–340 range the open figures assume.
+5. **`ricochet` is reported for a rebound at normal incidence** (§7.0).
 
 ## 8. Material data provenance
 

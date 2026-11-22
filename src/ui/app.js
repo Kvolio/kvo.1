@@ -186,6 +186,23 @@ export class App {
       if (!(key in cfg)) continue;
       const f = FIELDS[key];
       const sc = f.scale || 1;
+      // A long rod's mass is DERIVED from its diameter and L/D (see
+      // Projectile: rod geometry is authoritative). Showing cfg.mass here
+      // would display a number the simulation is not using - catalogue masses
+      // are quoted with the sabot. So the field shows the real flight mass
+      // (rod + tip + fins, sabot discarded), and typing a mass re-solves the
+      // L/D to hit it. Flight mass is exactly linear in rod length, because
+      // the rod, its tip and the fin block all scale with L, so one ratio
+      // lands it.
+      if (key === 'mass' && w.projectile.geometryAuthoritative) {
+        const mFlight = w.projectile.massNoSabot;
+        p.body.appendChild(row('Flight mass, rod + fins (kg)',
+          num(mFlight, { dp: f.dp, step: f.step, onchange: (v) => {
+            if (!(v > 0) || !(mFlight > 0)) return;
+            set('rodLd', cfg.rodLd * (v / mFlight));
+          } })));
+        continue;
+      }
       p.body.appendChild(row(f.unit ? `${f.label} (${f.unit})` : f.label,
         num(cfg[key] * sc, { dp: f.dp, step: f.step, onchange: (v) => set(key, v / sc) })));
     }

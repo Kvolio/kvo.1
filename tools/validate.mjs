@@ -24,7 +24,7 @@ import { World } from '../src/sim/world.js';
 import { Scene, makeLayer } from '../src/sim/scene.js';
 import { makeProjectileConfig } from '../src/sim/projectileTypes.js';
 import { AMMO, AMMO_ORDER } from '../src/ui/ammo.js';
-import { deMarreThickness, tatePenetration } from '../src/sim/analytics.js';
+import { deMarreThickness, tatePenetration, lanzOdermatt, lanzOdermattFamily } from '../src/sim/analytics.js';
 import { getMaterial } from '../src/materials/database.js';
 import { DEG } from '../src/core/math.js';
 
@@ -72,6 +72,20 @@ function reference(a) {
       T: deMarreThickness({ velocity: probe.projectile.speed, diameter: d.penDiameter,
         mass: probe.projectile.mass, obliquity: obl }),
     };
+  }
+  if (a.type === 'apfsds') {
+    // LANZ-ODERMATT first. It is a perforation-limit fit to 181 firings, which
+    // is exactly what the bisection below measures. Tate was used here before:
+    // it has two hand-chosen constants and predicts SEMI-INFINITE depth, yet
+    // it read 7-17 % above Lanz-Odermatt on 9 of 10 catalogue rods - i.e. it
+    // was 15-25 % too generous, and the rods had been calibrated to it.
+    const pen = probe.projectile.parts.find((p) => p.role === 1) || probe.projectile.parts[0];
+    const family = lanzOdermattFamily(pen.mat);
+    if (family) {
+      const lo = lanzOdermatt({ family, Lw: d.length, D: d.penDiameter, rhoP: pen.mat.rho,
+        rhoT: rha.rho, bhnT: rha.BHN, bhnP: pen.mat.BHN, v: probe.projectile.speed, obliquity: obl });
+      return { model: `Lanz-Odermatt (${family})${lo.valid ? '' : ' OUT OF RANGE: ' + lo.why}`, T: lo.normal };
+    }
   }
   if (['apds', 'apfsds'].includes(a.type)) {
     const pen = probe.projectile.parts.find((p) => p.role === 1) || probe.projectile.parts[0];

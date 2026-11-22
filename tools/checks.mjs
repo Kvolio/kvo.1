@@ -19,6 +19,7 @@ import { PROJECTILE_TYPES, TYPE_ORDER } from '../src/sim/projectileTypes.js';
 import { PRESETS, PRESET_ORDER } from '../src/ui/presets.js';
 import { AMMO, AMMO_ORDER, ammoLabel } from '../src/ui/ammo.js';
 import { sandwichFlyerVelocity } from '../src/sim/era.js';
+import { lanzOdermatt, lanzOdermattFamily } from '../src/sim/analytics.js';
 import { FragmentSystem, clipLine, perforate } from '../src/sim/fragments.js';
 import { MATERIALS, ARMOUR_KEYS, PENETRATOR_KEYS, GROUPS, sampleGradient, describeMaterial,
   getMaterial, keysFor } from '../src/materials/database.js';
@@ -190,6 +191,59 @@ console.log('\n== the historic ammunition catalogue ==');
     `1939 vs 2003 through the same 100 mm plate: `
     + `2-pdr exits at ${old.stats.residualVelocity.toFixed(0)} m/s, `
     + `M829A3 at ${modern.stats.residualVelocity.toFixed(0)} m/s`);
+}
+
+console.log('\n== a long rod is meshed at the geometry it is given ==');
+{
+  // THE BUG THIS GUARDS
+  // The builder used to match the quoted mass by stretching the rod. Catalogue
+  // masses include the sabot, the match excluded it, so the sabot's share
+  // became extra rod: simulated L/D was off by -34 % to +170 %, a 360 mm
+  // steel rod was meshed 971 mm long, and penetration followed the length.
+  let worst = 0, worstKey = '';
+  for (const key of AMMO_ORDER) {
+    const a = AMMO[key];
+    if (a.type !== 'apfsds' || !(a.cfg.rodLd > 0)) continue;
+    const w = new World();
+    const sc = new Scene(); sc.setLayers([makeLayer({ material: 'rha', thickness: 0.1 })]);
+    w.setScene(sc);
+    w.setProjectile(makeProjectileConfig(a.type, a.cfg));
+    const d = w.projectile.describe();
+    const err = Math.abs(d.length / d.penDiameter / a.cfg.rodLd - 1);
+    if (err > worst) { worst = err; worstKey = key; }
+  }
+  check(worst < 0.01,
+    `every catalogue rod is meshed at its specified L/D (worst ${(worst * 100).toFixed(1)} %`
+    + `${worstKey ? `, ${worstKey}` : ''})`);
+  // and a round with no explicit L/D still honours its mass target
+  const def = new World();
+  const sc = new Scene(); sc.setLayers([makeLayer({ material: 'rha', thickness: 0.1 })]);
+  def.setScene(sc);
+  def.setProjectile(makeProjectileConfig('apcbc', { mass: 9.0 }));
+  check(Math.abs(def.projectile.massNoSabot / 9.0 - 1) < 0.02,
+    `a full-calibre shot still meets its mass target (${def.projectile.massNoSabot.toFixed(2)} kg for 9.00)`);
+}
+
+console.log('\n== Lanz-Odermatt reference ==');
+{
+  // Hand check against the published equation, and the unit choice: only
+  // kg/m3 with km/s gives a sensible v_min (~0.97 km/s, tungsten vs 260 BHN).
+  const h = lanzOdermatt({ family: 'tungsten', Lw: 0.66, D: 0.022, rhoP: 17600, rhoT: 7850,
+    bhnT: 260, v: 1650 });
+  check(Math.abs(h.los / 0.66 - 0.904) < 0.005,
+    `tungsten L/D 30 at 1650 m/s into 260 BHN: P/L ${(h.los / 0.66).toFixed(3)} (hand-computed 0.904)`);
+  check(Math.abs(h.vmin - 972) < 10 && h.valid,
+    `v_min ${h.vmin.toFixed(0)} m/s confirms density in kg/m3 and velocity in km/s`);
+  // obliquity: m < 0, so line-of-sight perforation grows and normal shrinks
+  const o = lanzOdermatt({ family: 'tungsten', Lw: 0.66, D: 0.022, rhoP: 17600, rhoT: 7850,
+    bhnT: 260, v: 1650, obliquity: Math.PI / 3 });
+  check(o.los > h.los && o.normal < h.los,
+    `at 60 deg the LOS limit grows (${(o.los * 1000).toFixed(0)} mm) and the normal shrinks `
+    + `(${(o.normal * 1000).toFixed(0)} mm)`);
+  check(lanzOdermattFamily(getMaterial('du')) === 'du'
+    && lanzOdermattFamily(getMaterial('wha')) === 'tungsten'
+    && lanzOdermattFamily(getMaterial('diamond')) === null,
+    'core materials map to their fitted family, and unfitted ones to none');
 }
 
 console.log('\n== explosive reactive armour ==');
