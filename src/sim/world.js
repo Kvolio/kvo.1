@@ -160,6 +160,7 @@ export class World {
     this.internals.reset();
     this.recorder.clear();
     this.stats = this.blankStats();
+    if (this.perf) this.perf.playRate = 0;
     this.residual = null;
     this.impactStartTime = 0;
     this.settleTime = 0;
@@ -241,6 +242,7 @@ export class World {
   /** @param {number} realDt seconds of wall-clock time since the last frame */
   update(realDt) {
     const t0 = performance.now();
+    const sim0 = this.simTime;
     this.perf.stepsLastFrame = 0;
     if (this.state === 'idle' || this.state === 'done') { this.perf.msLastFrame = 0; return; }
 
@@ -292,6 +294,14 @@ export class World {
 
     this.perf.msLastFrame = performance.now() - t0;
     this.perf.avgMs = this.perf.avgMs * 0.85 + this.perf.msLastFrame * 0.15;
+    // The rate the impact is ACTUALLY playing at (simulated seconds per real
+    // second), smoothed. Past what the device can compute per frame it falls
+    // short of the chosen time scale, and the UI shows the real figure rather
+    // than letting the menu promise a speed the phone is not delivering.
+    if ((this.state === 'impact' || this.state === 'settle') && !this.paused && realDt > 0) {
+      const r = (this.simTime - sim0) / realDt;
+      this.perf.playRate = this.perf.playRate ? this.perf.playRate * 0.9 + r * 0.1 : r;
+    }
     if (this.state === 'impact') {
       this.perf.impactMs += this.perf.msLastFrame;
       this.perf.impactSubsteps += this.perf.stepsLastFrame;

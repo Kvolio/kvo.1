@@ -302,20 +302,47 @@ export class App {
       w.settings.quality, (v) => { w.settings.quality = v; this.refreshRight(); },
     )));
 
+    // PLAYBACK PRESETS. One tap sets how slowly the impact plays and how
+    // fast the approach and the flying debris go. The default impact rate,
+    // 1:60,000, turns a 600 us impact into 36 s of watching, which is right
+    // for studying it and far too slow for trying shots out.
+    const PLAYBACK = [
+      { key: 'slow', label: 'Slow-mo', flight: 4000, impact: 150000 },
+      { key: 'std', label: 'Standard', flight: 4000, impact: 60000 },
+      { key: 'fast', label: 'Fast', flight: 1000, impact: 10000 },
+      { key: 'faster', label: 'Faster', flight: 500, impact: 2000 },
+      { key: 'max', label: 'Fastest', flight: 500, impact: 500 },
+    ];
+    const curF = Math.round(1 / w.settings.timeScale), curI = Math.round(1 / w.settings.impactTimeScale);
+    const seg = el('div', { class: 'seg choices', role: 'radiogroup', 'aria-label': 'Playback speed' });
+    for (const pb of PLAYBACK) {
+      const on = pb.flight === curF && pb.impact === curI;
+      seg.appendChild(el('button', {
+        class: on ? 'on' : '', role: 'radio', 'aria-checked': on ? 'true' : 'false',
+        onclick: () => {
+          w.settings.timeScale = 1 / pb.flight;
+          w.settings.impactTimeScale = 1 / pb.impact;
+          w.settings.autoSlow = true;
+          this.refreshLeft();
+        },
+      }, el('b', {}, pb.label), el('small', {}, `1:${pb.impact >= 1000 ? `${pb.impact / 1000}k` : pb.impact}`)));
+    }
+    p.body.appendChild(el('div', { class: 'row stack' }, el('label', {}, 'Playback speed'), seg));
+
     const tsVals = [500, 1000, 2000, 4000, 10000, 40000];
     p.body.appendChild(row('Flight time scale', select(
       tsVals.map((v) => ({ value: String(v), label: `1 : ${v.toLocaleString()}` })),
       String(Math.round(1 / w.settings.timeScale)), (v) => { w.settings.timeScale = 1 / +v; },
     )));
-    const isVals = [1000, 2000, 5000, 10000, 30000, 60000, 150000, 400000];
+    const isVals = [500, 1000, 2000, 5000, 10000, 30000, 60000, 150000, 400000];
     p.body.appendChild(row('Impact time scale', select(
       isVals.map((v) => ({ value: String(v), label: `1 : ${v.toLocaleString()}${v < 10000 ? ' (fast)' : ''}` })),
       String(Math.round(1 / w.settings.impactTimeScale)), (v) => { w.settings.impactTimeScale = 1 / +v; },
     )));
     p.body.appendChild(el('div', { class: 'hint' },
       'Faster than 1:10,000 the solver runs as many steps per frame as the device can manage at about '
-      + '30 fps, so on Ultra or with a large deformable zone the impact may play somewhat slower than the '
-      + 'scale chosen. The physics is the same at every speed.'));
+      + '30 fps, so on Ultra or with a large deformable zone the impact may play slower than the scale '
+      + 'chosen; the timeline shows the speed it is really playing at. The physics is the same at every speed.'));
     p.body.appendChild(el('div', { class: 'row' },
       el('label', {}, 'Auto slow-motion at contact'),
       toggle(w.settings.autoSlow ? 'ON' : 'AUTO', w.settings.autoSlow, (v) => { w.settings.autoSlow = v; })));
@@ -1235,8 +1262,10 @@ export class App {
     const w = this.world;
     const i = +this.scrub.value;
     const f = w.recorder.frame(i);
+    const rate = (w.state === 'impact' || w.state === 'settle') && !w.paused && w.perf.playRate > 0
+      ? `  ·  playing 1:${Math.round(1 / w.perf.playRate).toLocaleString()}` : '';
     this.tlabel.textContent = `frame ${i} / ${Math.max(0, w.recorder.length - 1)}`
-      + (f ? `  ·  ${U.time(f.t)}` : '');
+      + (f ? `  ·  ${U.time(f.t)}` : '') + rate;
   }
 
   updateHud() {
