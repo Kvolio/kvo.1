@@ -404,6 +404,9 @@ export class World {
     const p = this.projectile;
     const plan = this.meshPlan();
     const [dirx, diry] = normalize(p.vx, p.vy);
+    // curved layers are measured in their frame at the point this shot meets
+    // them; flat layers are unaffected (see Scene.aimAt)
+    this.scene.aimAt(p.x, p.y, dirx, diry);
 
     // corridor extent: from behind the tail to past the last thing it can reach
     const back = p.geom.length + 6 * plan.dx0;
@@ -566,13 +569,12 @@ export class World {
     this.scene.activeLayers().forEach((L, idx) => {
       const prevBonded = L.bonded && idx > 0;
       const g = prevBonded ? group : ++group;
-      const n = L.normal, front = L.frontX;
       dom.addSolid({
         poly: L.poly, material: L.mat, bodyId: 100 + idx, bondGroup: g,
         role: ROLE.ARMOUR, layerIdx: idx, label: L.label || L.mat.name,
-        strengthMul: obliquityStrength(L.slope || 0),
-        scale: obliquityDepth(L.slope || 0),
-        gradientAxis: (x, y) => ((x - front) * n[0] + y * n[1]) / L.thickness,
+        strengthMul: obliquityStrength(L.shotSlope ?? L.slope ?? 0),
+        scale: obliquityDepth(L.shotSlope ?? L.slope ?? 0),
+        gradientAxis: (x, y) => L.depthAt(x, y) / L.thickness,
       });
     });
     return dom;
@@ -1179,7 +1181,7 @@ export class World {
       if (!d.alive[i] || d.role[i] !== ROLE.PENETRATOR) continue;
       for (let k = layers.length - 1; k > bulgeIdx; k--) {
         const Lk = layers[k];
-        if ((d.px[i] - Lk.frontX) * Lk.normal[0] + d.py[i] * Lk.normal[1] > 0) { bulgeIdx = k; break; }
+        if (Lk.depthAt(d.px[i], d.py[i]) > 0) { bulgeIdx = k; break; }
       }
     }
     const Lb = layers[bulgeIdx];
@@ -1235,10 +1237,10 @@ export class World {
         chanMass += m;
         chanVX += d.vx[i] * m; chanVY += d.vy[i] * m;
         chanKE += 0.5 * m * (d.vx[i] * d.vx[i] + d.vy[i] * d.vy[i]);
-        const depth = (d.px[i] - fx) * n0[0] + d.py[i] * n0[1];
+        const depth = first.depthAt(d.px[i], d.py[i]);
         const ia = Math.min(NB - 1, Math.max(0, ((depth - aLo) / aStep) | 0));
         histA[ia] += m;
-        const dLast = (d.px[i] - fxL) * nL[0] + d.py[i] * nL[1];
+        const dLast = last.depthAt(d.px[i], d.py[i]);
         const ib = Math.min(NB - 1, Math.max(0, ((dLast - bLo) / bStep) | 0));
         histB[ib] += m;
         if (dLast > tL) massThrough += m;
@@ -1246,7 +1248,7 @@ export class World {
         if (dLos > deepestLos) deepestLos = dLos;
         for (let k = 0; k < layers.length; k++) {
           const Lk = layers[k];
-          const dk = (d.px[i] - Lk.frontX) * Lk.normal[0] + d.py[i] * Lk.normal[1];
+          const dk = Lk.depthAt(d.px[i], d.py[i]);
           if (dk <= 0) continue;
           if (dk >= Lk.thickness) { pastL[k] += m; continue; }
           histL[k][Math.min(NL - 1, ((dk / Lk.thickness) * NL) | 0)] += m;
@@ -1293,8 +1295,8 @@ export class World {
         if (d.damage[i] < 0.45 && d.layer[i] === bulgeIdx) {
           const lat = Math.abs((d.rx[i] - d.ox) * d.bx + (d.ry[i] - d.oy) * d.by);
           if (lat > channelHalfWidth) {
-            const dep = (d.px[i] - fxB) * nB[0] + d.py[i] * nB[1];
-            const ref = (d.rx[i] - fxB) * nB[0] + d.ry[i] * nB[1];
+            const dep = Lb.depthAt(d.px[i], d.py[i]);
+            const ref = Lb.depthAt(d.rx[i], d.ry[i]);
             if (ref > tB * 0.82) {
               const move = dep - ref;
               if (move > bulge) bulge = move;

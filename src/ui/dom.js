@@ -38,7 +38,12 @@ export function panel(title, opts = {}) {
 }
 
 export function row(label, control, valueEl) {
-  return el('div', { class: 'row' }, el('label', {}, label), control || valueEl || '');
+  // A dropdown takes the full width under its label. Side by side, a
+  // width-100% <select> in the grid's auto column claimed its longest
+  // option's width and squeezed the label column to nothing - "Material" and
+  // "Shape" simply vanished, and long option names were cut off.
+  const stack = control && control.tagName === 'SELECT';
+  return el('div', { class: stack ? 'row stack' : 'row' }, el('label', {}, label), control || valueEl || '');
 }
 
 export function readout(label, id) {

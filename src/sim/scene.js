@@ -32,8 +32,19 @@ export function makeLayer(o = {}) {
     offset: 0,            // m, shifts the plate along its own face
     enabled: true,
     bonded: false,        // laminated to the previous layer (bonds cross)
+    shape: 'flat',        // 'flat' | 'convex' (bulges toward the shooter) | 'concave'
+    radius: 1.2,          // m, radius of the FRONT face when curved
   }, o);
 }
+
+/** True when a layer is meshed as an arc rather than a flat plate. */
+export function isCurved(L) {
+  return (L.shape === 'convex' || L.shape === 'concave') && L.radius > 0 && L.eraId === undefined;
+}
+
+// Widest half-arc a curved plate may span, rad (~83 deg). Past a right angle the
+// band would fold back on itself and the polygon would self-intersect.
+const MAX_HALF_ARC = 1.45;
 
 /**
  * Expand an ERA cassette into front plate / charge / back plate.
@@ -137,18 +148,62 @@ export class Scene {
       const th = L.slope * DEG;
       const nx = Math.cos(th), ny = Math.sin(th);
       const tx = -Math.sin(th), ty = Math.cos(th);
-      const los = L.thickness / Math.max(0.15, Math.cos(th));
+      let los = L.thickness / Math.max(0.15, Math.cos(th));
       const ax = x, ay = 0;
       const H = L.height, o = L.offset;
-      const p = new Float64Array([
-        ax + tx * (-H / 2 + o), ay + ty * (-H / 2 + o),
-        ax + tx * (H / 2 + o), ay + ty * (H / 2 + o),
-        ax + tx * (H / 2 + o) + nx * L.thickness, ay + ty * (H / 2 + o) + ny * L.thickness,
-        ax + tx * (-H / 2 + o) + nx * L.thickness, ay + ty * (-H / 2 + o) + ny * L.thickness,
-      ]);
-      L.poly = ensureCCW(p);
+      L.curve = null;
+      if (!isCurved(L)) {
+        const p = new Float64Array([
+          ax + tx * (-H / 2 + o), ay + ty * (-H / 2 + o),
+          ax + tx * (H / 2 + o), ay + ty * (H / 2 + o),
+          ax + tx * (H / 2 + o) + nx * L.thickness, ay + ty * (H / 2 + o) + ny * L.thickness,
+          ax + tx * (-H / 2 + o) + nx * L.thickness, ay + ty * (-H / 2 + o) + ny * L.thickness,
+        ]);
+        L.poly = ensureCCW(p);
+        // depth into the plate along its normal - exactly the expression the
+        // stats used inline before curved plates existed, in the same order
+        const fx = ax;
+        L.depthAt = (px, py) => (px - fx) * nx + py * ny;
+      } else {
+        // CURVED PLATE
+        // An arc band whose front face passes through the anchor (where the
+        // nominal shot line meets it) and is TANGENT there to the flat plate
+        // `slope` describes. So slope still means what it always meant - the
+        // face angle at the aim point - and a centred shot on a curved plate
+        // starts with exactly the obliquity of the equivalent flat one. Hit it
+        // off-centre and the local face angle is different; that is the whole
+        // point, and it comes from the geometry, not from a rule.
+        //   convex:  centre downrange, front radius R, back radius R - T
+        //   concave: centre upstream,  front radius R, back radius R + T
+        const sgn = L.shape === 'convex' ? 1 : -1;
+        const R = Math.max(L.radius, L.thickness * 1.05);  // a convex band needs R > T
+        const cx = ax + sgn * nx * R, cy = ay + sgn * ny * R;
+        const rb = R - sgn * L.thickness;
+        // H is arc length along the front face; o shifts the band along it
+        const phi0 = clamp((-H / 2 + o) / R, -MAX_HALF_ARC, MAX_HALF_ARC);
+        const phi1 = clamp((H / 2 + o) / R, -MAX_HALF_ARC, MAX_HALF_ARC);
+        const N = Math.max(12, Math.min(96, Math.ceil(((phi1 - phi0) * R) / 0.008)));
+        const pts = [];
+        const at = (r, f) => {
+          const c = Math.cos(f), s = Math.sin(f);
+          return [cx - sgn * r * c * nx + r * s * tx, cy - sgn * r * c * ny + r * s * ty];
+        };
+        for (let k = 0; k <= N; k++) pts.push(...at(R, phi0 + ((phi1 - phi0) * k) / N));
+        for (let k = N; k >= 0; k--) pts.push(...at(rb, phi0 + ((phi1 - phi0) * k) / N));
+        L.poly = ensureCCW(new Float64Array(pts));
+        L.curve = { sgn, R, cx, cy, phi0, phi1, n0: [nx, ny], t0: [tx, ty] };
+        // radial depth through the plate: 0 on the front face, T on the back
+        L.depthAt = (px, py) => sgn * (R - Math.hypot(px - cx, py - cy));
+        // line of sight along the nominal shot line, measured on the real shape
+        const h = rayPoly(ax - 0.5, ay, 1, 0, L.poly, 50);
+        if (h) {
+          const e = rayPoly(ax - 0.5 + h.t + 1e-6, ay, 1, 0, L.poly, 50);
+          if (e) los = e.t + 1e-6;
+        }
+      }
       L.normal = [nx, ny];
       L.tangent = [tx, ty];
+      L.shotSlope = L.slope;
       L.frontX = x;
       L.losThickness = los;
       L.mat = getMaterial(L.material);
@@ -158,6 +213,47 @@ export class Scene {
     }
     this.depth = x;
     return this;
+  }
+
+  /**
+   * Re-frame curved layers at the point the actual line of fire meets them.
+   *
+   * Depth, perforation and bulge are measured against a layer's normal, and
+   * the obliquity calibration reads its slope. On a flat plate those are the
+   * same everywhere, so this leaves flat layers exactly as they were. On a
+   * curved plate they depend on WHERE it is struck: a shot aimed high on a
+   * convex turret front meets a face leaning much further back than the one
+   * at the centre. Called when the shot is meshed, with its real trajectory.
+   */
+  aimAt(ox, oy, dx, dy) {
+    for (const L of this.activeLayers()) {
+      if (!L.curve) continue;
+      const { sgn, R, cx, cy, phi0, phi1, n0, t0 } = L.curve;
+      // |O + sD - C| = R
+      const fx = ox - cx, fy = oy - cy;
+      const b = fx * dx + fy * dy, c = fx * fx + fy * fy - R * R;
+      const disc = b * b - c;
+      let best = null;
+      if (disc >= 0) {
+        const r = Math.sqrt(disc);
+        for (const s of [-b - r, -b + r]) {
+          if (s < -1e-9) continue;
+          const px = ox + s * dx - cx, py = oy + s * dy - cy;
+          // angular position on the band, same parametrisation as rebuild()
+          const f = Math.atan2(px * t0[0] + py * t0[1], -sgn * (px * n0[0] + py * n0[1]));
+          if (f < phi0 - 1e-9 || f > phi1 + 1e-9) continue;
+          if (!best || s < best.s) best = { s, px, py };
+        }
+      }
+      if (!best) continue;   // the shot misses this face: keep the nominal frame
+      const len = Math.hypot(best.px, best.py) || 1;
+      // into-plate normal is the direction depthAt increases: -sgn * radial
+      const nx = (-sgn * best.px) / len, ny = (-sgn * best.py) / len;
+      L.normal = [nx, ny];
+      L.tangent = [-ny, nx];
+      L.shotSlope = Math.atan2(ny, nx) / DEG;
+      L.shotPoint = [cx + best.px, cy + best.py];
+    }
   }
 
   activeLayers() { return this.layers.filter((l) => l.enabled && l.poly); }
@@ -223,13 +319,36 @@ export class Scene {
   }
 
   toJSON() {
-    return {
-      name: this.name,
-      layers: this.layers.map((l) => ({
+    // An ERA cassette is three layers in memory but ONE entry on disk. Writing
+    // the three as plain layers - which this used to do - dropped their eraId
+    // and eraPart, so an exported or saved scenario re-loaded as a steel plate,
+    // a slab of explosive and another steel plate that could never function.
+    const cassettes = this.eraCassettes();
+    const layers = [];
+    for (const l of this.layers) {
+      if (l.eraId !== undefined) {
+        if (l.eraPart !== 'front') continue;          // emitted once, with its front plate
+        const c = cassettes.get(l.eraId);
+        layers.push({
+          kind: 'era', label: (l.label || '').replace(/ front plate$/, ''),
+          plate: l.material, explosive: c.charge ? c.charge.material : undefined,
+          frontThickness: l.thickness,
+          chargeThickness: c.charge ? c.charge.thickness : undefined,
+          backThickness: c.back ? c.back.thickness : undefined,
+          slope: l.slope, gap: l.gap, height: l.height, offset: l.offset, enabled: l.enabled,
+        });
+        continue;
+      }
+      layers.push({
         label: l.label, material: l.material, thickness: l.thickness,
         slope: l.slope, gap: l.gap, height: l.height, offset: l.offset,
         enabled: l.enabled, bonded: l.bonded,
-      })),
+        ...(isCurved(l) ? { shape: l.shape, radius: l.radius } : {}),
+      });
+    }
+    return {
+      name: this.name,
+      layers,
       modules: this.modules.map((m) => ({
         type: m.type, label: m.label, x: m.x, y: m.y, w: m.w, h: m.h,
         angle: m.angle, casing: m.casing,

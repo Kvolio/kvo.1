@@ -224,6 +224,57 @@ console.log('\n== a long rod is meshed at the geometry it is given ==');
     `a full-calibre shot still meets its mass target (${def.projectile.massNoSabot.toFixed(2)} kg for 9.00)`);
 }
 
+console.log('\n== curved plates ==');
+{
+  // geometry: radial depth runs 0 -> T, and the local face angle off-centre
+  // is exactly the arc angle, asin(y / R)
+  const cs = new Scene();
+  cs.setLayers([{ material: 'cast', thickness: 0.10, shape: 'convex', radius: 0.9, height: 1.3 }]);
+  const C = cs.layers[0];
+  check(Math.abs(C.depthAt(C.frontX, 0)) < 1e-9 && Math.abs(C.depthAt(C.frontX + 0.1, 0) - 0.1) < 1e-9,
+    'a convex plate measures depth radially: 0 on the front face, T on the back');
+  cs.aimAt(-2, 0.30, 1, 0);
+  const want = -Math.asin(0.3 / 0.9) * 180 / Math.PI;
+  check(Math.abs(C.shotSlope - want) < 0.05,
+    `a shot 300 mm high on R 0.9 m meets a ${Math.abs(C.shotSlope).toFixed(2)} deg face `
+    + `(asin(0.3/0.9) = ${Math.abs(want).toFixed(2)})`);
+  const ks = new Scene();
+  ks.setLayers([{ material: 'rha', thickness: 0.05, shape: 'concave', radius: 1.0, height: 1.0 }]);
+  ks.aimAt(-2, 0.30, 1, 0);
+  check(ks.layers[0].shotSlope * C.shotSlope < 0, 'a concave plate leans the opposite way to a convex one');
+
+  // a flat layer's depth function is exactly the plane expression it replaced
+  const fs = new Scene();
+  fs.setLayers([{ material: 'rha', thickness: 0.08, slope: 30 }]);
+  const F = fs.layers[0];
+  const px = 0.05, py = 0.02;
+  check(F.depthAt(px, py) === (px - F.frontX) * F.normal[0] + py * F.normal[1],
+    'a flat plate is measured exactly as before curved plates existed');
+
+  // physics: off-centre on a convex plate costs the round more than dead centre
+  const shotAt = (aimY) => run({ type: 'apcbc', proj: { velocity: 800, standoff: 0.6, aimY },
+    layers: [{ material: 'cast', thickness: 0.08, shape: 'convex', radius: 0.9, height: 2.4 }],
+    maxFrames: 14000 });
+  const c0 = shotAt(0), c30 = shotAt(0.45);
+  check([c0, c30].every((r) => Number.isFinite(r.stats.residualVelocity) && r.w.domain.n > 200),
+    `curved plates mesh and run (${c0.w.domain.n} / ${c30.w.domain.n} nodes)`);
+  check(c30.stats.residualVelocity < c0.stats.residualVelocity - 50,
+    `meeting the curve at 30 deg costs the round more than dead centre `
+    + `(${c30.stats.residualVelocity.toFixed(0)} vs ${c0.stats.residualVelocity.toFixed(0)} m/s)`);
+
+  // save / load keeps both the curve and an ERA cassette intact
+  const rs = Scene.fromJSON({ layers: [
+    { kind: 'era', label: 'K1', slope: 60, frontThickness: 0.003, chargeThickness: 0.006, backThickness: 0.003 },
+    { material: 'cast', thickness: 0.1, shape: 'convex', radius: 0.9 },
+  ] });
+  const back = Scene.fromJSON(JSON.parse(JSON.stringify(rs.toJSON())));
+  check(back.layers.filter((l) => l.eraPart === 'charge').length === 1
+    && back.layers.find((l) => l.eraPart === 'charge').material === 'era4s20',
+    'an ERA cassette survives export and re-import as a cassette (it used to come back inert)');
+  check(back.layers.some((l) => l.shape === 'convex' && l.radius === 0.9),
+    'a curved plate survives export and re-import');
+}
+
 console.log('\n== Lanz-Odermatt reference ==');
 {
   // Hand check against the published equation, and the unit choice: only

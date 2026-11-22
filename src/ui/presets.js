@@ -351,6 +351,41 @@ export const PRESETS = {
       ],
     },
   },
+  // ---------------------------------------------------------- CURVED ARMOUR
+  // A curved plate's face angle depends on where it is struck, so these are
+  // the presets where the Aim height control matters most. Representative
+  // shapes, not surveyed castings: cast turrets and mantlets vary in thickness
+  // and radius round the curve, and these hold both constant.
+  'cast-turret-front': {
+    name: 'Cast turret front — 200 mm cast, convex R 1.0 m',
+    note: 'A post-war cast turret is a convex shell: dead-centre the round meets 200 mm at the nominal angle, but aim it high or low and the face it meets leans further back the further off-centre it lands. Try Aim height 0, 300 and 500 mm and watch the "Face angle met" line in the report.',
+    projectile: { type: 'apcbc', caliber: 0.100, mass: 15.88, velocity: 895, standoff: 1.4 },
+    scene: {
+      layers: [{ material: 'cast', thickness: 0.200, slope: 0, height: 2.0, label: 'turret front', shape: 'convex', radius: 1.0 }],
+      modules: [{ type: 'crew', x: 0.85, y: 0.0, w: 0.40, h: 0.55, label: 'gunner' }],
+    },
+  },
+  'panther-mantlet': {
+    name: 'Panther mantlet — 100 mm cast, convex R 0.35 m',
+    note: 'The early rounded "Saukopf" mantlet. Its tight curve means a hit only a little off-centre meets a steeply angled face - which deflected many shots, and is also what made the lower half a notorious shot trap, steering rounds down into the thin hull roof. That roof is not part of this cross-section, so the trap itself is not reproduced; the deflection is.',
+    projectile: { type: 'apcbc', caliber: 0.076, mass: 7.0, velocity: 792, standoff: 1.4 },
+    scene: {
+      layers: [{ material: 'cast', thickness: 0.100, slope: 0, height: 0.9, label: 'gun mantlet', shape: 'convex', radius: 0.35 }],
+      modules: [{ type: 'breech', x: 0.55, y: 0.0, w: 0.45, h: 0.30, label: 'gun breech' }],
+    },
+  },
+  'curved-spaced': {
+    name: 'Curved appliqué over a flat hull — spaced',
+    note: 'A thin convex appliqué standing off a flat hull plate. The curve makes the outer skin present a different angle across its height, so the same round can be turned or let through depending on where it lands.',
+    projectile: { type: 'apcbc', standoff: 0.6 },
+    scene: {
+      layers: [
+        { material: 'hha', thickness: 0.020, slope: 20, height: 1.2, label: 'curved appliqué', shape: 'convex', radius: 0.8 },
+        { material: 'rha', thickness: 0.060, slope: 20, gap: 0.25, height: 1.4, label: 'hull plate' },
+      ],
+      modules: [{ type: 'crew', x: 0.75, y: 0.0, w: 0.35, h: 0.50, label: 'driver' }],
+    },
+  },
 };
 
 export const PRESET_ORDER = [
@@ -360,4 +395,5 @@ export const PRESET_ORDER = [
   't55-ufp', 't72-ural-ufp', 't72b-ufp', 't90a-ufp',
   'tiger1-ufp', 'tiger1-nose', 'tiger1-side-skirt', 'tiger2-ufp', 'panther-glacis',
   't34-glacis', 'is2-ufp', 'sherman-glacis', 'panzer4-front',
+  'cast-turret-front', 'panther-mantlet', 'curved-spaced',
 ];

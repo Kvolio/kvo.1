@@ -119,6 +119,43 @@ td{color:var(--ink2)}
 <p>was meshed 971 mm long). The UI now shows a rod's real flight mass (rod + tip +</p>
 <p>fins), and typing a mass re-solves the L/D to reach it — flight mass is exactly</p>
 <p>linear in rod length, so the displayed L/D is always the simulated one.</p>
+<h3 id="2-5-curved-plates">2.5 Curved plates</h3>
+<p>A layer can be flat, <strong>convex</strong> (bulging toward the shooter — a cast turret</p>
+<p>front, a mantlet) or <strong>concave</strong>. A curved layer is an arc band whose front</p>
+<p>face passes through the point where the nominal shot line meets it and is</p>
+<p><em>tangent there</em> to the flat plate its <code>slope</code> describes; so <code>slope</code> keeps its</p>
+<p>meaning (the face angle at the aim point) and a centred shot meets exactly</p>
+<p>the obliquity of the equivalent flat plate. Height is arc length along the</p>
+<p>front face, and the band is capped at ±83° of arc so it cannot fold back on</p>
+<p>itself.</p>
+<p>Two things follow from the geometry rather than from any rule:</p>
+<ul>
+<li><strong>Where it is struck matters.</strong> When a shot is meshed, each curved layer is</li>
+</ul>
+<p>  re-framed at the point the real line of fire meets it (<code>Scene.aimAt</code>): a</p>
+<p>  shot 300 mm high on a 0.9 m-radius face meets it at asin(0.3/0.9) = 19.5°.</p>
+<p>  Depth, perforation and bulge are measured radially through the thickness,</p>
+<p>  and the per-layer obliquity calibration (§3.6a) reads the <em>local</em> angle. The</p>
+<p>  report shows the face angle actually met.</p>
+<ul>
+<li><strong>The physics responds.</strong> On a 2.4 m convex cast plate, 80 mm thick, an</li>
+</ul>
+<p>  88 mm APCBC at 800 m/s exits at 232 m/s dead centre and 69 m/s where it</p>
+<p>  meets the face at 30°. On a shorter plate a hit ~150 mm from the edge comes</p>
+<p>  through <em>faster</em> than at centre — a free edge weakens a plate, which is a</p>
+<p>  real effect, not a fault.</p>
+<p>Flat layers are measured exactly as before: their depth function is the same</p>
+<p>plane expression in the same arithmetic order, and every flat result in the</p>
+<p>suite reproduces bit for bit.</p>
+<p><strong>Limits.</strong> This is a 2D section, so a curved layer is a cylindrical shell —</p>
+<p>curved in the plane of the cut, straight out of it. A real cast turret is</p>
+<p>doubly curved, and that second curvature is not represented. Castings also</p>
+<p>vary in thickness and radius around the curve; a layer here holds both</p>
+<p>constant. An ERA cassette is always flat, because its detonation throws each</p>
+<p>plate along a single normal. A concave layer's edges reach back toward the</p>
+<p>shooter, so give it an air gap if it would otherwise overlap the layer in</p>
+<p>front. Run-to-run lattice noise is about ±25 m/s in exit velocity, so compare</p>
+<p>off-centre shots with that in mind.</p>
 <p><strong>Discretisation still moves a thin rod's mass.</strong> A 22 mm rod on a ~5 mm</p>
 <p>lattice is four or five nodes across depending on how it aliases onto the grid,</p>
 <p>and the meshed mass of one specified 2.94 kg rod was measured at 2.45–2.88 kg</p>

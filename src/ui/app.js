@@ -22,6 +22,13 @@ import * as U from '../core/units.js';
 import { ROLE } from '../sim/pd/domain.js';
 import { TIERS, TIER_ORDER } from '../core/device.js';
 
+/** The three sections of the setup column. */
+const SETUP_TABS = [
+  { key: 'threat', label: 'Threat', sub: 'the round' },
+  { key: 'target', label: 'Target', sub: 'armour · interior' },
+  { key: 'run', label: 'Run', sub: 'solver · view' },
+];
+
 const FIELDS = {
   velocity: { label: 'Impact velocity', unit: 'm/s', dp: 0, step: 10 },
   caliber: { label: 'Calibre', unit: 'mm', scale: 1000, dp: 1, step: 1 },
@@ -65,6 +72,9 @@ function dataLine(m) {
 export class App {
   constructor(world, renderer, camera) {
     this.world = world; this.renderer = renderer; this.cam = camera;
+    // the setup section last used, so a reload lands where the user was working
+    this.setupTab = 'threat';
+    try { this.setupTab = localStorage.getItem('tb.setupTab') || 'threat'; } catch (e) { /* storage unavailable */ }
     this.left = document.getElementById('left');
     this.right = document.getElementById('right');
     this.scrub = document.getElementById('scrub');
@@ -90,13 +100,45 @@ export class App {
 
   // ==================================================================== left
 
+  // SETUP lives entirely in the left column, results entirely in the right.
+  // The armour array and the internal components used to sit in the RIGHT
+  // column with the report and the log, so on a phone - where each column is
+  // a tab - editing the target meant going to "Results". Worse, the right
+  // column is rebuilt every 500 ms during a run to keep the numbers live, so
+  // every layer editor (each with its 81-entry material list) was torn down
+  // and rebuilt twice a second mid-simulation, under the user's finger.
+  // The setup column is split into three sections so a phone screen holds one
+  // job at a time: what is fired, what it hits, and how the run is done.
   buildLeft() {
     const L = clear(this.left);
     L.appendChild(this.panelScenario());
-    L.appendChild(this.panelProjectile());
-    L.appendChild(this.panelSim());
-    L.appendChild(this.panelView());
+    const tab = SETUP_TABS.some((t) => t.key === this.setupTab) ? this.setupTab : 'threat';
+    const seg = el('div', { class: 'seg', role: 'tablist' });
+    for (const t of SETUP_TABS) {
+      seg.appendChild(el('button', {
+        class: t.key === tab ? 'on' : '', role: 'tab', 'aria-selected': t.key === tab ? 'true' : 'false',
+        onclick: () => {
+          this.setupTab = t.key;
+          try { localStorage.setItem('tb.setupTab', t.key); } catch (e) { /* storage unavailable */ }
+          this.refreshLeft();
+          this.left.scrollTop = 0;
+        },
+      }, el('b', {}, t.label), el('small', {}, t.sub)));
+    }
+    L.appendChild(seg);
+    if (tab === 'threat') {
+      L.appendChild(this.panelProjectile());
+    } else if (tab === 'target') {
+      L.appendChild(this.panelArray());
+      L.appendChild(this.panelInternals());
+    } else {
+      L.appendChild(this.panelSim());
+      L.appendChild(this.panelView());
+    }
   }
+
+  /** Setup edits change both columns: the editor itself, and the results it invalidates. */
+  refreshBoth() { this.refreshLeft(); this.refreshRight(); }
 
   refreshLeft() {
     const scroll = this.left.scrollTop;
@@ -353,8 +395,6 @@ export class App {
 
   buildRight() {
     const R = clear(this.right);
-    R.appendChild(this.panelArray());
-    R.appendChild(this.panelInternals());
     R.appendChild(this.panelReport());
     R.appendChild(this.panelAnalytics());
     R.appendChild(this.panelInspector());
@@ -373,7 +413,7 @@ export class App {
 
   panelArray() {
     const w = this.world, sc = w.scene;
-    const p = panel('Armour array', { tag: `${sc.activeLayers().length} layers` });
+    const p = panel('Armour array', { tag: `${sc.activeLayers().length} layer${sc.activeLayers().length === 1 ? "" : "s"}` });
     // The scene rebuild and the world reset are cheap and have to happen at
     // once - anything reading the scene on the next frame depends on them. The
     // PANEL rebuild is not urgent: it only re-renders totals that are already
@@ -390,7 +430,7 @@ export class App {
       if (pendingRefresh) return;
       pendingRefresh = requestAnimationFrame(() => {
         pendingRefresh = 0;
-        this.refreshRight();
+        this.refreshBoth();
       });
     };
 
@@ -400,9 +440,10 @@ export class App {
       const box = el('div', { class: `layer${open ? ' open' : ''}${this.renderer.selection && this.renderer.selection.id === Lr.id ? ' sel' : ''}` });
       const swatchEl = el('span', { class: 'sw', style: `background:${m.color}` });
       const nameEl = el('span', { class: 'nm' }, Lr.label || m.name);
-      const head = el('div', { class: 'lh', onclick: () => { this.openLayer = open ? null : Lr.id; this.renderer.selection = { kind: 'layer', id: Lr.id, obj: Lr }; this.refreshRight(); } },
+      const head = el('div', { class: 'lh', onclick: () => { this.openLayer = open ? null : Lr.id; this.renderer.selection = { kind: 'layer', id: Lr.id, obj: Lr }; this.refreshBoth(); } },
         swatchEl, nameEl,
-        el('span', { class: 'th' }, `${(Lr.thickness * 1000).toFixed(0)}mm ${Lr.slope ? `@${Lr.slope}°` : ''}`));
+        el('span', { class: 'th' }, `${(Lr.thickness * 1000).toFixed(0)}mm ${Lr.slope ? `@${Lr.slope}°` : ''}`
+          + `${Lr.curve ? ` ${Lr.shape === 'convex' ? '◠' : '◡'}R${(Lr.radius * 1000).toFixed(0)}` : ''}`));
       const b = el('div', { class: 'lb' });
       // What this material IS, right under the picker rather than buried below
       // the geometry fields. The first line is generated from the material's
@@ -458,6 +499,32 @@ export class App {
         else Lr.height = h;
         changed();
       } })));
+      // SHAPE. An ERA cassette stays flat: its detonation throws each plate
+      // along one normal (sim/era.js), which a curved cassette does not have.
+      if (Lr.eraId === undefined) {
+        b.appendChild(row('Shape', select([
+          { value: 'flat', label: 'Flat plate' },
+          { value: 'convex', label: 'Curved — convex (bulges toward the round)' },
+          { value: 'concave', label: 'Curved — concave (dished away)' },
+        ], Lr.shape || 'flat', (v) => { Lr.shape = v; changed(); })));
+        if (Lr.shape === 'convex' || Lr.shape === 'concave') {
+          b.appendChild(row('Curve radius (mm)', num((Lr.radius || 1.2) * 1000, { dp: 0, step: 50, onchange: (v) => {
+            Lr.radius = Math.max(Lr.thickness * 1.05, v / 1000); changed();
+          } })));
+          b.appendChild(el('div', { class: 'hint' },
+            'Slope sets the face angle where the nominal shot line meets the plate; '
+            + 'the face curves away from there. Aim off-centre and the round meets a '
+            + 'steeper face — the local angle is computed from the shape and shown in '
+            + 'the impact report. A turret front is typically 0.6–1.5 m, a gun mantlet '
+            + '0.3–0.6 m. Height is measured along the curve.'));
+        }
+      }
+      b.appendChild(row('Shift along face (mm)', num((Lr.offset || 0) * 1000, { dp: 0, step: 25, onchange: (v) => {
+        const o = v / 1000;
+        if (Lr.eraId !== undefined) sc.layers.forEach((q) => { if (q.eraId === Lr.eraId) q.offset = o; });
+        else Lr.offset = o;
+        changed();
+      } })));
       b.appendChild(row('Label', el('input', { type: 'text', value: Lr.label || '', onchange: (e) => { Lr.label = e.target.value; changed(); } })));
       // An ERA cassette is three layers that only make sense together, so its
       // geometry edits and its delete act on all three. Deleting one plate and
@@ -477,10 +544,40 @@ export class App {
             sc.layers = keep; changed();
           } }, 'Delete cassette')));
       } else {
-        b.appendChild(el('div', { class: 'grid3' },
+        b.appendChild(el('div', { class: 'grid2' },
           toggle('Bonded', Lr.bonded, (v) => { Lr.bonded = v; changed(); }),
-          toggle('Enabled', Lr.enabled, (v) => { Lr.enabled = v; changed(); }),
-          el('button', { class: 'mini', onclick: () => { sc.layers.splice(idx, 1); changed(); } }, 'Delete')));
+          toggle('Enabled', Lr.enabled, (v) => { Lr.enabled = v; changed(); })));
+        // Reorder and duplicate. A cassette is three layers that must stay
+        // together, so moving a plate past one jumps the whole cassette rather
+        // than landing between its charge and its plates.
+        const move = (dir) => {
+          const i = sc.layers.indexOf(Lr);
+          let j = i + dir;
+          if (j < 0 || j >= sc.layers.length) return;
+          const nb = sc.layers[j];
+          if (nb.eraId !== undefined) {
+            const block = sc.layers.map((q, k) => (q.eraId === nb.eraId ? k : -1)).filter((k) => k >= 0);
+            j = dir < 0 ? block[0] : block[block.length - 1];
+          }
+          sc.layers.splice(i, 1);
+          sc.layers.splice(j, 0, Lr);
+          changed();
+        };
+        const pos = sc.layers.indexOf(Lr);
+        b.appendChild(el('div', { class: 'grid4' },
+          el('button', { class: 'mini', disabled: pos === 0, title: 'Move toward the round', onclick: () => move(-1) }, '↑ Up'),
+          el('button', { class: 'mini', disabled: pos === sc.layers.length - 1, title: 'Move away from the round', onclick: () => move(1) }, '↓ Down'),
+          el('button', { class: 'mini', onclick: () => {
+            // everything the user set; not the id (makeLayer issues a fresh one -
+            // passing id: undefined would overwrite it) and not the derived
+            // geometry, which rebuild() recomputes
+            const { id: _id, poly: _p, curve: _c, depthAt: _d, ...settings } = Lr;
+            const copy = makeLayer({ ...settings, label: Lr.label ? `${Lr.label} (copy)` : '' });
+            sc.layers.splice(sc.layers.indexOf(Lr) + 1, 0, copy);
+            this.openLayer = copy.id;
+            changed();
+          } }, 'Duplicate'),
+          el('button', { class: 'mini danger', onclick: () => { sc.layers.splice(sc.layers.indexOf(Lr), 1); changed(); } }, 'Delete')));
       }
       b.appendChild(kv([
         ['Density', `${m.rho} kg/m³`],
@@ -529,13 +626,13 @@ export class App {
   panelInternals() {
     const w = this.world, sc = w.scene;
     const p = panel('Internal components', { tag: `${sc.modules.length}`, collapsed: sc.modules.length === 0 });
-    const changed = () => { w.reset(); this.refreshRight(); };
+    const changed = () => { w.reset(); this.refreshBoth(); };
     sc.modules.forEach((m, idx) => {
       const spec = MODULE_TYPES[m.type];
       const open = this.openLayer === m.id;
       const box = el('div', { class: `layer${open ? ' open' : ''}` });
       const stateCol = m.state === 'destroyed' ? 'var(--danger)' : m.state === 'damaged' ? 'var(--warn)' : 'var(--ink2)';
-      box.appendChild(el('div', { class: 'lh', onclick: () => { this.openLayer = open ? null : m.id; this.renderer.selection = { kind: 'module', id: m.id, obj: m }; this.refreshRight(); } },
+      box.appendChild(el('div', { class: 'lh', onclick: () => { this.openLayer = open ? null : m.id; this.renderer.selection = { kind: 'module', id: m.id, obj: m }; this.refreshBoth(); } },
         el('span', { class: 'sw', style: `background:${spec.color}` }),
         el('span', { class: 'nm' }, m.label || spec.label),
         el('span', { class: 'th', style: `color:${stateCol}` }, m.state)));
@@ -581,6 +678,39 @@ export class App {
         el('p', {}, v.kill !== 'none' ? `Assessed effect: ${v.kill} kill` : 'No component effect')));
       if (v.incomplete) p.body.appendChild(el('div', {class:'note'},
         'Incomplete run: a simulation time budget was reached. Moving material or later interactions may remain; these results are provisional.'));
+      // PIN AND COMPARE. Most questions here are comparisons - centre against
+      // off-centre on a curved plate, one round against another, with and
+      // without a layer - so a finished shot can be pinned and the next one
+      // set beside it.
+      const snap = this.resultSnapshot(v);
+      p.body.appendChild(el('div', { class: 'grid2', style: 'margin:6px 0' },
+        el('button', { class: 'mini', onclick: () => { this.pinned = snap; this.refreshRight(); } },
+          this.pinned ? 'Pin this shot instead' : 'Pin for comparison'),
+        this.pinned ? el('button', { class: 'mini', onclick: () => { this.pinned = null; this.refreshRight(); } }, 'Clear pin') : null));
+      if (this.pinned && this.pinned.key !== snap.key) {
+        const A = this.pinned, B = snap;
+        const t = el('table', { class: 'kv cmp' },
+          el('tr', {}, el('td', {}, ''), el('td', {}, 'Pinned'), el('td', {}, 'This shot')));
+        const line = (label, a, b, better) => t.appendChild(el('tr', {},
+          el('td', {}, label), el('td', {}, a),
+          el('td', { class: better === undefined ? '' : better ? 'up' : 'down' }, b)));
+        line('Setup', A.what, B.what);
+        line('Result', A.headline, B.headline);
+        line('Armour defeated', U.len(A.defeated), U.len(B.defeated),
+          B.defeated === A.defeated ? undefined : B.defeated > A.defeated);
+        // Speed only means "further through" when both rounds came out the
+        // back. A stopped or ricocheting round's residual speed says nothing
+        // about penetration - a fast ricochet is a defeat - so it is not coloured.
+        line(A.perf && B.perf ? 'Exit velocity' : 'Residual velocity', U.vel(A.vres), U.vel(B.vres),
+          !(A.perf && B.perf) || Math.abs(B.vres - A.vres) < 1 ? undefined : B.vres > A.vres);
+        line('Face angle met', `${A.face.toFixed(1)}°`, `${B.face.toFixed(1)}°`);
+        p.body.appendChild(t);
+        p.body.appendChild(el('div', { class: 'hint' },
+          'Red: this shot got further through the armour than the pinned one. '
+          + 'Green: it was stopped sooner. As elsewhere in the report, colour takes '
+          + 'the armour’s side. Differences under about ±25 m/s are within the '
+          + 'lattice noise of a single run.'));
+      }
     } else if (w.state === 'idle') {
       p.body.appendChild(el('div', { class: 'note' }, 'Press FIRE. The projectile flies, contacts the array, and the continuum solver takes over at the struck face.'));
     }
@@ -618,6 +748,18 @@ export class App {
       }
     }
 
+    // Before anything has been fired the stats are all zero, and twenty rows of
+    // "0 µm" and "0.0 mg" read as a result. Show only what the setup already
+    // determines; the full table appears with the shot.
+    if (w.state === 'idle') {
+      p.body.appendChild(kv([
+        ['Array — normal / LOS', `${U.len(w.scene.normalTotal)} / ${U.len(w.scene.losTotal)}`],
+        ['Layers', String(w.scene.activeLayers().length)],
+        ['Round', `${w.projectile.type.name.split(' — ')[0]} · ${U.vel(w.projectile.speed)}`],
+      ]));
+      return p;
+    }
+
     const at = s.atPerforation;
     p.body.appendChild(kv([
       ['Armour defeated', U.len(s.armourDefeated || 0), s.perforated ? 'bad' : 'hi'],
@@ -626,6 +768,11 @@ export class App {
       ['— along shot line', U.len(s.maxDepthLOS || 0)],
       ['Perforated', s.perforated ? 'YES' : 'no', s.perforated ? 'bad' : 'good'],
       ['Ricochet', s.ricochet ? 'YES' : 'no'],
+      // On a curved plate the face angle depends on where it was struck; show
+      // the one the round actually met (Scene.aimAt), not the nominal slope.
+      ...w.scene.activeLayers().filter((Lc) => Lc.curve && w.domain).map((Lc) => [
+        `Face angle met — ${Lc.label || Lc.mat.name}`,
+        `${Math.abs(Lc.shotSlope ?? Lc.slope).toFixed(1)}° (nominal ${Math.abs(Lc.slope).toFixed(0)}°)`]),
       at ? ['Residual mass in target', U.mass(at.mass)] : ['Penetrator mass in target', U.mass(s.residualMass)],
       ['— in the channel', U.mass(s.channelMass || 0)],
       ['— still one body', U.mass(at ? at.attached : (s.attachedMass || 0))],
@@ -812,7 +959,12 @@ export class App {
   bindTop() {
     const w = this.world;
     const $ = (id) => document.getElementById(id);
-    $('btnFire').onclick = () => { w.fire(); this.renderer.frameOverride = null; this.refreshRight(); };
+    $('btnFire').onclick = () => {
+      w.fire(); this.renderer.frameOverride = null; this.refreshRight();
+      // On a phone the setup and the viewport are separate tabs, so firing from
+      // the setup tab would run the shot somewhere the user cannot see it.
+      this.showTab('none');
+    };
     $('btnReset').onclick = () => { w.reset(); this.renderer.frameOverride = null; this.refreshRight(); };
     this.btnPlay = $('btnPlay');
     this.btnPlay.onclick = () => this.togglePlay();
@@ -845,13 +997,43 @@ export class App {
     });
 
     for (const b of document.querySelectorAll('#tabs button')) {
-      b.onclick = () => {
-        for (const x of document.querySelectorAll('#tabs button')) x.classList.remove('on');
-        b.classList.add('on');
-        this.left.classList.toggle('show', b.dataset.panel === 'left');
-        this.right.classList.toggle('show', b.dataset.panel === 'right');
-      };
+      b.onclick = () => this.showTab(b.dataset.panel);
     }
+    // The markup marks "Setup" active, but nothing showed the setup column
+    // until a tab was tapped - so a phone opened on the viewport with the
+    // Setup tab highlighted. Make what is shown agree with what is marked.
+    const marked = document.querySelector('#tabs button.on');
+    this.showTab(marked ? marked.dataset.panel : 'left');
+  }
+
+  /** The few numbers a pinned comparison sets side by side, for a finished run. */
+  resultSnapshot(v) {
+    const w = this.world, s = w.stats, cfg = w.projectileCfg;
+    const struck = w.scene.activeLayers()[0];
+    const round = this.ammoKey && AMMO[this.ammoKey] ? AMMO[this.ammoKey].name
+      : w.projectile.type.name.split(' — ')[0];
+    const aim = (cfg.aimY || 0) !== 0 ? ` · aim ${(cfg.aimY * 1000).toFixed(0)} mm` : '';
+    const vres = s.perforated && s.atPerforation ? s.atPerforation.velocity : s.residualVelocity;
+    const snap = {
+      what: `${round}${aim}`,
+      headline: v.headline,
+      defeated: s.armourDefeated || 0,
+      vres: vres || 0,
+      perf: !!s.perforated,
+      face: struck ? Math.abs(struck.shotSlope ?? struck.slope ?? 0) : 0,
+    };
+    snap.key = JSON.stringify([snap.what, snap.headline, snap.defeated, snap.vres, w.simTime]);
+    return snap;
+  }
+
+  /** Narrow layout: show one of setup ('left'), results ('right') or the viewport ('none'). */
+  showTab(panel) {
+    const tabs = document.getElementById('tabs');
+    // on a wide screen all three columns are visible and there is nothing to switch
+    if (!tabs || getComputedStyle(tabs).display === 'none') return;
+    for (const x of tabs.querySelectorAll('button')) x.classList.toggle('on', x.dataset.panel === panel);
+    this.left.classList.toggle('show', panel === 'left');
+    this.right.classList.toggle('show', panel === 'right');
   }
 
   togglePlay() {
@@ -1007,7 +1189,12 @@ export class App {
       this.updateScrubLabel();
     }
     this.updateHud();
-    if (!this.legendMode || this.legendMode !== this.renderer.opts.field) this.updateLegend();
+    // Redraw the legend when the colouring mode OR the materials change. Keyed
+    // on the mode alone, it kept listing the start-up scene's RHA after a
+    // preset or a material change had replaced it.
+    const legendSig = this.renderer.opts.field + '|'
+      + w.scene.activeLayers().map((Lr) => Lr.material).join(',');
+    if (legendSig !== this.legendSig) { this.legendSig = legendSig; this.updateLegend(); }
 
     // keep the numeric panels live while a run is in progress
     const now = performance.now();
