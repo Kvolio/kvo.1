@@ -1340,9 +1340,10 @@ is not, and should not be quoted as an armour-performance figure.
 
 ### 8.2 The historic ammunition catalogue
 
-`src/ui/ammo.js` holds 37 reconstructed service rounds from 1939 to 2016
+`src/ui/ammo.js` holds 46 reconstructed service rounds from 1939 to 2016
 (among them the Jagdtiger and Maus 12.8 cm PzGr. 43 and HE shell, the ISU-152's
-BR-540, the Pershing's M82 and the Chieftain's L15 APDS) plus 12 historical
+BR-540, the Pershing's M82, the Chieftain's L15 APDS, modern rods from M829 and
+3BM32 to M829A4 and 3BM59/60, CHARM 3, and the Bradley's 25 mm M919) plus 12 historical
 catalogue names that carry the generic type settings. They are selectable
 independently of the scenario presets so one target can be shot with several
 generations of round, and the picker groups them by era. Its header documents

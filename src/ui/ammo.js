@@ -248,6 +248,51 @@ export const AMMO = {
     cfg: { caliber: 0.125, rodD: 0.021, rodLd: 22, mass: 4.85, velocity: 1700, core: 'wha', standoff: SAB },
     note: 'Two tungsten slugs in a steel body. Designed for the era when everything it faced had reactive armour on the front.',
   },
+  'm829': {
+    name: '120 mm M829 APFSDS (DU)', vehicle: 'M1A1 Abrams', year: 1985, type: 'apfsds',
+    cfg: { caliber: 0.120, rodD: 0.027, rodLd: 20, mass: 4.3, velocity: 1670, core: 'du', standoff: SAB },
+    note: 'The first 120 mm US uranium rod, and the round the M1A1\u2019s smoothbore was adopted to fire. Shorter than the A1 that replaced it; compare the two on the same plate.',
+  },
+  'm830-heat': {
+    name: '120 mm M830 HEAT-MP-T', vehicle: 'M1A1 Abrams', year: 1985, type: 'heat',
+    cfg: { caliber: 0.120, mass: 13.5, velocity: 1140, standoff: 0.9 },
+    note: 'The original 120 mm multipurpose shaped charge, heavier and slower than the M830A1 that followed it.',
+  },
+  '3bm32-vant': {
+    name: '125 mm 3BM32 Vant', vehicle: 'T-80B / T-72A', year: 1985, type: 'apfsds',
+    cfg: { caliber: 0.125, rodD: 0.027, rodLd: 18, mass: 4.85, velocity: 1700, core: 'du', standoff: SAB },
+    note: 'The first Soviet one-piece uranium rod. Short by Western standards: the carousel autoloader limits how long a 125 mm round can be.',
+  },
+  'dm33': {
+    name: '120 mm DM33 APFSDS', vehicle: 'Leopard 2A4', year: 1987, type: 'apfsds',
+    cfg: { caliber: 0.120, rodD: 0.025, rodLd: 20, mass: 7.3, velocity: 1650, core: 'wha', standoff: SAB },
+    note: 'The Leopard 2\u2019s tungsten rod of the late Cold War, and the ancestor of DM53. Rod dimensions are a reconstruction.',
+  },
+  'm900': {
+    name: '105 mm M900 APFSDS (DU)', vehicle: 'M60A3 / M1', year: 1989, type: 'apfsds',
+    cfg: { caliber: 0.105, rodD: 0.0235, rodLd: 30, mass: 3.6, velocity: 1505, core: 'du', standoff: SAB },
+    note: 'The last and longest US 105 mm rod: what the old gun could still do with a modern penetrator. Rod dimensions are a reconstruction.',
+  },
+  'm919': {
+    name: '25 mm M919 APFSDS-T (DU)', vehicle: 'M2/M3 Bradley', year: 1990, type: 'apfsds',
+    cfg: { caliber: 0.025, rodD: 0.008, rodLd: 10, mass: 0.134, velocity: 1390, core: 'du', standoff: SAB },
+    note: 'An autocannon long rod: a tank round in miniature, built for infantry fighting vehicles and light armour. Try it on the ERA-under-fragment preset - it should not set the cassette off - and on thin aluminium or steel.',
+  },
+  'l27a1-charm3': {
+    name: '120 mm L27A1 CHARM 3 (DU)', vehicle: 'Challenger 2', year: 1999, type: 'apfsds',
+    cfg: { caliber: 0.120, rodD: 0.024, rodLd: 28, mass: 8.5, velocity: 1650, core: 'du', standoff: SAB },
+    note: 'Fired from the rifled L30 gun with a separate propellant charge. Rod dimensions are a reconstruction.',
+  },
+  'm829a4': {
+    name: '120 mm M829A4 APFSDS (DU)', vehicle: 'M1A2 SEPv3 Abrams', year: 2016, type: 'apfsds',
+    cfg: { caliber: 0.120, rodD: 0.025, rodLd: 33, mass: 10.0, velocity: 1650, core: 'du', standoff: SAB },
+    note: 'The current US rod, a development of the A3 for the newest reactive and composite armour. Its rod is not published; this one is a reconstruction at A3 proportions.',
+  },
+  '3bm59-svinets1': {
+    name: '125 mm 3BM59 Svinets-1 (DU)', vehicle: 'T-90M / T-72B3M', year: 2016, type: 'apfsds',
+    cfg: { caliber: 0.125, rodD: 0.022, rodLd: 33, mass: 4.6, velocity: 1700, core: 'du', standoff: SAB },
+    note: 'The uranium sibling of 3BM60. Same reconstructed rod; compare the two to see what the core material alone is worth.',
+  },
   'm829a1': {
     name: '120 mm M829A1 APFSDS (DU)', vehicle: 'M1A1 Abrams', year: 1988, type: 'apfsds',
     cfg: { caliber: 0.120, rodD: 0.027, rodLd: 24, mass: 4.6, velocity: 1575, core: 'du', standoff: SAB },
