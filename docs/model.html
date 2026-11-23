@@ -1142,7 +1142,8 @@ v_r    = m/(m + m_plug) · √(v² - v_bl²)    (Recht &amp; Ipson 1963)</code><
 <ol>
 <li><strong>Rod perforation criterion and thick-plate rear face</strong> (above). The single</li>
 </ol>
-<p>   largest accuracy error in the model: 1.3–1.6× on every modern long rod.</p>
+<p>   largest accuracy error in the model: 1.3–1.6× on every modern long rod,</p>
+<p>   and APDS shows the same lean against Tate (1.3–1.5×: 17-pdr, L52, L15).</p>
 <ol>
 <li><strong>Capped shot ~15 % under de Marre</strong>, systematic across calibre and speed.</li>
 <li>~~Thin-rod mass aliasing~~ — <strong>resolved</strong> by the lumped-mass correction of</li>
@@ -1171,7 +1172,13 @@ v_r    = m/(m + m_plug) · √(v² - v_bl²)    (Recht &amp; Ipson 1963)</code><
 <p>   340 BHN, on the hard side of the 260–340 range the open figures assume.</p>
 <ol>
 <li><strong><code>ricochet</code> is reported for a rebound at normal incidence</strong> (§7.0).</li>
+<li><strong>Long rods at high obliquity turn in the plate too readily.</strong> The T-62's</li>
 </ol>
+<p>   steel 3BM6 rod into 110 mm at 60° (220 mm line of sight) gets 60 mm in,</p>
+<p>   turns and is deflected; Lanz–Odermatt with its <code>cos^m θ</code> obliquity term puts</p>
+<p>   that shot at the margin of perforating (≈246 mm of line of sight). At 45°,</p>
+<p>   and against 70 mm at 60°, it perforates. Full-calibre shot shows the same</p>
+<p>   lean: the 8.8 cm KwK 43 is turned away by the Pershing's 102 mm at 46°.</p>
 <h2 id="8-material-data-provenance">8. Material data provenance</h2>
 <p>Every material is one record in <code>src/materials/data/&lt;family&gt;.js</code> (steels,</p>
 <p>light metals, dense and non-ferrous metals, ceramics/glass/concrete,</p>
@@ -1244,10 +1251,13 @@ v_r    = m/(m + m_plug) · √(v² - v_bl²)    (Recht &amp; Ipson 1963)</code><
 <p>asserted in CI; the penetration result the model produces from that geometry</p>
 <p>is not, and should not be quoted as an armour-performance figure.</p>
 <h3 id="8-2-the-historic-ammunition-catalogue">8.2 The historic ammunition catalogue</h3>
-<p><code>src/ui/ammo.js</code> holds 27 service rounds from 1939 to 2003, selectable</p>
+<p><code>src/ui/ammo.js</code> holds 37 reconstructed service rounds from 1939 to 2016</p>
+<p>(among them the Jagdtiger and Maus 12.8 cm PzGr. 43 and HE shell, the ISU-152's</p>
+<p>BR-540, the Pershing's M82 and the Chieftain's L15 APDS) plus 12 historical</p>
+<p>catalogue names that carry the generic type settings. They are selectable</p>
 <p>independently of the scenario presets so one target can be shot with several</p>
-<p>generations of round. Its header documents the provenance in full; the three</p>
-<p>things that matter most:</p>
+<p>generations of round, and the picker groups them by era. Its header documents</p>
+<p>the provenance in full; the three things that matter most:</p>
 <ul>
 <li><strong>Muzzle velocity is used as the striking velocity.</strong> There is no exterior</li>
 </ul>
@@ -1255,12 +1265,13 @@ v_r    = m/(m + m_plug) · √(v² - v_bl²)    (Recht &amp; Ipson 1963)</code><
 <p>  point blank. A round quoted at 1700 m/s does not arrive at 1700 m/s at</p>
 <p>  2000 m, and the model will happily let you forget that.</p>
 <ul>
-<li><strong>Sub-calibre rod dimensions are reconstructions.</strong> Calibre, projectile mass</li>
+<li><strong>Sub-calibre rod and core dimensions are reconstructions.</strong> Calibre,</li>
 </ul>
-<p>  and muzzle velocity are published and reliable. <code>rodD</code> and <code>rodLd</code> for</p>
-<p>  modern APFSDS mostly are not, and where they are not they are inferred from</p>
-<p>  the published mass at a plausible L/D. They are consistent with the mass —</p>
-<p>  which is what the solver actually integrates — but they are not the real rod.</p>
+<p>  projectile mass and muzzle velocity are the widely published figures. <code>rodD</code></p>
+<p>  and <code>rodLd</code> for modern APFSDS, and APDS core sizes, mostly are not; the rod</p>
+<p>  geometry is what is simulated (§2.4), so it is chosen to be plausible for</p>
+<p>  the round's generation and published overall length, not taken from a</p>
+<p>  drawing.</p>
 <ul>
 <li><strong>Core materials are a class, not a specification</strong> — steel, tungsten</li>
 </ul>

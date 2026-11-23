@@ -1231,7 +1231,8 @@ was left alone.
 ### Open items, in priority order
 
 1. **Rod perforation criterion and thick-plate rear face** (above). The single
-   largest accuracy error in the model: 1.3–1.6× on every modern long rod.
+   largest accuracy error in the model: 1.3–1.6× on every modern long rod,
+   and APDS shows the same lean against Tate (1.3–1.5×: 17-pdr, L52, L15).
 2. **Capped shot ~15 % under de Marre**, systematic across calibre and speed.
 3. ~~Thin-rod mass aliasing~~ — **resolved** by the lumped-mass correction of
    §2.4; the same rod now meshes within ±2 % of its mass in every scenario.
@@ -1251,6 +1252,12 @@ was left alone.
    penetration figures (mean ~0.83). Part of that is the database RHA at
    340 BHN, on the hard side of the 260–340 range the open figures assume.
 7. **`ricochet` is reported for a rebound at normal incidence** (§7.0).
+8. **Long rods at high obliquity turn in the plate too readily.** The T-62's
+   steel 3BM6 rod into 110 mm at 60° (220 mm line of sight) gets 60 mm in,
+   turns and is deflected; Lanz–Odermatt with its `cos^m θ` obliquity term puts
+   that shot at the margin of perforating (≈246 mm of line of sight). At 45°,
+   and against 70 mm at 60°, it perforates. Full-calibre shot shows the same
+   lean: the 8.8 cm KwK 43 is turned away by the Pershing's 102 mm at 46°.
 
 ## 8. Material data provenance
 
@@ -1333,20 +1340,24 @@ is not, and should not be quoted as an armour-performance figure.
 
 ### 8.2 The historic ammunition catalogue
 
-`src/ui/ammo.js` holds 27 service rounds from 1939 to 2003, selectable
+`src/ui/ammo.js` holds 37 reconstructed service rounds from 1939 to 2016
+(among them the Jagdtiger and Maus 12.8 cm PzGr. 43 and HE shell, the ISU-152's
+BR-540, the Pershing's M82 and the Chieftain's L15 APDS) plus 12 historical
+catalogue names that carry the generic type settings. They are selectable
 independently of the scenario presets so one target can be shot with several
-generations of round. Its header documents the provenance in full; the three
-things that matter most:
+generations of round, and the picker groups them by era. Its header documents
+the provenance in full; the three things that matter most:
 
 - **Muzzle velocity is used as the striking velocity.** There is no exterior
   ballistics in this simulation, so every round arrives as though fired at
   point blank. A round quoted at 1700 m/s does not arrive at 1700 m/s at
   2000 m, and the model will happily let you forget that.
-- **Sub-calibre rod dimensions are reconstructions.** Calibre, projectile mass
-  and muzzle velocity are published and reliable. `rodD` and `rodLd` for
-  modern APFSDS mostly are not, and where they are not they are inferred from
-  the published mass at a plausible L/D. They are consistent with the mass —
-  which is what the solver actually integrates — but they are not the real rod.
+- **Sub-calibre rod and core dimensions are reconstructions.** Calibre,
+  projectile mass and muzzle velocity are the widely published figures. `rodD`
+  and `rodLd` for modern APFSDS, and APDS core sizes, mostly are not; the rod
+  geometry is what is simulated (§2.4), so it is chosen to be plausible for
+  the round's generation and published overall length, not taken from a
+  drawing.
 - **Core materials are a class, not a specification** — steel, tungsten
   carbide, tungsten heavy alloy, depleted uranium.
 

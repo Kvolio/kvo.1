@@ -10,8 +10,8 @@
  */
 
 import { el, panel, row, num, select, slider, toggle, kv, clear, panelState } from './dom.js';
-import { PRESETS, PRESET_ORDER } from './presets.js';
-import { AMMO, AMMO_ORDER, ammoLabel } from './ammo.js';
+import { PRESETS, PRESET_ORDER, PRESET_GROUP_OF } from './presets.js';
+import { AMMO, AMMO_ORDER, ammoLabel, ammoGroup } from './ammo.js';
 import { MATERIALS, ARMOUR_KEYS, materialGroup, gradeText, keysFor, describeMaterial, PENETRATOR_KEYS, getMaterial, registerMaterial } from '../materials/database.js';
 
 import { PROJECTILE_TYPES, TYPE_ORDER, makeProjectileConfig } from '../sim/projectileTypes.js';
@@ -151,7 +151,7 @@ export class App {
     const p = panel('Scenario');
     const w = this.world;
     p.body.appendChild(row('Preset', select(
-      [{ value: '', label: '— choose —' }, ...PRESET_ORDER.map((k) => ({ value: k, label: PRESETS[k].name }))],
+      [{ value: '', label: '— choose —' }, ...PRESET_ORDER.map((k) => ({ value: k, label: PRESETS[k].name, group: PRESET_GROUP_OF[k] }))],
       '', (k) => { if (k) this.loadPreset(k); },
     )));
     const noteEl = el('div', { class: 'note' }, w.scene.name || '');
@@ -191,7 +191,7 @@ export class App {
     // with a 1942 capped shot and a modern long rod back to back.
     p.body.appendChild(row('Historic round', select(
       [{ value: '', label: '— pick a service round —' },
-        ...AMMO_ORDER.map((k) => ({ value: k, label: ammoLabel(k) }))],
+        ...AMMO_ORDER.map((k) => ({ value: k, label: ammoLabel(k), group: ammoGroup(k) }))],
       this.ammoKey || '',
       (k) => {
         if (!k) { this.ammoKey = ''; return; }

@@ -149,6 +149,41 @@ export const AMMO = {
     cfg: { caliber: 0.088, mass: 10.16, velocity: 1000, standoff: KE },
     note: 'The heaviest-hitting full-calibre AP round to see service in the war.',
   },
+  '6pdr-apcbc': {
+    name: 'QF 6-pdr APCBC', vehicle: 'Churchill / Valentine', year: 1943, type: 'apcbc',
+    cfg: { caliber: 0.057, mass: 3.23, velocity: 831, standoff: KE },
+    note: 'A light, fast capped shot. Compare it with the 75 mm M61 on the same plate: half the mass, a third more velocity.',
+  },
+  'kwk40-pzgr40': {
+    name: '7.5 cm PzGr. 40 APCR (KwK 40)', vehicle: 'Panzer IV Ausf. H-J', year: 1942, type: 'apcr',
+    cfg: { caliber: 0.075, mass: 4.1, velocity: 990, standoff: KE },
+    note: 'Tungsten-carbide core in a light body, issued in small numbers. Faster and harder-hitting than PzGr. 39 up close; try both on a sloped plate to see where the light round loses out.',
+  },
+  'kwk43-pzgr40-43': {
+    name: '8.8 cm PzGr. 40/43 APCR (KwK 43)', vehicle: 'Tiger II / Jagdpanther', year: 1944, type: 'apcr',
+    cfg: { caliber: 0.088, mass: 7.3, velocity: 1130, standoff: KE },
+    note: 'The rare tungsten-cored round for the long 8.8. Scarcity of tungsten, not performance, kept it out of the ready racks.',
+  },
+  'm82-apcbc': {
+    name: '90 mm M82 APC', vehicle: 'M26 Pershing / M36', year: 1944, type: 'apcbc',
+    cfg: { caliber: 0.090, mass: 10.94, velocity: 853, standoff: KE },
+    note: 'The Pershing’s standard shot: close to the Tiger I’s 8.8 in mass and speed. Try it on the Tiger II and Panther presets.',
+  },
+  'br540': {
+    name: '152 mm BR-540', vehicle: 'ISU-152', year: 1944, type: 'aphe',
+    cfg: { caliber: 0.152, mass: 48.78, velocity: 600, standoff: 1.8 },
+    note: 'Nearly 49 kg of capped shot with a bursting charge. Slow, but nothing else in the war hit a plate this hard, and the burst behind it does the rest.',
+  },
+  'pak44-pzgr43': {
+    name: '12.8 cm PzGr. 43 (PaK 44 / KwK 44)', vehicle: 'Jagdtiger / Maus', year: 1944, type: 'apcbc',
+    cfg: { caliber: 0.128, mass: 28.3, velocity: 920, standoff: 1.8 },
+    note: 'The heaviest German anti-tank round to see service: 28 kg at 920 m/s, about two and a half times the energy of the Tiger II’s 8.8 cm. Try it on the IS-2 and Pershing presets.',
+  },
+  'pak44-sprgr': {
+    name: '12.8 cm Sprgr. HE (PaK 44 / KwK 44)', vehicle: 'Jagdtiger / Maus', year: 1944, type: 'he',
+    cfg: { caliber: 0.128, mass: 28.0, velocity: 750, standoff: KE },
+    note: 'The 12.8 cm high-explosive shell, about 3.7 kg of filler as drawn here. Against a thin plate it blows a hole; against a heavy tank’s front it does not, which is why the armour-piercing round existed.',
+  },
   'br471': {
     name: '122 mm BR-471', vehicle: 'IS-2', year: 1944, type: 'apcbc',
     cfg: { caliber: 0.122, mass: 25.0, velocity: 795, standoff: 1.8 },
@@ -165,6 +200,16 @@ export const AMMO = {
     name: '105 mm L28 APDS', vehicle: 'Centurion / M60 (L7 gun)', year: 1959, type: 'apds',
     cfg: { caliber: 0.105, coreD: 0.036, coreLd: 4.2, mass: 3.8, velocity: 1478, standoff: SAB },
     note: 'The round the L7 gun was built around, and the reason every Western tank carried that gun for twenty years.',
+  },
+  'l15-apds': {
+    name: '120 mm L15 APDS', vehicle: 'Chieftain', year: 1966, type: 'apds',
+    cfg: { caliber: 0.120, coreD: 0.038, coreLd: 4.2, mass: 6.5, velocity: 1370, core: 'wha', standoff: SAB },
+    note: 'The Chieftain’s rifled-gun sabot round, the last of the big APDS designs before the long rod took over. Core dimensions are a reconstruction.',
+  },
+  '3bk12-heat': {
+    name: '125 mm 3BK12 HEAT-FS', vehicle: 'T-64A / T-72', year: 1968, type: 'heat',
+    cfg: { caliber: 0.125, mass: 19.0, velocity: 905, standoff: 0.9 },
+    note: 'The early smoothbore 125 mm shaped charge. Heavier and slower than a Western HEAT round; the jet does not care. Try it on the T-72 and T-90A presets, with and without the cassette.',
   },
   '3bm6': {
     name: '115 mm 3BM6 APFSDS', vehicle: 'T-62', year: 1962, type: 'apfsds',
@@ -218,6 +263,11 @@ export const AMMO = {
     cfg: { caliber: 0.125, rodD: 0.022, rodLd: 27, mass: 4.85, velocity: 1700, core: 'du', standoff: SAB },
     note: 'Longer rod than Mango, uranium core, sized to the full length of the autoloader carousel.',
   },
+  '3bm60-svinets2': {
+    name: '125 mm 3BM60 Svinets-2', vehicle: 'T-90M / T-72B3M', year: 2016, type: 'apfsds',
+    cfg: { caliber: 0.125, rodD: 0.022, rodLd: 33, mass: 4.6, velocity: 1700, core: 'wha', standoff: SAB },
+    note: 'A tungsten rod sized to the longer autoloader of the late T-72/T-90 tanks. The rod here is a reconstruction from the published overall length, not a measured drawing.',
+  },
   'm829a3': {
     name: '120 mm M829A3 APFSDS (DU)', vehicle: 'M1A2 Abrams', year: 2003, type: 'apfsds',
     cfg: { caliber: 0.120, rodD: 0.025, rodLd: 32, mass: 10.0, velocity: 1555, core: 'du', standoff: SAB },
@@ -232,7 +282,21 @@ export const AMMO = {
 
 /** Oldest first: the list reads as a history of the problem. */
 export const AMMO_ORDER = Object.keys(AMMO).sort((a, b) =>
-  (AMMO[a].year ?? Infinity) - (AMMO[b].year ?? Infinity) || AMMO[a].name.localeCompare(AMMO[b].name));
+  (AMMO[a].year ?? Infinity) - (AMMO[b].year ?? Infinity)
+  // undated: real reconstructions before the generic catalogue names, so the
+  // picker's groups are not interleaved
+  || (AMMO[a].approximate ? 1 : 0) - (AMMO[b].approximate ? 1 : 0)
+  || AMMO[a].name.localeCompare(AMMO[b].name));
+
+/** Era heading for the picker, from the entry's year. */
+export function ammoGroup(key) {
+  const a = AMMO[key];
+  if (a.approximate) return 'Catalogue names (generic settings)';
+  if (a.year == null) return 'Date unverified';
+  if (a.year <= 1945) return 'Second World War';
+  if (a.year < 1980) return 'Cold War';
+  return 'Modern';
+}
 
 /** Label for the picker: year, vehicle, round. */
 export function ammoLabel(key) {

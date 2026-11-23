@@ -351,6 +351,84 @@ export const PRESETS = {
       ],
     },
   },
+  'jagdtiger-casemate': {
+    name: 'Jagdtiger — casemate front, 250 mm at 15°',
+    note: 'The thickest plate on any vehicle that saw combat: 259 mm along the line of sight. Fired on here by the IS-2’s 25 kg BR-471, which does not come close; the vehicle’s weak points were its weight and its lower hull, not this plate. Its own gun is in the round picker as the 12.8 cm PzGr. 43.',
+    projectile: { type: 'apcbc', caliber: 0.122, mass: 25.0, velocity: 795, standoff: 1.8 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.250, slope: 15, height: 1.2, label: 'casemate front' }],
+      modules: [
+        { type: 'crew', x: 0.75, y: 0.05, w: 0.34, h: 0.55, label: 'gunner' },
+        { type: 'ammo', x: 1.15, y: -0.30, w: 0.36, h: 0.26, label: '12.8 cm stowage' },
+      ],
+    },
+  },
+  'maus-ufp': {
+    name: 'Maus — upper glacis, 200 mm at 55°',
+    note: 'A prototype that never fought: 349 mm of line of sight on a 188-tonne vehicle. Fired on by the 100 mm BR-412 of the BS-3 and SU-100, the most powerful Soviet anti-tank gun of 1945. Nothing in service could defeat it from the front, which is the point; whether it could have moved under its own weight is another matter.',
+    projectile: { type: 'apcbc', caliber: 0.100, mass: 15.88, velocity: 895, standoff: 1.6 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.200, slope: 55, height: 1.6, label: 'upper glacis' }],
+      modules: [{ type: 'crew', x: 0.95, y: 0.05, w: 0.34, h: 0.55, label: 'driver' }],
+    },
+  },
+  'is2-vs-128': {
+    name: 'IS-2 (1944) vs the 12.8 cm PaK 44',
+    note: 'The IS-2’s straight glacis, 120 mm at 60°, against the Jagdtiger’s gun. Compare with the IS-2 preset, which is fired on by the Tiger II’s 8.8 cm: what three times the shot mass does to the same plate.',
+    projectile: { type: 'apcbc', caliber: 0.128, mass: 28.3, velocity: 920, standoff: 1.8 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.120, slope: 60, height: 1.4, label: 'upper front plate' }],
+      modules: [
+        { type: 'crew', x: 0.80, y: 0.05, w: 0.32, h: 0.52, label: 'driver' },
+        { type: 'ammo', x: 1.15, y: -0.28, w: 0.34, h: 0.24, label: 'hull stowage' },
+      ],
+    },
+  },
+  'pershing-glacis': {
+    name: 'M26 Pershing — glacis, 102 mm at 46°',
+    note: '147 mm of line of sight, close to a Tiger I’s frontal protection on a 41-tonne tank. Fired on by the Tiger II’s 8.8 cm PzGr. 39/43, which is at the edge of defeating it: in this model the shot is turned away at 46°, so try lowering the slope or switching to the 12.8 cm round.',
+    projectile: { type: 'apcbc', caliber: 0.088, mass: 10.16, velocity: 1000, standoff: 1.4 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.102, slope: 46, height: 1.3, label: 'glacis' }],
+      modules: [
+        { type: 'crew', x: 0.62, y: 0.08, w: 0.30, h: 0.50, label: 'driver' },
+        { type: 'ammo', x: 0.95, y: -0.30, w: 0.32, h: 0.24, label: 'hull stowage' },
+      ],
+    },
+  },
+  'm48-glacis': {
+    name: 'M48 Patton — cast glacis, 110 mm at 60°',
+    note: 'A one-piece cast hull front: 220 mm of line of sight, which full-calibre shot of the 1950s could not reliably defeat. The T-62’s 115 mm 3BM6 long rod was the Soviet answer, and is what is fired here. In this model the steel rod turns inside the plate at 60° and is deflected, where the Lanz–Odermatt fit puts it right at the edge of perforating (MODEL.md §7a); set the slope to 45° and it goes straight through.',
+    projectile: { type: 'apfsds', caliber: 0.115, rodD: 0.030, rodLd: 12, mass: 5.5, velocity: 1615, core: 'apsteel', standoff: 2.4 },
+    scene: {
+      layers: [{ material: 'cast', thickness: 0.110, slope: 60, height: 1.3, label: 'cast glacis' }],
+      modules: [{ type: 'crew', x: 0.75, y: 0.05, w: 0.32, h: 0.52, label: 'driver' }],
+    },
+  },
+  'centurion-glacis': {
+    name: 'Centurion Mk 3 — glacis, 76 mm at 57°',
+    note: 'The post-war British compromise: modest plate, well sloped, about 140 mm of line of sight. Fired on by the 100 mm BR-412D of the T-54 and T-55 it was expected to meet.',
+    projectile: { type: 'apcbc', caliber: 0.100, mass: 15.88, velocity: 895, standoff: 1.6 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.076, slope: 57, height: 1.3, label: 'glacis' }],
+      modules: [
+        { type: 'crew', x: 0.60, y: 0.08, w: 0.30, h: 0.50, label: 'driver' },
+        { type: 'ammo', x: 0.95, y: -0.28, w: 0.32, h: 0.24, label: 'hull stowage' },
+      ],
+    },
+  },
+  'leopard1-glacis': {
+    name: 'Leopard 1 — glacis, 70 mm at 60°',
+    note: 'Designed on the argument that no armour of a reasonable weight would stop a contemporary HEAT round, so mobility was bought instead: 140 mm of line of sight. Fired on by the T-62’s 115 mm 3BM6. Try the 125 mm 3BK12 HEAT on it as well.',
+    projectile: { type: 'apfsds', caliber: 0.115, rodD: 0.030, rodLd: 12, mass: 5.5, velocity: 1615, core: 'apsteel', standoff: 2.4 },
+    scene: {
+      layers: [{ material: 'rha', thickness: 0.070, slope: 60, height: 1.2, label: 'glacis' }],
+      modules: [
+        { type: 'crew', x: 0.60, y: 0.08, w: 0.30, h: 0.50, label: 'driver' },
+        { type: 'ammo', x: 0.92, y: -0.28, w: 0.32, h: 0.24, label: 'hull ammunition rack' },
+      ],
+    },
+  },
   // ---------------------------------------------------------- CURVED ARMOUR
   // A curved plate's face angle depends on where it is struck, so these are
   // the presets where the Aim height control matters most. Representative
@@ -388,12 +466,27 @@ export const PRESETS = {
   },
 };
 
-export const PRESET_ORDER = [
-  'single-plate', 'sloped-glacis', 'spaced-array', 'shatter-gap',
-  'ceramic-composite', 'mbt-frontal', 'nera-sandwich', 'hesh-scab', 'aphe-interior',
-  'era-light-heat', 'era-heavy-ke', 'era-insensitive', 'dense-metals',
-  't55-ufp', 't72-ural-ufp', 't72b-ufp', 't90a-ufp',
-  'tiger1-ufp', 'tiger1-nose', 'tiger1-side-skirt', 'tiger2-ufp', 'panther-glacis',
-  't34-glacis', 'is2-ufp', 'sherman-glacis', 'panzer4-front',
-  'cast-turret-front', 'panther-mantlet', 'curved-spaced',
+/**
+ * The picker groups presets by what they are for, and the vehicle plates by
+ * era, oldest first within each - so the list reads as a history of tank
+ * armour rather than as a flat list of thirty-odd names.
+ */
+export const PRESET_GROUPS = [
+  ['Basics', ['single-plate', 'sloped-glacis', 'spaced-array', 'shatter-gap']],
+  ['Mechanisms', ['ceramic-composite', 'mbt-frontal', 'nera-sandwich', 'hesh-scab', 'aphe-interior', 'dense-metals']],
+  ['Reactive armour', ['era-light-heat', 'era-heavy-ke', 'era-insensitive']],
+  ['Second World War', [
+    'panzer4-front', 'sherman-glacis', 'tiger1-ufp', 'tiger1-nose', 'tiger1-side-skirt',
+    'panther-glacis', 't34-glacis', 'is2-ufp', 'is2-vs-128', 'tiger2-ufp',
+    'pershing-glacis', 'jagdtiger-casemate', 'maus-ufp',
+  ]],
+  ['Cold War', ['centurion-glacis', 'm48-glacis', 't55-ufp', 'leopard1-glacis', 't72-ural-ufp']],
+  ['Modern', ['t72b-ufp', 't90a-ufp']],
+  ['Curved armour', ['cast-turret-front', 'panther-mantlet', 'curved-spaced']],
 ];
+
+export const PRESET_ORDER = PRESET_GROUPS.flatMap(([, keys]) => keys);
+
+/** Group label for a preset key (for the picker's <optgroup>s). */
+export const PRESET_GROUP_OF = Object.fromEntries(
+  PRESET_GROUPS.flatMap(([g, keys]) => keys.map((k) => [k, g])));

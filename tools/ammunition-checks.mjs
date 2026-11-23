@@ -238,7 +238,7 @@ for (const type of TYPE_ORDER) test(`${type}: checkpoint restores events, accoun
 });
 
 test('catalog preserves existing entries and supplies 12 sourced game representations', () => {
-  assert.equal(AMMO_ORDER.length,39);
+  assert.equal(AMMO_ORDER.length,49);
   const added=Object.values(AMMO).filter(a=>a.approximate);
   assert.equal(added.length,12);
   for(const a of added) {
