@@ -1088,16 +1088,45 @@ v_r    = m/(m + m_plug) · √(v² - v_bl²)    (Recht &amp; Ipson 1963)</code><
 <p>catalogue rods — so it was 15–25 % too generous, and the rods had been</p>
 <p>calibrated to it. Lanz–Odermatt (analytics.js) is a perforation-limit fit to</p>
 <p>181 firings with a 3 % standard deviation and is now the rod reference.</p>
-<div class="tw"><table><thead><tr><th>round</th><th>family</th><th>sim mm</th><th>L–O mm</th><th>sim/ref</th></tr></thead><tbody>
-<tr><td>3BM6</td><td>steel</td><td>310</td><td>211</td><td>1.47</td></tr>
-<tr><td>3BM15</td><td>tungsten</td><td>688</td><td>426</td><td>1.62</td></tr>
-<tr><td>M829A1</td><td>DU</td><td>848</td><td>551</td><td>1.54</td></tr>
-<tr><td>DM53</td><td>tungsten</td><td>777</td><td>591</td><td>1.32</td></tr>
+<div class="tw"><table><thead><tr><th>round</th><th>family</th><th>sim mm (before → now)</th><th>L–O mm</th><th>sim/ref (before → now)</th></tr></thead><tbody>
+<tr><td>3BM6</td><td>steel</td><td>310 → 310</td><td>211</td><td>1.47 → 1.47</td></tr>
+<tr><td>3BM15</td><td>tungsten</td><td>688 → 592</td><td>426</td><td>1.62 → 1.39</td></tr>
+<tr><td>3BM42</td><td>tungsten</td><td>674 → 550</td><td>417</td><td>1.62 → 1.32</td></tr>
+<tr><td>M829A1</td><td>DU</td><td>848 → 725</td><td>551</td><td>1.54 → 1.32</td></tr>
+<tr><td>M829A3</td><td>DU</td><td>856 → 808</td><td>651</td><td>1.32 → 1.24</td></tr>
+<tr><td>DM53</td><td>tungsten</td><td>777 → 777</td><td>591</td><td>1.32 → 1.32</td></tr>
 </tbody></table></div>
-<p>(Re-run after the lattice-aliasing mass correction of §2.4: 3BM15 went from</p>
-<p>656 to 688 mm because its rod had been meshed light; the rest of the</p>
-<p>catalogue moved by less than one bisection step. Across all ten rods the</p>
-<p>ratio is 1.32–1.62.)</p>
+<p>"Before" is after the lattice-aliasing mass correction of §2.4 (3BM15 had</p>
+<p>risen from 656 to 688 mm because its rod had been meshed light). "Now" is</p>
+<p>with the rod softening confined to the channel (below). Across the rod</p>
+<p>catalogue the ratio has gone from 1.32–1.62 to 1.24–1.47.</p>
+<p><strong>Where the excess comes from, measured.</strong> Fired into 560 mm (1.3× its L–O</p>
+<p>limit), 3BM15's rear face starts moving when the tip is still 360 mm (16 rod</p>
+<p>diameters) away and is out 104 mm at 536 m/s before the tip arrives: the whole</p>
+<p>column of plate ahead of the rod shears out as a plug, where a real plate only</p>
+<p>does so over the last one or two diameters. Two things feed it:</p>
+<ul>
+<li><em>The rod softening applied to the whole plate.</em> <code>rodTargetYield</code> exists to</li>
+</ul>
+<p>  stop the rod body upsetting in the channel, but it weakened the entire</p>
+<p>  plate, including the rear the plug shears through. It now applies only</p>
+<p>  within <code>rodSoftBand</code> = 1.5 rod diameters of the shot line, easing back to</p>
+<p>  full strength over another 1.5. That is the improvement in the table; it</p>
+<p>  costs a little semi-infinite depth (3BM15 into 1000 mm: 374 → 354 mm, 0.88 →</p>
+<p>  0.83 of the L–O limit). Narrower bands do not lower the limit further and</p>
+<p>  take depth below 0.8.</p>
+<ul>
+<li><em>The 2-D section itself.</em> With no softening at all, depth falls to 321 mm</li>
+</ul>
+<p>  and the limit only to 560 mm (1.32×): a plug ahead of a plane-strain rod is</p>
+<p>  held along two lines where a real one is held all round, exactly the support</p>
+<p>  deficit of §5.2. Calibration cannot remove that.</p>
+<p><strong>Perforation is now judged on a coherent residual</strong> for APFSDS and APDS: one</p>
+<p>rod (or core) diameter's worth of mass, 1/(L/D), must be past the back face —</p>
+<p>the definition the L–O perforation limit is fitted to — rather than 1 % of the</p>
+<p>penetrator. In the current model it changes little (a real piece of rod comes</p>
+<p>through at the limit, not a few grams of debris), but it removes the way a</p>
+<p>debris plume could call a perforation.</p>
 <p><strong>The rods perforate 1.3–1.5× too much — and the rod physics is not why.</strong></p>
 <p>3BM15 fired into a 1000 mm block stops at <strong>375 mm</strong>: 0.88 of the L–O limit,</p>
 <p>which is where semi-infinite depth should sit, just below the perforation</p>
@@ -1140,10 +1169,11 @@ v_r    = m/(m + m_plug) · √(v² - v_bl²)    (Recht &amp; Ipson 1963)</code><
 <p>was left alone.</p>
 <h3 id="open-items-in-priority-order">Open items, in priority order</h3>
 <ol>
-<li><strong>Rod perforation criterion and thick-plate rear face</strong> (above). The single</li>
+<li><strong>Thick-plate rear face under a rod</strong> (above). Still the largest accuracy</li>
 </ol>
-<p>   largest accuracy error in the model: 1.3–1.6× on every modern long rod,</p>
-<p>   and APDS shows the same lean against Tate (1.3–1.5×: 17-pdr, L52, L15).</p>
+<p>   error: 1.24–1.47× on the long rods after confining the rod softening to the</p>
+<p>   channel, and APDS shows the same lean against Tate (1.3–1.5×: 17-pdr, L52,</p>
+<p>   L15). What remains is the plane-strain plug support of a 2-D section.</p>
 <ol>
 <li><strong>Capped shot ~15 % under de Marre</strong>, systematic across calibre and speed.</li>
 <li>~~Thin-rod mass aliasing~~ — <strong>resolved</strong> by the lumped-mass correction of</li>
@@ -1171,7 +1201,11 @@ v_r    = m/(m + m_plug) · √(v² - v_bl²)    (Recht &amp; Ipson 1963)</code><
 <p>   penetration figures (mean ~0.83). Part of that is the database RHA at</p>
 <p>   340 BHN, on the hard side of the 260–340 range the open figures assume.</p>
 <ol>
-<li><strong><code>ricochet</code> is reported for a rebound at normal incidence</strong> (§7.0).</li>
+<li>~~<code>ricochet</code> reported for a rebound at normal incidence~~ — <strong>resolved</strong>:</li>
+</ol>
+<p>   a remnant thrown back off a face met within 25° of square is reported as a</p>
+<p>   <em>rebound</em>; ricochet is kept for a glance off an angled face.</p>
+<ol>
 <li><strong>Long rods at high obliquity turn in the plate too readily.</strong> The T-62's</li>
 </ol>
 <p>   steel 3BM6 rod into 110 mm at 60° (220 mm line of sight) gets 60 mm in,</p>

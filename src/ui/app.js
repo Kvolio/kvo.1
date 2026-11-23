@@ -726,7 +726,7 @@ export class App {
     const p = panel('Impact report');
     const v = w.state === 'done' ? w.verdict() : null;
     if (v) {
-      const cls = v.perforated ? 'pen' : (v.ricochet || v.depth === 0) ? 'stop' : '';
+      const cls = v.perforated ? 'pen' : (v.ricochet || v.rebound || v.depth === 0) ? 'stop' : '';
       p.body.appendChild(el('div', { class: `verdict ${cls}` },
         el('h4', {}, v.headline),
         el('p', {}, this.killText(v))));
@@ -821,7 +821,7 @@ export class App {
       ['Depth from struck face', U.len(s.maxDepth)],
       ['— along shot line', U.len(s.maxDepthLOS || 0)],
       ['Perforated', s.perforated ? 'YES' : 'no', s.perforated ? 'bad' : 'good'],
-      ['Ricochet', s.ricochet ? 'YES' : 'no'],
+      ['Ricochet', s.ricochet ? 'YES' : s.rebound ? 'no (rebound)' : 'no'],
       // On a curved plate the face angle depends on where it was struck; show
       // the one the round actually met (Scene.aimAt), not the nominal slope.
       ...w.scene.activeLayers().filter((Lc) => Lc.curve && w.domain).map((Lc) => [
@@ -1284,6 +1284,7 @@ export class App {
       push(`<b>armour</b> ${s.brokenBonds.toLocaleString()} failed bonds · spall ${U.mass(s.spallMass)} · bulge ${U.len(s.backfaceBulge)}`);
       if (s.perforated) push('<b>PERFORATED</b>', true);
       if (s.ricochet) push('<b>RICOCHET</b>', true);
+      else if (s.rebound) push('<b>REBOUND</b>', true);
     }
     if (this.renderer.frameOverride) push('<b>scrubbing</b> — recorded frame, solver held');
     const hud = this.hud;

@@ -1169,17 +1169,45 @@ catalogue rods — so it was 15–25 % too generous, and the rods had been
 calibrated to it. Lanz–Odermatt (analytics.js) is a perforation-limit fit to
 181 firings with a 3 % standard deviation and is now the rod reference.
 
-| round | family | sim mm | L–O mm | sim/ref |
+| round | family | sim mm (before → now) | L–O mm | sim/ref (before → now) |
 |---|---|---|---|---|
-| 3BM6 | steel | 310 | 211 | 1.47 |
-| 3BM15 | tungsten | 688 | 426 | 1.62 |
-| M829A1 | DU | 848 | 551 | 1.54 |
-| DM53 | tungsten | 777 | 591 | 1.32 |
+| 3BM6 | steel | 310 → 310 | 211 | 1.47 → 1.47 |
+| 3BM15 | tungsten | 688 → 592 | 426 | 1.62 → 1.39 |
+| 3BM42 | tungsten | 674 → 550 | 417 | 1.62 → 1.32 |
+| M829A1 | DU | 848 → 725 | 551 | 1.54 → 1.32 |
+| M829A3 | DU | 856 → 808 | 651 | 1.32 → 1.24 |
+| DM53 | tungsten | 777 → 777 | 591 | 1.32 → 1.32 |
 
-(Re-run after the lattice-aliasing mass correction of §2.4: 3BM15 went from
-656 to 688 mm because its rod had been meshed light; the rest of the
-catalogue moved by less than one bisection step. Across all ten rods the
-ratio is 1.32–1.62.)
+"Before" is after the lattice-aliasing mass correction of §2.4 (3BM15 had
+risen from 656 to 688 mm because its rod had been meshed light). "Now" is
+with the rod softening confined to the channel (below). Across the rod
+catalogue the ratio has gone from 1.32–1.62 to 1.24–1.47.
+
+**Where the excess comes from, measured.** Fired into 560 mm (1.3× its L–O
+limit), 3BM15's rear face starts moving when the tip is still 360 mm (16 rod
+diameters) away and is out 104 mm at 536 m/s before the tip arrives: the whole
+column of plate ahead of the rod shears out as a plug, where a real plate only
+does so over the last one or two diameters. Two things feed it:
+
+* *The rod softening applied to the whole plate.* `rodTargetYield` exists to
+  stop the rod body upsetting in the channel, but it weakened the entire
+  plate, including the rear the plug shears through. It now applies only
+  within `rodSoftBand` = 1.5 rod diameters of the shot line, easing back to
+  full strength over another 1.5. That is the improvement in the table; it
+  costs a little semi-infinite depth (3BM15 into 1000 mm: 374 → 354 mm, 0.88 →
+  0.83 of the L–O limit). Narrower bands do not lower the limit further and
+  take depth below 0.8.
+* *The 2-D section itself.* With no softening at all, depth falls to 321 mm
+  and the limit only to 560 mm (1.32×): a plug ahead of a plane-strain rod is
+  held along two lines where a real one is held all round, exactly the support
+  deficit of §5.2. Calibration cannot remove that.
+
+**Perforation is now judged on a coherent residual** for APFSDS and APDS: one
+rod (or core) diameter's worth of mass, 1/(L/D), must be past the back face —
+the definition the L–O perforation limit is fitted to — rather than 1 % of the
+penetrator. In the current model it changes little (a real piece of rod comes
+through at the limit, not a few grams of debris), but it removes the way a
+debris plume could call a perforation.
 
 **The rods perforate 1.3–1.5× too much — and the rod physics is not why.**
 3BM15 fired into a 1000 mm block stops at **375 mm**: 0.88 of the L–O limit,
@@ -1230,9 +1258,10 @@ was left alone.
 
 ### Open items, in priority order
 
-1. **Rod perforation criterion and thick-plate rear face** (above). The single
-   largest accuracy error in the model: 1.3–1.6× on every modern long rod,
-   and APDS shows the same lean against Tate (1.3–1.5×: 17-pdr, L52, L15).
+1. **Thick-plate rear face under a rod** (above). Still the largest accuracy
+   error: 1.24–1.47× on the long rods after confining the rod softening to the
+   channel, and APDS shows the same lean against Tate (1.3–1.5×: 17-pdr, L52,
+   L15). What remains is the plane-strain plug support of a 2-D section.
 2. **Capped shot ~15 % under de Marre**, systematic across calibre and speed.
 3. ~~Thin-rod mass aliasing~~ — **resolved** by the lumped-mass correction of
    §2.4; the same rod now meshes within ±2 % of its mass in every scenario.
@@ -1251,7 +1280,9 @@ was left alone.
    geometry, Lanz–Odermatt lands at about 0.75–1.0× rough open-source
    penetration figures (mean ~0.83). Part of that is the database RHA at
    340 BHN, on the hard side of the 260–340 range the open figures assume.
-7. **`ricochet` is reported for a rebound at normal incidence** (§7.0).
+7. ~~`ricochet` reported for a rebound at normal incidence~~ — **resolved**:
+   a remnant thrown back off a face met within 25° of square is reported as a
+   *rebound*; ricochet is kept for a glance off an angled face.
 8. **Long rods at high obliquity turn in the plate too readily.** The T-62's
    steel 3BM6 rod into 110 mm at 60° (220 mm line of sight) gets 60 mm in,
    turns and is deflected; Lanz–Odermatt with its `cos^m θ` obliquity term puts

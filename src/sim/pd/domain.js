@@ -395,7 +395,7 @@ export class PDDomain {
         // yield stretch moves; the failure stretch is held at least 5 % above it.
         const plateY = (this.role[i] === ROLE.ARMOUR && this.role[j] === ROLE.ARMOUR
           && ['metal', 'ceramic'].includes(this.matTable[this.matIndex[i]].mat.class))
-          ? plateStrengthFactor(this.matTable[this.matIndex[i]].mat) * this.plateRatio : 1;
+          ? plateStrengthFactor(this.matTable[this.matIndex[i]].mat) * this.bondPlateRatio(i, j) : 1;
         this.bsy[b] = bp.sy * yMul * plateY;
         this.bsf[b] = Math.max(bp.sf * sScale * yMul * Math.sqrt(this.fmul[i] * this.fmul[j]), this.bsy[b] * 1.05);
         this.bsten[b] = bp.sTen * yMul;
@@ -422,6 +422,21 @@ export class PDDomain {
     }
     this.nb = b;
     this.nBond0 = Uint16Array.from(this.nBond);
+  }
+
+  /**
+   * The rod-target softening (World.targetStrengthRatio) applied to the bond
+   * i-j. With `plateRatioBand` set it acts only within that half-width of the
+   * shot line, easing to full strength over one more band width outside it.
+   */
+  bondPlateRatio(i, j) {
+    const r = this.plateRatio ?? 1;
+    const band = this.plateRatioBand;
+    if (r === 1 || !band) return r;
+    const mx = 0.5 * (this.rx[i] + this.rx[j]) - this.ox, my = 0.5 * (this.ry[i] + this.ry[j]) - this.oy;
+    const u = Math.abs(mx * this.bx + my * this.by);
+    const f = u <= band ? 1 : u >= 2 * band ? 0 : 1 - (u - band) / band;
+    return 1 + (r - 1) * f;
   }
 
   /** Flag particles adjacent to a free surface: only these need contact tests. */

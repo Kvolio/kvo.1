@@ -126,7 +126,7 @@ export class World {
       penetration: 0, maxDepth: 0, maxDepthLOS: 0, armourDefeated: 0, channelLength: 0,
       residualMass: 0, residualVelocity: 0, residualLength: 0,
       erodedMass: 0, spallMass: 0, fragmentCount: 0,
-      perforated: false, ricochet: false, embedded: false,
+      perforated: false, ricochet: false, rebound: false, embedded: false,
       backfaceBulge: 0, craterDiameter: 0, craterDepth: 0,
       brokenBonds: 0, contactTime: 0, truncated: false, debrisTruncated: false,
     };
@@ -538,6 +538,13 @@ export class World {
     }
     plan.width = width;
     dom.plateRatio = this.targetStrengthRatio();
+    // The softening exists to stop the rod body upsetting in the CHANNEL
+    // (see targetStrengthRatio); applied to the whole plate it also weakened
+    // the rear of a thick plate, which then sheared out ahead of the rod as
+    // a plug from 16 rod diameters away. Kept to the channel it cuts 3BM15's
+    // ballistic limit from 1.62x to 1.39x Lanz-Odermatt while semi-infinite
+    // depth moves only from 0.88 to 0.83 of it. MODEL.md 7a.
+    dom.plateRatioBand = TUNE.rodSoftBand * plan.refD;
     dom.build();
     // THE PLATE DOES NOT HINGE OVER THE WHOLE CORRIDOR
     // A real plate is held by the hull around it in every direction, and a
@@ -1509,7 +1516,7 @@ export class World {
     // A chemical round has no kinetic penetrator at all, so the threshold must
     // have a floor: with need = 0 the very first histogram bin satisfies it and
     // a HESH round would report perforating a plate it never entered.
-    const need = Math.max(this.penetratorMass0() * PEN_FRACTION, 1e-9);
+    const need = Math.max(this.penetratorMass0() * this.penFraction(), 1e-9);
     let acc = 0;
     for (let k = NB - 1; k >= 0; k--) {
       acc += histA[k];
@@ -1616,10 +1623,20 @@ export class World {
     // ricochet: penetrator turned away and is leaving without perforating
     if (!st.perforated && chanMass > 0 && st.residualVelocity > 80) {
       const away = (chanVX / chanMass) * n0[0] + (chanVY / chanMass) * n0[1];
-      if (away < -30 && !st.ricochet) {
-        st.ricochet = true;
-        this.log.add(this.simTime, 'ricochet',
-          `RICOCHET — remnant deflected at ${st.residualVelocity.toFixed(0)} m/s`, SEV.MAJOR);
+      // A shot thrown back off a face it met nearly square has REBOUNDED; a
+      // ricochet is a glance off an angled face. Both are defeats, but calling
+      // a bounce off a flat plate a ricochet misdescribes what happened.
+      const ob = Math.abs(first.shotSlope ?? first.slope ?? 0);
+      if (away < -30 && !st.ricochet && !st.rebound) {
+        if (ob < 25) {
+          st.rebound = true;
+          this.log.add(this.simTime, 'rebound',
+            `REBOUND — remnant thrown back off the face at ${st.residualVelocity.toFixed(0)} m/s`, SEV.MAJOR);
+        } else {
+          st.ricochet = true;
+          this.log.add(this.simTime, 'ricochet',
+            `RICOCHET — remnant deflected at ${st.residualVelocity.toFixed(0)} m/s`, SEV.MAJOR);
+        }
       }
     }
     // Debris playback advances world time after the continuum has stopped.
@@ -1644,6 +1661,27 @@ export class World {
     const ld = d.length / Math.max(d.penDiameter, 1e-6);
     const k = Math.min(1, Math.max(0, (ld - 6) / 24));
     return 1 + k * (TUNE.rodTargetYield / TUNE.plateYield - 1);
+  }
+
+  /**
+   * WHAT COUNTS AS "THROUGH" FOR A SUB-CALIBRE ROUND
+   * A plane counts as reached once this share of the penetrator's mass is
+   * past it. 1 % is right for full-calibre shot, which arrives in one piece,
+   * so "1 % through" and "the shot came through" coincide. A long rod erodes
+   * as it goes, and 1 % of it is a few grams of debris: the audit measured
+   * 3BM15 "perforating" 650 mm of RHA (1.5x the Lanz-Odermatt limit) on 0.6 %
+   * of the rod emerging at 87 m/s, and every modern rod read 1.3-1.6x the
+   * reference. The perforation limit Lanz-Odermatt is fitted to means a
+   * coherent residual comes out - about one rod diameter of rod - so for
+   * APFSDS and APDS the threshold is one diameter's worth of the penetrator,
+   * 1/(L/D) of its mass. Depth uses the same threshold, so the two still
+   * cannot disagree.
+   */
+  penFraction() {
+    const c = this.projectile?.cfg;
+    if (!c) return PEN_FRACTION;
+    const ld = c.type === 'apfsds' ? c.rodLd : c.type === 'apds' ? c.coreLd : 0;
+    return ld > 0 ? clamp(1 / ld, PEN_FRACTION, 0.25) : PEN_FRACTION;
   }
 
   penetratorMass0() {
@@ -1756,10 +1794,11 @@ export class World {
       ? `No perforation — plate dished ${(st.backfaceBulge * 1000).toFixed(0)} mm` : 'No perforation — blast defeated';
     else if (st.perforated) headline = `Perforation — ${(st.atPerforation.velocity).toFixed(0)} m/s residual`;
     else if (st.ricochet) headline = 'Ricochet — armour defeated the attack';
+    else if (st.rebound) headline = 'Rebound — the shot was stopped and thrown back';
     else if (st.armourDefeated > 0) headline = `Partial penetration — ${(st.armourDefeated * 1000).toFixed(0)} mm of armour defeated`;
     else headline = 'No penetration';
     return {
-      headline, perforated: st.perforated || !!(bl && bl.breached), ricochet: st.ricochet, blast: bl || null,
+      headline, perforated: st.perforated || !!(bl && bl.breached), ricochet: st.ricochet, rebound: !!st.rebound, blast: bl || null,
       depth: st.maxDepth, depthLOS: st.maxDepthLOS, armourDefeated: st.armourDefeated,
       residualVelocity: st.atPerforation ? st.atPerforation.velocity : st.residualVelocity,
       residualMass: st.atPerforation ? st.atPerforation.mass : st.residualMass,

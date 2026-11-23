@@ -855,6 +855,15 @@ check(!sloped.stats.perforated && flat.stats.perforated,
   `and it is the difference between a perforation and a ricochet `
   + `(60°: ${sloped.stats.residualVelocity.toFixed(0)} m/s away from the plate)`);
 
+// A shot thrown straight back off a face it met square has rebounded, not
+// ricocheted; the label used to say ricochet for both.
+{
+  const bounce = run({ type: 'ap', proj: { velocity: 600, standoff: 0.6 }, layers: [{ material: 'rha', thickness: 0.15, slope: 0 }] });
+  check(bounce.stats.rebound && !bounce.stats.ricochet,
+    `a shot thrown back off flat plate is a rebound, not a ricochet (rebound=${bounce.stats.rebound}, ricochet=${bounce.stats.ricochet})`);
+  check(sloped.stats.ricochet && !sloped.stats.rebound, 'and a glance off 60° plate is still a ricochet');
+}
+
 console.log('\n== depth frames: normal vs line of sight ==');
 // Regression guard. Depth is measured along the plate normal; the perforation
 // threshold must therefore be the plate's NORMAL thickness, not its

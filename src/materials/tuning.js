@@ -107,6 +107,13 @@ export const TUNE = {
 
   /** Armour flow strength a very long rod (L/D >= 30) sees, as a multiple of handbook yield; eases from plateYield at L/D = 6. */
   rodTargetYield: 0.7,
+  /** Half-width, in rod diameters, of the band either side of the shot line
+   *  where rodTargetYield applies; the plate beyond keeps full strength, easing
+   *  back over one more band width. Measured on 3BM15: whole plate softened ->
+   *  ballistic limit 688 mm (1.62x L-O), 1.5 D -> 592 mm (1.39x) with
+   *  semi-infinite depth 374 -> 354 mm; narrower bands do not lower the limit
+   *  further and take depth below 0.8 of L-O. */
+  rodSoftBand: 1.5,
 
   /** Multiplier on the compressive flow limit of ceramics (see plateYield). */
   ceramicYield: 1.8,
